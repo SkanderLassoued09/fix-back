@@ -1,12 +1,20 @@
 import { ObjectType, Field, Int } from '@nestjs/graphql';
+import {
+  IsBoolean,
+  IsInt,
+  IsNumber,
+  IsString,
+  Max,
+  isNumber,
+} from 'class-validator';
 import mongoose from 'mongoose';
 
-export type EmplacementDocument = Emplacement & Document;
-export const EmplacementSchema = new mongoose.Schema(
+export type LocationDocument = Location & Document;
+export const LocationSchema = new mongoose.Schema(
   {
     _id: String,
-    emplacement_name: String,
-    emplacement_number: Number,
+    location_name: String,
+    location_number: Number,
     max_capacity: Number,
     current_itemsStored: Number,
     avaible: Boolean,
@@ -15,17 +23,24 @@ export const EmplacementSchema = new mongoose.Schema(
 );
 
 @ObjectType()
-export class Emplacement {
+export class Location {
   @Field()
   _id: string;
   @Field()
-  emplacement_name: string;
+  @IsString()
+  location_name: string;
   @Field(() => Int, { nullable: true })
-  emplacement_number: number;
+  @IsInt()
+  location_number: number;
   @Field(() => Int, { nullable: true })
+  @IsInt()
+  @Max(10)
+  //To check with walid the max number
   max_capacity: number;
   @Field(() => Int, { nullable: true })
+  @IsInt()
   current_itemsStored: number;
   @Field({ defaultValue: true })
+  @IsBoolean()
   avaible: boolean;
 }
