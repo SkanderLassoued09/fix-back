@@ -2,7 +2,6 @@ import { Resolver, Query, Mutation, Args, Int } from '@nestjs/graphql';
 import { ComposantService } from './composant.service';
 import { Composant } from './entities/composant.entity';
 import { CreateComposantInput } from './dto/create-composant.input';
-import { UpdateComposantInput } from './dto/update-composant.input';
 
 @Resolver(() => Composant)
 export class ComposantResolver {

@@ -1,21 +1,36 @@
-import { ObjectType, Field, Int } from '@nestjs/graphql';
+import { ObjectType, Field } from '@nestjs/graphql';
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { IsBoolean, IsEmail, IsPhoneNumber, IsString } from 'class-validator';
-import mongoose from 'mongoose';
+import { Document } from 'mongoose';
 
-export type ClientDocument = Client & Document;
-export const ClientSchema = new mongoose.Schema(
-  {
-    _id: String,
-    first_name: String,
-    last_name: String,
-    region: String,
-    address: String,
-    email: String,
-    phone: String,
-    isDeleted: Boolean,
-  },
-  { _id: false, timestamps: true },
-);
+@Schema({ timestamps: true })
+export class ClientDocument extends Document {
+  @Prop()
+  _id: string;
+  @Prop()
+  @IsString()
+  first_name: string;
+  @Prop()
+  @IsString()
+  last_name: string;
+  @Prop()
+  @IsString()
+  region: string;
+  @Prop()
+  @IsString()
+  address: string;
+  @Prop()
+  @IsString()
+  @IsEmail()
+  email: string;
+  @Prop()
+  @IsPhoneNumber()
+  phone: string;
+  @Prop()
+  @IsBoolean()
+  isDeleted: boolean;
+}
+export const ClientSchema = SchemaFactory.createForClass(ClientDocument);
 
 @ObjectType()
 export class Client {

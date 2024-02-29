@@ -2,7 +2,6 @@ import { Resolver, Query, Mutation, Args, Int } from '@nestjs/graphql';
 import { Location } from './entities/location.entity';
 import { CreateLocationInput } from './dto/create-location.input';
 import { LocationService } from './location.service';
-import { UpdateLocationInput } from './dto/update-location.input';
 
 @Resolver(() => Location)
 export class LocationResolver {

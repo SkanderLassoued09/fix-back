@@ -1,27 +1,29 @@
 import { ObjectType, Field, Int } from '@nestjs/graphql';
-import {
-  IsBoolean,
-  IsInt,
-  IsNumber,
-  IsString,
-  Max,
-  isNumber,
-} from 'class-validator';
-import mongoose from 'mongoose';
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { IsBoolean, IsInt, IsString, Max } from 'class-validator';
+import { Document } from 'mongoose';
 
-export type LocationDocument = Location & Document;
-export const LocationSchema = new mongoose.Schema(
-  {
-    _id: String,
-    location_name: String,
-    location_number: Number,
-    max_capacity: Number,
-    current_itemsStored: Number,
-    avaible: Boolean,
-  },
-  { _id: false, timestamps: true },
-);
-
+@Schema({ timestamps: true })
+export class LocationDocument extends Document {
+  @Prop()
+  _id: string;
+  @Prop()
+  @IsString()
+  location_name: string;
+  @Prop()
+  @IsInt()
+  location_number: number;
+  @Prop()
+  @IsInt()
+  max_capacity: number;
+  @Prop()
+  @IsInt()
+  current_item_stored: number;
+  @Prop()
+  @IsBoolean()
+  avaible: boolean;
+}
+export const LocationSchema = SchemaFactory.createForClass(LocationDocument);
 @ObjectType()
 export class Location {
   @Field()
@@ -39,7 +41,7 @@ export class Location {
   max_capacity: number;
   @Field(() => Int, { nullable: true })
   @IsInt()
-  current_itemsStored: number;
+  current_item_stored: number;
   @Field({ defaultValue: true })
   @IsBoolean()
   avaible: boolean;

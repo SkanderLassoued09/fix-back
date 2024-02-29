@@ -1,4 +1,4 @@
-import { InputType, Int, Field } from '@nestjs/graphql';
+import { InputType, Field } from '@nestjs/graphql';
 import { IsDate } from 'class-validator';
 
 @InputType()
@@ -9,9 +9,9 @@ export class CreateComposantInput {
   name: string;
   @Field()
   package: string;
-  //the entity categorie composant
+  //the entity category composant
   @Field()
-  categorie_id: string;
+  category_composant_id: string;
   @Field()
   prix_achat: number;
   @Field()

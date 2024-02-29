@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { CreateClientInput } from './dto/create-client.input';
-import { UpdateClientInput } from './dto/update-client.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Client } from './entities/client.entity';

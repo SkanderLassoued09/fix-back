@@ -3,17 +3,19 @@ import { ApolloDriverConfig, ApolloDriver } from '@nestjs/apollo';
 import { GraphQLModule } from '@nestjs/graphql';
 import { MongooseModule } from '@nestjs/mongoose';
 import { LocationModule } from './location/location.module';
-import { CompaniesModule } from './companies/companies.module';
+import { CompanysModule } from './company/company.module';
 import { ClientsModule } from './clients/clients.module';
 import { ComposantModule } from './composant/composant.module';
-import { ComposantCategorieModule } from './composant_categorie/composant_categorie.module';
-import { DiCategorieModule } from './di_categorie/di_categorie.module';
+import { ComposantCategoryModule } from './composant_category/composant_category.module';
+import { DiCategoryModule } from './di_category/di_category.module';
 import { DiModule } from './di/di.module';
+import { TarifModule } from './tarif/tarif.module';
+import { RemarqueModule } from './remarque/remarque.module';
 
 @Module({
   imports: [
     LocationModule,
-    CompaniesModule,
+    CompanysModule,
     MongooseModule.forRoot(
       'mongodb+srv://benjemianezih:fixtronix@fixtronixdatabase.1xkjlbq.mongodb.net/',
     ),
@@ -24,9 +26,11 @@ import { DiModule } from './di/di.module';
     }),
     ClientsModule,
     ComposantModule,
-    ComposantCategorieModule,
-    DiCategorieModule,
+    ComposantCategoryModule,
+    DiCategoryModule,
     DiModule,
+    TarifModule,
+    RemarqueModule,
   ],
   controllers: [],
   providers: [],
