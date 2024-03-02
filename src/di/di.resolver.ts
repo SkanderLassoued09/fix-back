@@ -8,7 +8,10 @@ export class DiResolver {
   constructor(private readonly diService: DiService) {}
 
   @Mutation(() => Di)
-  createDi(@Args('createDiInput') createDiInput: CreateDiInput) {
-    return this.diService.create(createDiInput);
+  createDi(
+    @Args('createDiInput')
+    createDiInput: CreateDiInput,
+  ) {
+    return this.diService.createDi(createDiInput);
   }
 }

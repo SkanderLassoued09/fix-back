@@ -59,7 +59,7 @@ export class DiDocument extends Document {
   @Prop({ defaultValue: false })
   isDeleted: boolean;
 }
-export const CompanySchema = SchemaFactory.createForClass(DiDocument);
+export const DiSchema = SchemaFactory.createForClass(DiDocument);
 
 @ObjectType()
 export class Di {
