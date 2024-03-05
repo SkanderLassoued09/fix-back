@@ -24,7 +24,7 @@ export class ProfileResolver {
     @Args('createProfileInput') createProfileInput: CreateProfileInput,
   ) {
     let data = await this.profileService.create(createProfileInput);
-    // console.log(data, 'in resolver');
+
     return data;
   }
 
