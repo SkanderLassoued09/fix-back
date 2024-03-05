@@ -113,3 +113,11 @@ export class Company extends Document {
   @IsBoolean()
   isDeleted: boolean;
 }
+
+@ObjectType()
+export class CompanyTableData {
+  @Field(() => [Company])
+  companyRecords: Company[];
+  @Field()
+  totalCompanyRecord: number;
+}

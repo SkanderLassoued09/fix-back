@@ -1,8 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { CreateCompanyInput } from './dto/create-company.input';
+import {
+  CreateCompanyInput,
+  PaginationConfig,
+} from './dto/create-company.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Company } from './entities/company.entity';
+import { Company, CompanyTableData } from './entities/company.entity';
 
 @Injectable()
 export class CompanysService {
@@ -55,15 +58,31 @@ export class CompanysService {
       });
   }
 
-  async findAllCompanys(): Promise<[Company]> {
-    return await this.CompanyModel.find({})
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+  async findAllCompanys(
+    paginationConfig: PaginationConfig,
+  ): Promise<CompanyTableData> {
+    const { first, rows } = paginationConfig;
+
+    const companyRecords = await this.CompanyModel.find({})
+      .limit(rows)
+      .skip(first)
+      .exec();
+    const totalCompanyRecord = await this.CompanyModel.countDocuments().exec();
+    return { companyRecords, totalCompanyRecord };
   }
+
+  /**
+ *  async findAllPaginating(page: number, nbOfRecord: number): Promise<any> {
+    const skip = page * nbOfRecord;
+    let recordData = await this.model
+      .find()
+      .limit(nbOfRecord)
+      .skip(skip)
+      .exec();
+    let totalData = await this.model.countDocuments().exec();
+    return { recordData, totalData };
+  }
+ */
 
   async findOneCompany(_id: string): Promise<Company> {
     try {

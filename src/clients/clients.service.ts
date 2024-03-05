@@ -2,7 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { CreateClientInput } from './dto/create-client.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Client } from './entities/client.entity';
+import { Client, ClientTableData } from './entities/client.entity';
+import { PaginationConfig } from 'src/company/dto/create-company.input';
 
 @Injectable()
 export class ClientsService {
@@ -53,14 +54,18 @@ export class ClientsService {
       });
   }
 
-  async findAllClients(): Promise<[Client]> {
-    return await this.ClientModel.find({})
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+  async findAllClients(
+    paginationConfig: PaginationConfig,
+  ): Promise<ClientTableData> {
+    const { first, rows } = paginationConfig;
+    const clientRecords = await this.ClientModel.find({})
+      .limit(rows)
+      .skip(first)
+      .exec();
+
+    const totalClientRecord = await this.ClientModel.countDocuments().exec();
+    console.log('🍮[clientRecords]:', clientRecords);
+    return { clientRecords, totalClientRecord };
   }
 
   async findOneClient(_id: string): Promise<Client> {

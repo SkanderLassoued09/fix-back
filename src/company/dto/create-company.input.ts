@@ -52,3 +52,10 @@ export class CreateCompanyInput {
   @IsBoolean()
   isDeleted: boolean;
 }
+@InputType()
+export class PaginationConfig {
+  @Field()
+  rows: number; // number of element displayed in table
+  @Field()
+  first: number; // index of current pages
+}
