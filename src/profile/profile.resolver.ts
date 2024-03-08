@@ -4,9 +4,14 @@ import {
   ClientByRegionChart,
   GetTicketByProfile,
   Profile,
+  ProfileTableData,
   TechTickets,
 } from './entities/profile.entity';
-import { CreateProfileInput, TokenData } from './dto/create-profile.input';
+import {
+  CreateProfileInput,
+  PaginationConfigProfile,
+  TokenData,
+} from './dto/create-profile.input';
 import { UpdateProfileInput } from './dto/update-profile.input';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 import { BadRequestException, UseGuards } from '@nestjs/common';
@@ -50,11 +55,14 @@ export class ProfileResolver {
     return await this.profileService.getAllAdmins();
   }
 
-  @Roles(Role.ADMIN_MANAGER, Role.ADMIN_TECH)
-  @Query(() => [Profile])
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  async getAllProfiles() {
-    return await this.profileService.getAllProfile();
+  // @Roles(Role.ADMIN_MANAGER, Role.ADMIN_TECH)
+  @Query(() => ProfileTableData)
+  // @UseGuards(JwtAuthGuard, RolesGuard)
+  async getAllProfiles(
+    @Args('paginationConfig') paginationConfig: PaginationConfigProfile,
+  ) {
+    console.log('🍦[paginationConfig]:', paginationConfig);
+    return await this.profileService.getAllProfile(paginationConfig);
   }
 
   @Query(() => Profile)

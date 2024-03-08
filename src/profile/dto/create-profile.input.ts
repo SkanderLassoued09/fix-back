@@ -32,3 +32,10 @@ export class TokenData {
   @Field()
   email: string;
 }
+@InputType()
+export class PaginationConfigProfile {
+  @Field()
+  rows: number; // number of element displayed in table
+  @Field()
+  first: number; // index of current pages
+}

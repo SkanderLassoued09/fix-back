@@ -1,5 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { CreateProfileInput } from './dto/create-profile.input';
+import {
+  CreateProfileInput,
+  PaginationConfigProfile,
+} from './dto/create-profile.input';
 import { UpdateProfileInput } from './dto/update-profile.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -65,17 +68,18 @@ export class ProfileService {
         // console.log('err');
       });
   }
-  // for listing profiles
-  async getAllProfile() {
-    return await this.profileModel
-      .find({ isDeleted: false })
+  // for listing profiles pagination
+  async getAllProfile(paginationConfig: PaginationConfigProfile) {
+    const { first, rows } = paginationConfig;
+    const totalProfileCount = await this.profileModel.countDocuments().exec();
+    const profileRecord = await this.profileModel
+      .find({})
       .sort({ createdAt: -1 })
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      .limit(rows)
+      .skip(first)
+      .exec();
+    console.log('🥒', profileRecord);
+    return { profileRecord, totalProfileCount };
   }
 
   async findOneForAuth(username: string): Promise<Profile | undefined> {

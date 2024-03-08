@@ -31,29 +31,29 @@ ProfileSchema.pre('save', async function (next) {
 });
 @ObjectType()
 export class Profile extends Document {
-  @Field()
+  @Field({ nullable: true })
   _id: string;
-  @Field()
+  @Field({ nullable: true })
   username: string;
-  @Field()
+  @Field({ nullable: true })
   firstName: string;
-  @Field()
+  @Field({ nullable: true })
   lastName: string;
-  @Field()
+  @Field({ nullable: true })
   password: string;
-  @Field()
+  @Field({ nullable: true })
   phone: string;
-  @Field()
+  @Field({ nullable: true })
   role: string;
-  @Field()
+  @Field({ nullable: true })
   email: string;
-  @Field()
+  @Field({ nullable: true })
   isTechBusy: boolean;
-  @Field()
+  @Field({ nullable: true })
   createdAt: Date;
-  @Field()
+  @Field({ nullable: true })
   updatedAt: Date;
-  @Field()
+  @Field({ nullable: true })
   isDeleted: boolean;
 }
 
@@ -103,4 +103,12 @@ export class GetTicketByProfile {
   techCostDiag: number;
   // @Field(() => [ChartIssueByTech])
   // chartIssueByTech: ChartIssueByTech;
+}
+
+@ObjectType()
+export class ProfileTableData {
+  @Field(() => [Profile])
+  profileRecord: Profile[];
+  @Field()
+  totalProfileCount: number;
 }

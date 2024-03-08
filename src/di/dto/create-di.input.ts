@@ -54,3 +54,10 @@ export class CreateDiInput {
   @Field({ nullable: true })
   status: string;
 }
+@InputType()
+export class PaginationConfigDi {
+  @Field()
+  rows: number; // number of element displayed in table
+  @Field()
+  first: number; // index of current pages
+}

@@ -71,19 +71,6 @@ export class CompanysService {
     return { companyRecords, totalCompanyRecord };
   }
 
-  /**
- *  async findAllPaginating(page: number, nbOfRecord: number): Promise<any> {
-    const skip = page * nbOfRecord;
-    let recordData = await this.model
-      .find()
-      .limit(nbOfRecord)
-      .skip(skip)
-      .exec();
-    let totalData = await this.model.countDocuments().exec();
-    return { recordData, totalData };
-  }
- */
-
   async findOneCompany(_id: string): Promise<Company> {
     try {
       const Company = await this.CompanyModel.findById(_id).lean();
