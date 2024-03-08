@@ -15,7 +15,7 @@ export class ServiceContactInput {
 
 @InputType()
 export class CreateCompanyInput {
-  @Field()
+  @Field({ nullable: true })
   _id: string;
   @Field()
   @IsString()
@@ -48,7 +48,14 @@ export class CreateCompanyInput {
   serviceFinancier: ServiceContactInput;
   @Field(() => ServiceContactInput, { nullable: true })
   serviceTechnique: ServiceContactInput;
-  @Field()
+  @Field({ nullable: true })
   @IsBoolean()
   isDeleted: boolean;
+}
+@InputType()
+export class PaginationConfig {
+  @Field()
+  rows: number; // number of element displayed in table
+  @Field()
+  first: number; // index of current pages
 }

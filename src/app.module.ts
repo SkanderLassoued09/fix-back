@@ -11,6 +11,8 @@ import { DiCategoryModule } from './di_category/di_category.module';
 import { DiModule } from './di/di.module';
 import { TarifModule } from './tarif/tarif.module';
 import { RemarqueModule } from './remarque/remarque.module';
+import { ProfileModule } from './profile/profile.module';
+import { AuthModule } from './auth/auth.module';
 
 @Module({
   imports: [
@@ -24,6 +26,8 @@ import { RemarqueModule } from './remarque/remarque.module';
       playground: true,
       autoSchemaFile: true,
     }),
+    ProfileModule,
+    AuthModule,
     ClientsModule,
     ComposantModule,
     ComposantCategoryModule,

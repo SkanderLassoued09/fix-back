@@ -3,7 +3,7 @@ import { IsBoolean, IsEmail, IsString } from 'class-validator';
 
 @InputType()
 export class CreateClientInput {
-  @Field()
+  @Field({ nullable: true })
   _id: string;
   @Field()
   @IsString()
@@ -24,4 +24,12 @@ export class CreateClientInput {
   @Field({ defaultValue: false })
   @IsBoolean()
   isDeleted: boolean;
+}
+
+@InputType()
+export class PaginationConfig {
+  @Field()
+  rows: number; // number of element displayed in table
+  @Field()
+  first: number; // index of current pages
 }

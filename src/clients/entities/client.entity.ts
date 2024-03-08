@@ -57,3 +57,11 @@ export class Client {
   @IsBoolean()
   isDeleted: boolean;
 }
+
+@ObjectType()
+export class ClientTableData {
+  @Field(() => [Client])
+  clientRecords: Client[];
+  @Field()
+  totalClientRecord: number;
+}
