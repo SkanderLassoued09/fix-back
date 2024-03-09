@@ -2,6 +2,11 @@ import { ObjectType, Field } from '@nestjs/graphql';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 import * as mongoose from 'mongoose';
+import { Client } from 'src/clients/entities/client.entity';
+import { DiCategory } from 'src/di_category/entities/di_category.entity';
+import { Location } from 'src/location/entities/location.entity';
+import { Profile } from 'src/profile/entities/profile.entity';
+import { Remarque } from 'src/remarque/entities/remarque.entity';
 @Schema({ timestamps: true })
 export class DiDocument extends Document {
   @Prop()
@@ -20,19 +25,19 @@ export class DiDocument extends Document {
   contain_pdr: boolean;
   @Prop({ type: String, ref: 'Profile' })
   // created by who
-  created_by_id: string;
+  created_by_id: Profile;
   @Prop({ type: String, ref: 'Client' })
   // belongs to which client
-  client_id: string;
+  client_id: Client;
   @Prop({ type: String, ref: 'Remarque' })
   // belongs to remarque
-  remarque_id: string;
+  remarque_id: Remarque;
   @Prop({ type: String, ref: 'DiCategory' })
   // belongs to which category
-  di_category_id: string;
+  di_category_id: DiCategory;
   @Prop({ type: String, ref: 'Location' })
   // belongs to which location
-  location_id: string;
+  location_id: Location;
   @Prop()
   // stats of tech
   stats_id: string;
@@ -216,21 +221,21 @@ export class DiTable {
   updatedAt: string;
   @Field({ nullable: true })
   current_roles: string;
-  @Field(() => ClientDi)
-  client_id: ClientDi;
-  @Field(() => RemarqueDi, { nullable: true })
-  remarque_id: RemarqueDi;
-  @Field(() => CreatedByDi, { nullable: true })
-  created_by_id: CreatedByDi;
-  @Field(() => LocationDi, { nullable: true })
-  location_id: LocationDi;
-  @Field(() => CategoryDi, { nullable: true })
-  di_category_id: CategoryDi;
+  @Field({ nullable: true })
+  client_id: string;
+  @Field({ nullable: true })
+  remarque_id: string;
+  @Field({ nullable: true })
+  created_by_id: string;
+  @Field({ nullable: true })
+  location_id: string;
+  @Field({ nullable: true })
+  di_category_id: string;
 } //
 @ObjectType()
 export class DiTableData {
   @Field(() => [DiTable])
-  diRecords: DiTable[];
+  di: DiTable[];
   @Field()
   totalDiCount: number;
 }

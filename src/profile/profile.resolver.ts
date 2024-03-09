@@ -42,12 +42,12 @@ export class ProfileResolver {
     }
   }
 
-  // @Roles(Role.ADMIN_MANAGER, Role.ADMIN_TECH)
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Query(() => [TechTickets])
-  async getAllTech() {
-    return await this.profileService.getAllTech();
-  }
+  // // @Roles(Role.ADMIN_MANAGER, Role.ADMIN_TECH)
+  // @UseGuards(JwtAuthGuard, RolesGuard)
+  // @Query(() => [TechTickets])
+  // async getAllTech() {
+  //   return await this.profileService.getAllTech();
+  // }
 
   @UseGuards(JwtAuthGuard)
   @Query(() => [TechTickets])
@@ -190,5 +190,9 @@ export class ProfileResolver {
   @Mutation(() => Profile)
   removeProfile(@Args('id', { type: () => Int }) id: number) {
     return this.profileService.remove(id);
+  }
+  @Query(() => [Profile])
+  getAllTech() {
+    return this.profileService.getAllTech();
   }
 }

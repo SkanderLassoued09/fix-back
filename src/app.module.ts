@@ -13,6 +13,7 @@ import { TarifModule } from './tarif/tarif.module';
 import { RemarqueModule } from './remarque/remarque.module';
 import { ProfileModule } from './profile/profile.module';
 import { AuthModule } from './auth/auth.module';
+import { StatModule } from './stat/stat.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { AuthModule } from './auth/auth.module';
     DiModule,
     TarifModule,
     RemarqueModule,
+    StatModule,
   ],
   controllers: [],
   providers: [],
