@@ -6,20 +6,22 @@ import { Document } from 'mongoose';
 export class StatDocument extends Document {
   @Prop()
   _id: string;
+  @Prop()
+  _idDi: string;
 
   @Prop()
   id_tech_diag: string;
 
-  @Prop({ type: Date })
-  diag_time: Date;
+  @Prop()
+  diag_time: string;
 
   @Prop()
   id_tech_rep: string;
 
-  @Prop({ type: Date })
-  rep_time: Date;
+  @Prop()
+  rep_time: string;
 
-  @Prop({ type: [String] })
+  @Prop()
   id_tech_retour: string[];
 
   @Prop({ type: Date })
@@ -35,17 +37,19 @@ export class Stat {
   @Field()
   _id: string;
   @Field()
+  _idDi: string;
+  @Field()
   id_tech_diag: string;
   @Field()
-  diag_time: Date;
+  diag_time: string;
   @Field()
   id_tech_rep: string;
   @Field()
-  rep_time: Date;
+  rep_time: string;
   @Field(() => [String])
-  id_tech_retour: [string];
+  id_tech_retour: string[];
   @Field()
-  retour_time: Date;
+  retour_time: string;
   @Field(() => Int, { defaultValue: 0 })
   retour_count: number;
 }

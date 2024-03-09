@@ -17,12 +17,11 @@ export class StatService {
     );
 
     if (lastStat) {
-      console.log('is entered');
       indexStat = +lastStat._id.substring(1);
-      console.log(indexStat, '== index');
+
       return indexStat + 1;
     }
-    console.log(lastStat, 'lastStat');
+
     return indexStat;
   }
 
@@ -33,11 +32,27 @@ export class StatService {
     return await new this.StatModel(createStatInput)
       .save()
       .then((res) => {
-        console.log(res, 'Stat');
         return res;
       })
       .catch((err) => {
         return err;
       });
+  }
+
+  async affectForDiag(_idDi: string, _idTech: string) {
+    return await this.StatModel.updateOne(
+      { _idDi },
+      {
+        $set: {
+          id_tech_rep: _idTech,
+        },
+      },
+    );
+  }
+
+  async getDiForTech(_idtech) {
+    return await this.StatModel.find({
+      $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }],
+    });
   }
 }
