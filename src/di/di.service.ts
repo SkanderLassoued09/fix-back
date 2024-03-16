@@ -22,7 +22,7 @@ export class DiService {
 
     if (lastDi) {
       console.log('is entered');
-      indexDi = +lastDi._id.substring(1);
+      indexDi = +lastDi._id.substring(2);
       console.log(indexDi, '== index');
       return indexDi + 1;
     }
@@ -50,7 +50,7 @@ export class DiService {
     const diRecords = await this.diModel
       .find({})
       .populate('client_id', 'first_name last_name')
-      .populate('created_by_id', 'firstName lastName')
+      .populate('createdBy', 'firstName lastName')
       .populate('location_id', 'location_name')
       .populate('remarque_id', 'remarque_manager')
       .populate('di_category_id', 'category_Di')
@@ -71,17 +71,11 @@ export class DiService {
         current_roles: di.current_roles,
 
         status: di.status,
-        client_id: di.client_id.first_name,
-        created_by_id: di.created_by_id.firstName,
-        remarque_id: di.remarque_id.remarque_admin_manager,
-        location_id: di.location_id.location_name,
-        di_category_id: di.di_category_id.category_DI,
-
-        /**
-         * _id title description can_be_repaired
-         * bon_de_commande bon_de_livraison contain_pdr
-         * status createdAt updatedAt current_roles client_id
-         */
+        client_id: di.client_id?.first_name ?? null,
+        createdBy: `${di.createdBy?.firstName ?? ''} ${
+          di.createdBy?.lastName ?? ''
+        }`,
+        // Use optional chaining and nullish coalescing for other properties as well
       };
       return obj;
     });

@@ -2,14 +2,25 @@ import { Resolver, Mutation, Args, Query } from '@nestjs/graphql';
 import { DiService } from './di.service';
 import { Di, DiTableData } from './entities/di.entity';
 import { CreateDiInput, PaginationConfigDi } from './dto/create-di.input';
-
+import { User as CurrentUser } from 'src/auth/profile.decorator';
+import { TokenData } from 'src/profile/dto/create-profile.input';
+import { Profile } from 'src/profile/entities/profile.entity';
+import { UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 @Resolver(() => Di)
 export class DiResolver {
   constructor(private readonly diService: DiService) {}
 
   @Mutation(() => Di)
-  createDi(@Args('createDiInput') createDiInput: CreateDiInput) {
-    return this.diService.create(createDiInput);
+  @UseGuards(JwtAuthGuard)
+  createDi(
+    @Args('createDiInput') createDiInput: CreateDiInput,
+    @CurrentUser() profile: Profile,
+  ) {
+    createDiInput.createdBy = profile._id;
+    console.log('🍯[profile._id]:', profile._id);
+
+    return this.diService.createDi(createDiInput);
   }
 
   @Query(() => DiTableData)
@@ -38,6 +49,10 @@ export class DiResolver {
   @Mutation(() => Di)
   manager_Pending1(@Args('_id') _id: string) {
     return this.diService.manager_Pending1(_id);
+  }
+  @Mutation(() => Di)
+  tech_startDiagnostic(@Args('_id') _id: string) {
+    return this.diService.tech_startDiagnostic(_id);
   }
 
   @Mutation(() => Di)

@@ -32,6 +32,11 @@ export class CompanysResolver {
     return await this.companysService.findOneCompany(_id);
   }
 
+  @Query(() => [Company])
+  async getAllComapnyforDropDown(): Promise<any> {
+    return await this.companysService.getAllComapnyforDropDown();
+  }
+
   @Query(() => CompanyTableData)
   async findAllCompany(
     @Args('PaginationConfig') paginationConfig: PaginationConfig,
@@ -40,38 +45,3 @@ export class CompanysResolver {
     return await this.companysService.findAllCompanys(paginationConfig);
   }
 }
-/**
- *   @Query(() => UserPaginating) // works fine in graphql playground
-  getAllUsers(
-    @Args('page') page: number,
-    @Args('nbOfRecord') nbOfRecord: number,
-  ) {
-    console.log('🥓[nbOfRecord]:', nbOfRecord);
-    console.log('🥗[page]:', page);
-    this.logger.warn('List of users ');
-    return this.usersService.findAllUsers(page, nbOfRecord);
-  }
-
-  -----------------
-  
-  findAllUsers(page: number, nbOfRecord: number): Promise<any[]> {
-    return this.userRespository
-      .findAllPaginating(page, nbOfRecord)
-      .then((res) => {
-        console.log('🍦', res);
-        return res;
-      });
-  }
-  -------------------
-   async findAllPaginating(page: number, nbOfRecord: number): Promise<any> {
-    const skip = page * nbOfRecord;
-    let recordData = await this.model
-      .find()
-      .limit(nbOfRecord)
-      .skip(skip)
-      .exec();
-    let totalData = await this.model.countDocuments().exec();
-    return { recordData, totalData };
-  }
-
- */

@@ -3,6 +3,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 import * as mongoose from 'mongoose';
 import { Client } from 'src/clients/entities/client.entity';
+import { Company } from 'src/company/entities/company.entity';
 import { DiCategory } from 'src/di_category/entities/di_category.entity';
 import { Location } from 'src/location/entities/location.entity';
 import { Profile } from 'src/profile/entities/profile.entity';
@@ -18,6 +19,8 @@ export class DiDocument extends Document {
   // description of DI
   description: string;
   @Prop()
+  nSerie: string;
+  @Prop()
   // repair or not
   can_be_repaired: boolean;
   @Prop()
@@ -25,10 +28,13 @@ export class DiDocument extends Document {
   contain_pdr: boolean;
   @Prop({ type: String, ref: 'Profile' })
   // created by who
-  created_by_id: Profile;
+  createdBy: Profile;
   @Prop({ type: String, ref: 'Client' })
   // belongs to which client
   client_id: Client;
+  @Prop({ type: String, ref: 'Company' })
+  // belongs to which company
+  company_id: Company;
   @Prop({ type: String, ref: 'Remarque' })
   // belongs to remarque
   remarque_id: Remarque;
@@ -91,6 +97,8 @@ export class Di {
   @Field({ nullable: true })
   title: string;
   @Field({ nullable: true })
+  nSerie: string;
+  @Field({ nullable: true })
   description: string;
 
   //* Booleans
@@ -103,9 +111,11 @@ export class Di {
 
   //? ID's
   @Field()
-  created_by_id: string;
+  createdBy: string;
   @Field()
   client_id: string;
+  @Field()
+  company_id: string;
   @Field(() => [String])
   current_workers_ids: [string];
   @Field(() => [String])
@@ -226,7 +236,7 @@ export class DiTable {
   @Field({ nullable: true })
   remarque_id: string;
   @Field({ nullable: true })
-  created_by_id: string;
+  createdBy: string;
   @Field({ nullable: true })
   location_id: string;
   @Field({ nullable: true })

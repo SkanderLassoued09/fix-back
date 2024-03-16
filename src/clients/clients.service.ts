@@ -80,4 +80,8 @@ export class ClientsService {
       throw error;
     }
   }
+
+  async getAllClient() {
+    return await this.ClientModel.find({}).exec();
+  }
 }

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { ApolloDriverConfig, ApolloDriver } from '@nestjs/apollo';
+// import { ApolloDriverConfig, ApolloDriver } from '@nestjs/apollo';
+import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { GraphQLModule } from '@nestjs/graphql';
 import { MongooseModule } from '@nestjs/mongoose';
 import { LocationModule } from './location/location.module';
@@ -26,6 +27,7 @@ import { StatModule } from './stat/stat.module';
       driver: ApolloDriver,
       playground: true,
       autoSchemaFile: true,
+      installSubscriptionHandlers: true,
     }),
     ProfileModule,
     AuthModule,

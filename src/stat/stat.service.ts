@@ -17,7 +17,7 @@ export class StatService {
     );
 
     if (lastStat) {
-      indexStat = +lastStat._id.substring(1);
+      indexStat = +lastStat._id.substring(4);
 
       return indexStat + 1;
     }
@@ -51,6 +51,7 @@ export class StatService {
   }
 
   async getDiForTech(_idtech) {
+    console.log('🍭[_idtech]:', _idtech);
     return await this.StatModel.find({
       $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }],
     });

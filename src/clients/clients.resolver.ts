@@ -31,6 +31,11 @@ export class ClientsResolver {
     return await this.clientsService.findOneClient(_id);
   }
 
+  @Query(() => [Client])
+  async getAllClient(): Promise<any> {
+    return await this.clientsService.getAllClient();
+  }
+
   @Query(() => ClientTableData)
   async findAllClient(
     @Args('PaginationConfig') paginationConfig: PaginationConfig,

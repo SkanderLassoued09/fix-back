@@ -36,24 +36,17 @@ export class Remarque {
   @Field()
   _id: string;
   @Field({ nullable: true })
-  @IsString()
   remarque_manager: string;
   @Field({ nullable: true })
-  @IsString()
   remarque_admin_manager: string;
   @Field({ nullable: true })
-  @IsString()
   remarque_admin_tech: string;
   @Field({ nullable: true })
-  @IsString()
   remarque_tech_diagnostic: string;
   @Field({ nullable: true })
-  @IsString()
   remarque_tech_repair: string;
   @Field({ nullable: true })
-  @IsString()
   remarque_magasin: string;
   @Field({ nullable: true })
-  @IsString()
   remarque_coordinator: string;
 }

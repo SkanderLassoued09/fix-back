@@ -71,6 +71,10 @@ export class CompanysService {
     return { companyRecords, totalCompanyRecord };
   }
 
+  async getAllComapnyforDropDown() {
+    return await this.CompanyModel.find({}).exec();
+  }
+
   async findOneCompany(_id: string): Promise<Company> {
     try {
       const Company = await this.CompanyModel.findById(_id).lean();

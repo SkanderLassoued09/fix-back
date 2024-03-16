@@ -18,7 +18,12 @@ export class CreateDiInput {
   di_category_id: string;
   @Field({ nullable: true })
   contain_pdr: boolean;
-
+  @Field({ nullable: true })
+  client_id: string;
+  @Field({ nullable: true })
+  company_id: string;
+  @Field({ nullable: true })
+  nSerie: string;
   @Field({ nullable: true })
   price: string;
   @Field({ nullable: true })

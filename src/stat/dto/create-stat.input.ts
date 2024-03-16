@@ -20,4 +20,6 @@ export class CreateStatInput {
   retour_count: number;
   @Field({ nullable: true })
   _idDi: string;
+  @Field({ defaultValue: 'You got new task Hello', nullable: true })
+  notificationMessage: string;
 }
