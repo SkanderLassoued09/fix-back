@@ -43,6 +43,8 @@ export class CreateDiInput {
   assigned_reperation: string;
   @Field({ nullable: true })
   assigned_retour: string;
+  @Field(() => [ComposantStructureInput], { nullable: true })
+  array_composants: ComposantStructureInput[];
 
   //files
   @Field({ nullable: true })
@@ -65,4 +67,19 @@ export class PaginationConfigDi {
   rows: number; // number of element displayed in table
   @Field()
   first: number; // index of current pages
+}
+@InputType()
+export class ComposantStructureInput {
+  @Field()
+  nameComposant: string;
+  @Field()
+  etat: string;
+  @Field()
+  quantity: number;
+  @Field()
+  date: string;
+  @Field()
+  link: string;
+  @Field()
+  package: string;
 }

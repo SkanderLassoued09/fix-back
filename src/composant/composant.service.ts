@@ -20,7 +20,7 @@ export class ComposantService {
 
     if (lastComposant) {
       console.log('is entered');
-      indexComposant = +lastComposant._id.substring(1);
+      indexComposant = +lastComposant._id.substring(3);
       console.log(indexComposant, '== index');
       return indexComposant + 1;
     }
@@ -33,7 +33,7 @@ export class ComposantService {
   ): Promise<Composant> {
     const index = await this.generateComposantId();
     console.log(index, 'index Composant');
-    createComposantInput._id = `Cmp ${index}`;
+    createComposantInput._id = `Cmp${index}`;
     return await new this.ComposantModel(createComposantInput)
       .save()
       .then((res) => {

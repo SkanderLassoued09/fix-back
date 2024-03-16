@@ -79,8 +79,8 @@ export class DiDocument extends Document {
   @Prop()
   // status of DI
   status: string;
-  @Prop(() => [String, Number])
-  array_composants: [string, number];
+  @Prop()
+  array_composants: Array<ComposantStructure>;
   @Prop(() => [String])
   current_workers_ids: [string];
   @Prop(() => [String])
@@ -121,8 +121,8 @@ export class Di {
   @Field(() => [String])
   current_roles: [string];
   //* Array of composants
-  @Field(() => [String, Number], { nullable: true })
-  array_composants: [string, number];
+  @Field(() => [ComposantStructure], { nullable: true })
+  array_composants: ComposantStructure[];
 
   //! Remarque entity containing all the Remarques
   @Field({ nullable: true })
@@ -167,6 +167,21 @@ export class Di {
   status: string;
 }
 
+@ObjectType()
+export class ComposantStructure {
+  @Field()
+  nameComposant: string;
+  @Field()
+  etat: string;
+  @Field()
+  quantity: number;
+  @Field()
+  date: string;
+  @Field()
+  link: string;
+  @Field()
+  package: string;
+}
 @ObjectType()
 export class RemarqueDi {
   @Field()
@@ -241,6 +256,8 @@ export class DiTable {
   location_id: string;
   @Field({ nullable: true })
   di_category_id: string;
+  @Field(() => [ComposantStructure], { nullable: true })
+  array_composants: ComposantStructure[];
 } //
 @ObjectType()
 export class DiTableData {
