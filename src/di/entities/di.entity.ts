@@ -171,16 +171,9 @@ export class Di {
 export class ComposantStructure {
   @Field()
   nameComposant: string;
-  @Field()
-  etat: string;
+
   @Field()
   quantity: number;
-  @Field()
-  date: string;
-  @Field()
-  link: string;
-  @Field()
-  package: string;
 }
 @ObjectType()
 export class RemarqueDi {

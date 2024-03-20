@@ -72,14 +72,7 @@ export class PaginationConfigDi {
 export class ComposantStructureInput {
   @Field()
   nameComposant: string;
-  @Field()
-  etat: string;
+
   @Field()
   quantity: number;
-  @Field()
-  date: string;
-  @Field()
-  link: string;
-  @Field()
-  package: string;
 }

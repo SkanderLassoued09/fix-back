@@ -56,4 +56,15 @@ export class StatService {
       $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }],
     });
   }
+
+  async lapTime(_id: string, diag_time: string) {
+    return await this.StatModel.updateOne(
+      { _id },
+      {
+        $set: {
+          diag_time,
+        },
+      },
+    );
+  }
 }

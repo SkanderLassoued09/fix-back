@@ -88,6 +88,19 @@ export class StatResolver {
     }
   }
 
+  @Mutation(() => Boolean)
+  lapTimeForPauseAndGetBack(
+    @Args('_id') _id: string,
+    @Args('diagTime') diagTime: string,
+  ) {
+    const isUpdated = this.statService.lapTime(_id, diagTime);
+    if (isUpdated) {
+      return true;
+    } else {
+      false;
+    }
+  }
+
   @Query(() => [Stat])
   @UseGuards(JwtAuthGuard)
   getDiForTech(@CurrentUser() tech: Profile) {
