@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { CreateDiInput, PaginationConfigDi } from './dto/create-di.input';
+import {
+  CreateDiInput,
+  DiagUpdate,
+  PaginationConfigDi,
+} from './dto/create-di.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Di, DiDocument } from './entities/di.entity';
 import { Model } from 'mongoose';
@@ -189,7 +193,7 @@ export class DiService {
   }
 
   //Tech starting diagnostic
-  async tech_startDiagnostic(_idDI: string) {
+  async tech_startDiagnostic(_idDI: string, diag: DiagUpdate) {
     return this.diModel
       .updateOne(
         { _id: _idDI },
@@ -197,6 +201,10 @@ export class DiService {
           $set: {
             current_roles: Role.TECH,
             status: STATUS_DI.InDiagnostic.status,
+            can_be_repaired: diag.can_be_repaired,
+            contain_pdr: diag.contain_pdr,
+            remarqueTech: diag.remarqueTech,
+            array_composants: diag.array_composants,
           },
         },
       )

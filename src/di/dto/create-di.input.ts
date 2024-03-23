@@ -76,3 +76,15 @@ export class ComposantStructureInput {
   @Field()
   quantity: number;
 }
+
+@InputType()
+export class DiagUpdate {
+  @Field()
+  remarqueTech: string;
+  @Field()
+  contain_pdr: boolean;
+  @Field()
+  can_be_repaired: boolean;
+  @Field(() => [ComposantStructureInput], { nullable: true })
+  array_composants: ComposantStructureInput[];
+}

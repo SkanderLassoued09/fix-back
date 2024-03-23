@@ -1,7 +1,11 @@
 import { Resolver, Mutation, Args, Query } from '@nestjs/graphql';
 import { DiService } from './di.service';
 import { Di, DiTableData } from './entities/di.entity';
-import { CreateDiInput, PaginationConfigDi } from './dto/create-di.input';
+import {
+  CreateDiInput,
+  DiagUpdate,
+  PaginationConfigDi,
+} from './dto/create-di.input';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
 import { TokenData } from 'src/profile/dto/create-profile.input';
 import { Profile } from 'src/profile/entities/profile.entity';
@@ -51,8 +55,11 @@ export class DiResolver {
     return this.diService.manager_Pending1(_id);
   }
   @Mutation(() => Di)
-  tech_startDiagnostic(@Args('_id') _id: string) {
-    return this.diService.tech_startDiagnostic(_id);
+  tech_startDiagnostic(
+    @Args('_id') _id: string,
+    @Args('diag') diag: DiagUpdate,
+  ) {
+    return this.diService.tech_startDiagnostic(_id, diag);
   }
 
   @Mutation(() => Di)

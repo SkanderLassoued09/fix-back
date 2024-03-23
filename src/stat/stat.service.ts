@@ -67,4 +67,8 @@ export class StatService {
       },
     );
   }
+
+  async getLastPauseTime(_id: string) {
+    return await this.StatModel.findOne({ _id }).exec();
+  }
 }

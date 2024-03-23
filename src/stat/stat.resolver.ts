@@ -88,6 +88,11 @@ export class StatResolver {
     }
   }
 
+  /**
+   * 
+  this function for pause time fired when user press on pause 
+   */
+
   @Mutation(() => Boolean)
   lapTimeForPauseAndGetBack(
     @Args('_id') _id: string,
@@ -99,6 +104,15 @@ export class StatResolver {
     } else {
       false;
     }
+  }
+
+  /**
+   * 
+  this function will get last time pause to continue counting later 
+   */
+  @Query(() => Stat)
+  getLastPauseTime(@Args('_id') _id: string) {
+    return this.statService.getLastPauseTime(_id);
   }
 
   @Query(() => [Stat])
