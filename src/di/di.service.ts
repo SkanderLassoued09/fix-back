@@ -192,15 +192,15 @@ export class DiService {
       });
   }
 
-  //Tech starting diagnostic
+  //Tech finsih diagnostic
   async tech_startDiagnostic(_idDI: string, diag: DiagUpdate) {
     return this.diModel
       .updateOne(
         { _id: _idDI },
         {
           $set: {
-            current_roles: Role.TECH,
-            status: STATUS_DI.InDiagnostic.status,
+            current_roles: Role.MAGASIN,
+            status: STATUS_DI.InMagasin.status,
             can_be_repaired: diag.can_be_repaired,
             contain_pdr: diag.contain_pdr,
             remarqueTech: diag.remarqueTech,

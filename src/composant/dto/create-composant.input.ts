@@ -5,26 +5,25 @@ import { IsDate } from 'class-validator';
 export class CreateComposantInput {
   @Field({ nullable: true })
   _id: string;
-  @Field()
+  @Field({ nullable: true })
   name: string;
-  // @Field()
-  // package: string;
-  // //the entity category composant
-  // @Field()
-  // category_composant_id: string;
-  // @Field()
-  // prix_achat: number;
-  // @Field()
-  // prix_vente: number;
-  // @Field({ nullable: true })
-  // @IsDate()
-  // coming_date: Date;
-  // @Field({ nullable: true })
-  // link: string;
-  // @Field({ nullable: true })
-  // quantity_stocked: number;
-  // @Field({ nullable: true })
-  // pdf: string;
-  // @Field()
-  // status: string;
+  @Field({ nullable: true })
+  package: string;
+  //the entity category composant
+  @Field({ nullable: true })
+  category_composant_id: string;
+  @Field({ nullable: true })
+  prix_achat: number;
+  @Field({ nullable: true })
+  prix_vente: number;
+  @Field({ nullable: true })
+  coming_date: string;
+  @Field({ nullable: true })
+  link: string;
+  @Field({ nullable: true })
+  quantity_stocked: number;
+  @Field({ nullable: true })
+  pdf: string;
+  @Field({ nullable: true })
+  status: string;
 }

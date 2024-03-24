@@ -24,10 +24,21 @@ export class ComposantResolver {
       throw new Error('Failed to delete Composant');
     }
   }
+  @Mutation(() => Boolean)
+  addComposantInfo(
+    @Args('updateComposant') updateComposant: CreateComposantInput,
+  ) {
+    const isUpdated = this.composantService.addComposantInfo(updateComposant);
+    if (isUpdated) {
+      return true;
+    } else {
+      return false;
+    }
+  }
 
   @Query(() => Composant)
-  async findOneComposant(@Args('_id') _id: string): Promise<Composant> {
-    return await this.composantService.findOneComposant(_id);
+  async findOneComposant(@Args('name') name: string): Promise<Composant> {
+    return await this.composantService.findOneComposant(name);
   }
 
   @Query(() => [Composant])

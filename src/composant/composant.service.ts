@@ -67,16 +67,35 @@ export class ComposantService {
       });
   }
 
-  async findOneComposant(_id: string): Promise<Composant> {
-    try {
-      const Composant = await this.ComposantModel.findById(_id).lean();
+  async findOneComposant(name: string): Promise<Composant> {
+    return await this.ComposantModel.findOne({ name }).exec();
 
-      if (!Composant) {
-        throw new Error(`Composant with ID '${_id}' not found.`);
-      }
-      return Composant;
-    } catch (error) {
-      throw error;
-    }
+    //   if (!Composant) {
+    //     throw new Error(`Composant with ID '${_id}' not found.`);
+    //   }
+    //   return Composant;
+    // } catch (error) {
+    //   throw error;
+    // }
+  }
+
+  // this function after recieving ticket from tech
+  async addComposantInfo(updateComposant: CreateComposantInput) {
+    return await this.ComposantModel.updateOne(
+      { name: updateComposant.name },
+      {
+        $set: {
+          package: updateComposant.package,
+          category_composant_id: updateComposant.category_composant_id,
+          prix_achat: updateComposant.prix_achat,
+          prix_vente: updateComposant.prix_vente,
+          coming_date: updateComposant.coming_date,
+          link: updateComposant.link,
+          quantity_stocked: updateComposant.quantity_stocked,
+          pdf: updateComposant.pdf,
+          status: updateComposant.status,
+        },
+      },
+    );
   }
 }

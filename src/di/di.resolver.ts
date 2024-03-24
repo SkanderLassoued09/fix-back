@@ -54,12 +54,17 @@ export class DiResolver {
   manager_Pending1(@Args('_id') _id: string) {
     return this.diService.manager_Pending1(_id);
   }
-  @Mutation(() => Di)
+  @Mutation(() => Boolean)
   tech_startDiagnostic(
     @Args('_id') _id: string,
     @Args('diag') diag: DiagUpdate,
   ) {
-    return this.diService.tech_startDiagnostic(_id, diag);
+    const isDiag = this.diService.tech_startDiagnostic(_id, diag);
+    if (isDiag) {
+      return true;
+    } else {
+      return false;
+    }
   }
 
   @Mutation(() => Di)

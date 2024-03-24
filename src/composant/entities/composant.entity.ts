@@ -18,11 +18,11 @@ export class ComposantDocument extends Document {
   @Prop()
   prix_vente: number;
   @Prop()
-  coming_date: Date;
+  coming_date: string;
   @Prop()
   link: string;
   @Prop()
-  quantity_Instock: string;
+  quantity_stocked: number;
   @Prop()
   pdf: string;
   @Prop()
@@ -31,28 +31,27 @@ export class ComposantDocument extends Document {
 export const ComposantSchema = SchemaFactory.createForClass(ComposantDocument);
 @ObjectType()
 export class Composant {
-  @Field()
+  @Field({ nullable: true })
   _id: string;
-  @Field()
+  @Field({ nullable: true })
   name: string;
-  @Field()
+  @Field({ nullable: true })
   package: string;
   //the entity category composant
-  @Field()
+  @Field({ nullable: true })
   category_composant_id: string;
-  @Field()
+  @Field({ nullable: true })
   prix_achat: number;
-  @Field()
+  @Field({ nullable: true })
   prix_vente: number;
   @Field({ nullable: true })
-  @IsDate()
-  coming_date: Date;
+  coming_date: string;
   @Field({ nullable: true })
   link: string;
   @Field({ nullable: true })
   quantity_stocked: number;
-  @Field()
+  @Field({ nullable: true })
   pdf: string;
-  @Field()
+  @Field({ nullable: true })
   status: string;
 }
