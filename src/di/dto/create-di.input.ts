@@ -25,11 +25,11 @@ export class CreateDiInput {
   @Field({ nullable: true })
   nSerie: string;
   @Field({ nullable: true })
-  price: string;
+  price: number;
   @Field({ nullable: true })
-  finalPrice: string;
+  finalPrice: number;
   @Field({ nullable: true })
-  discount_percentage: boolean;
+  discount_percentage: number;
   @Field({ nullable: true })
   discount_value: number;
 

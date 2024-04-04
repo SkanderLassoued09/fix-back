@@ -66,6 +66,19 @@ export class DiResolver {
       return false;
     }
   }
+  @Mutation(() => Boolean)
+  affectinitialPrice(@Args('_id') _id: string, @Args('price') price: number) {
+    const priceaffecting = this.diService.affectinitialPrice(_id, price);
+    if (priceaffecting) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  @Query(() => Number)
+  calculateTicketComposantPrice(@Args('_id') _id: string) {
+    return this.diService.calculateTicketComposantPrice(_id);
+  }
 
   @Mutation(() => Di)
   magasinTech_Pending2(@Args('_id') _id: string) {
@@ -75,5 +88,81 @@ export class DiResolver {
   @Mutation(() => Di)
   managerAdminManager_Pending3(@Args('_id') _id: string) {
     return this.diService.managerAdminManager_Pending3(_id);
+  }
+
+  /**
+   * Changing status section
+   */
+  @Mutation(() => Boolean)
+  changeStatusPending1(@Args('_id') _id: string) {
+    const isPending = this.diService.changeStatusPending1(_id);
+    if (isPending) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  @Mutation(() => Boolean)
+  changeStatusInDiagnostic(@Args('_id') _id: string) {
+    const isPending = this.diService.changeStatusInDiagnostic(_id);
+    if (isPending) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  @Mutation(() => Boolean)
+  changeStatusInMagasin(@Args('_id') _id: string) {
+    const isPending = this.diService.changeStatusInMagasin(_id);
+    if (isPending) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  @Mutation(() => Boolean)
+  changeStatusPending2(@Args('_id') _id: string) {
+    const isPending = this.diService.changeStatusPending2(_id);
+    if (isPending) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  @Mutation(() => Boolean)
+  changeStatusPricing(@Args('_id') _id: string) {
+    const isPending = this.diService.changeStatusPricing(_id);
+    if (isPending) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  @Mutation(() => Boolean)
+  changeStatusNegociate1(@Args('_id') _id: string) {
+    const isPending = this.diService.changeStatusNegociate1(_id);
+    if (isPending) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  @Mutation(() => Boolean)
+  changeStatusNegociate2(@Args('_id') _id: string) {
+    const isPending = this.diService.changeStatusNegociate2(_id);
+    if (isPending) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  @Mutation(() => Boolean)
+  changeStatusPending3(@Args('_id') _id: string) {
+    const isPending = this.diService.changeStatusPending3(_id);
+    if (isPending) {
+      return true;
+    } else {
+      return false;
+    }
   }
 }

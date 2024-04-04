@@ -38,42 +38,6 @@ export class StatResolver {
   notificationDiagnostic() {
     return this.pubsub.asyncIterator('you-got-notification-diagnostic');
   }
-  // to create subscription
-  /**
-   *   constructor(
-    private readonly userService: UserService,
-    private readonly pubSub: PubSub,
-  ) {}
-
-  @Mutation(() => User)
-  createUser(@Args('createUserInput') createUserInput: CreateUserInput) {
-    console.log('🍯[createUserInput]:', createUserInput);
-    this.pubSub.publish('userAdded', {
-      userAdded: { _id: 0, name: 'Nezih' },
-    });
-    return { _id: 0, name: 'Nezih' };
-  }
-  @Subscription(() => User)
-  userAdded() {
-    return this.pubSub.asyncIterator('userAdded');
-  }
-  -----------------------
-  service: 
-  constructor(private readonly pubSub: PubSub) {}
-  users = [{ _id: 1, name: 'Alo' }];
-  create(createUserInput: CreateUserInput) {
-    this.users.push(createUserInput).valueOf();
-    console.log('🍸[result]:', this.users);
-    // to shape of userAdded must correspond to shape defined in Subscription
-    //  if doesnt  match would failed
-    this.pubSub.publish('userAdded', {
-      userAdded: { _id: 0, name: 'Aki' },
-    });
-    console.log('🥜[this.users]:', this.users);
-
-    return this.users;
-  }
-   */
 
   @Mutation(() => Boolean)
   affectForDiag(

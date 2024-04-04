@@ -9,10 +9,18 @@ import { Di, DiDocument } from './entities/di.entity';
 import { Model } from 'mongoose';
 import { STATUS_DI } from './di.status';
 import { Role } from 'src/auth/roles';
+import {
+  Composant,
+  ComposantDocument,
+} from 'src/composant/entities/composant.entity';
 
 @Injectable()
 export class DiService {
-  constructor(@InjectModel(Di.name) private diModel: Model<DiDocument>) {}
+  constructor(
+    @InjectModel(Di.name) private diModel: Model<DiDocument>,
+    @InjectModel(Composant.name)
+    private composantModel: Model<ComposantDocument>,
+  ) {}
   async create(createDiInput: CreateDiInput) {
     return await new this.diModel(createDiInput).save();
   }
@@ -73,7 +81,7 @@ export class DiService {
         bon_de_livraison: di.bon_de_livraison,
         contain_pdr: di.contain_pdr,
         current_roles: di.current_roles,
-
+        array_composants: di.array_composants,
         status: di.status,
         client_id: di.client_id?.first_name ?? null,
         createdBy: `${di.createdBy?.firstName ?? ''} ${
@@ -86,6 +94,24 @@ export class DiService {
 
     console.log('🥘', di);
     return { di, totalDiCount };
+  }
+
+  async calculateTicketComposantPrice(ticketId: string) {
+    const ticket = await this.diModel.findById(ticketId);
+    if (!ticket) {
+      throw new Error('Ticket not found');
+    }
+
+    const totalPrice = await Promise.all(
+      ticket.array_composants.map(async (item) => {
+        const composant = await this.composantModel.findOne({
+          name: item.nameComposant,
+        });
+        return composant ? composant.prix_vente * item.quantity : 0;
+      }),
+    );
+    // TODO substruct the quantity needed from compsant in stock
+    return totalPrice.reduce((acc, curr) => acc + curr, 0);
   }
 
   // from Created ==> PENDING1
@@ -544,8 +570,129 @@ export class DiService {
 
     return { di, totalDiCount };
   }
-}
 
-/**
- *
- */
+  async affectinitialPrice(_id: string, price: number) {
+    return await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          price,
+        },
+      },
+    );
+  }
+
+  /**
+   * Changing status di section
+   */
+  async changeStatusPending1(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          status: STATUS_DI.Pending1.status,
+        },
+      },
+    );
+  }
+  async changeStatusInDiagnostic(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          status: STATUS_DI.InDiagnostic.status,
+        },
+      },
+    );
+  }
+  async changeStatusInMagasin(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          status: STATUS_DI.InMagasin.status,
+        },
+      },
+    );
+  }
+  async changeStatusPending2(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          status: STATUS_DI.Pending2.status,
+        },
+      },
+    );
+  }
+  async changeStatusPricing(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          status: STATUS_DI.Pricing.status,
+        },
+      },
+    );
+  }
+  async changeStatusNegociate1(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          status: STATUS_DI.Negotiation1.status,
+        },
+      },
+    );
+  }
+  async changeStatusNegociate2(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          status: STATUS_DI.Negotiation2.status,
+        },
+      },
+    );
+  }
+  async changeStatusPending3(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          status: STATUS_DI.Pending3.status,
+        },
+      },
+    );
+  }
+  async changeStatusRepaire(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          status: STATUS_DI.Reparation.status,
+        },
+      },
+    );
+  }
+  async changeStatusInRepair(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          status: STATUS_DI.InReparation.status,
+        },
+      },
+    );
+  }
+  async changeStatusFinished(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          status: STATUS_DI.Finished.status,
+        },
+      },
+    );
+  }
+}

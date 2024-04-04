@@ -64,12 +64,12 @@ export class DiDocument extends Document {
   bon_de_livraison: string;
   @Prop()
   // affected by magasin
-  price: string;
+  price: number;
   @Prop()
   // affected by admins
-  final_price: string;
+  final_price: number;
   @Prop()
-  discount: boolean;
+  discount: number;
   @Prop()
   discount_value: number;
   @Prop()
@@ -149,11 +149,11 @@ export class Di {
   bon_de_livraison: string;
 
   @Field({ nullable: true })
-  price: string;
+  price: number;
   @Field({ nullable: true })
-  final_price: string;
+  final_price: number;
   @Field({ nullable: true })
-  discount: boolean;
+  discount: number;
   @Field({ nullable: true })
   discount_value: number;
 
