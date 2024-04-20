@@ -165,4 +165,24 @@ export class DiResolver {
       return false;
     }
   }
+
+  @Mutation(() => Boolean)
+  changeStatusRepaire(@Args('_id') _id: string) {
+    const isPending = this.diService.changeStatusRepaire(_id);
+    if (isPending) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  @Mutation(() => Boolean)
+  changeStatusInRepair(@Args('_id') _id: string) {
+    const isPending = this.diService.changeStatusInRepair(_id);
+    if (isPending) {
+      return true;
+    } else {
+      return false;
+    }
+  }
 }
