@@ -7,7 +7,6 @@ import {
   PaginationConfigDi,
 } from './dto/create-di.input';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
-import { TokenData } from 'src/profile/dto/create-profile.input';
 import { Profile } from 'src/profile/entities/profile.entity';
 import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
@@ -33,6 +32,11 @@ export class DiResolver {
   ) {
     console.log('🍦[paginationConfig]:', paginationConfig);
     return await this.diService.getAllDi(paginationConfig);
+  }
+
+  @Query(() => Di)
+  async getDiById(@Args('_id') _id: string) {
+    return await this.diService.getDiById(_id);
   }
 
   @Query(() => DiTableData)
@@ -120,6 +124,16 @@ export class DiResolver {
       return false;
     }
   }
+  @Mutation(() => Boolean)
+  changeStatusMagasinEstimation(@Args('_id') _id: string) {
+    const isPending = this.diService.changeStatusMagasinEstimation(_id);
+    if (isPending) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+
   @Mutation(() => Boolean)
   changeStatusPending2(@Args('_id') _id: string) {
     const isPending = this.diService.changeStatusPending2(_id);

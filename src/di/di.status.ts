@@ -27,6 +27,13 @@ export const STATUS_DI = {
     role: ['Tech'],
     future_status: ['Pending2'],
   },
+  MagasinEstimation: {
+    status: 'Magasin Estimation',
+    description: 'Magasin doing the Estimation before the negociation starts',
+    color: '#0000FF', // Blue
+    role: ['Magasin'],
+    future_status: ['Pending2'],
+  },
   InMagasin: {
     status: 'INMAGASIN',
     description: 'In Magasin',

@@ -1,5 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { CreateComposantInput } from './dto/create-composant.input';
+import {
+  CreateComposantInput,
+  UpdateComposantResponse,
+} from './dto/create-composant.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Composant } from './entities/composant.entity';
 import { Model } from 'mongoose';
@@ -80,22 +83,37 @@ export class ComposantService {
   }
 
   // this function after recieving ticket from tech
-  async addComposantInfo(updateComposant: CreateComposantInput) {
-    return await this.ComposantModel.updateOne(
-      { name: updateComposant.name },
-      {
-        $set: {
-          package: updateComposant.package,
-          category_composant_id: updateComposant.category_composant_id,
-          prix_achat: updateComposant.prix_achat,
-          prix_vente: updateComposant.prix_vente,
-          coming_date: updateComposant.coming_date,
-          link: updateComposant.link,
-          quantity_stocked: updateComposant.quantity_stocked,
-          pdf: updateComposant.pdf,
-          status: updateComposant.status,
+  async addComposantInfo(
+    updateComposant: CreateComposantInput,
+  ): Promise<UpdateComposantResponse> {
+    try {
+      // Perform the update operation
+      await this.ComposantModel.updateOne(
+        { name: updateComposant.name },
+        {
+          $set: {
+            package: updateComposant.package,
+            category_composant_id: updateComposant.category_composant_id,
+            prix_achat: updateComposant.prix_achat,
+            prix_vente: updateComposant.prix_vente,
+            coming_date: updateComposant.coming_date,
+            link: updateComposant.link,
+            quantity_stocked: updateComposant.quantity_stocked,
+            pdf: updateComposant.pdf,
+            status: updateComposant.status,
+          },
         },
-      },
-    );
+      );
+
+      const updatedEntity = await this.ComposantModel.findOne({
+        name: updateComposant.name,
+      });
+
+      if (updatedEntity) {
+        return updatedEntity;
+      }
+    } catch (error) {
+      throw new Error('Failed to update composant: ' + error.message);
+    }
   }
 }

@@ -55,6 +55,33 @@ export class DiService {
         return err;
       });
   }
+  //nezih
+  /**
+   * async findOneClient(_id: string): Promise<Client> {
+    try {
+      const Client = await this.ClientModel.findById(_id).lean();
+
+      if (!Client) {
+        throw new Error(`Client with ID '${_id}' not found.`);
+      }
+      return Client;
+    } catch (error) {
+      throw error;
+    }
+  }
+   */
+  async getDiById(_id: string) {
+    try {
+      const di = await this.diModel.findById(_id).lean();
+
+      if (!di)
+        throw new Error(`Demande d'intervention with ID '${_id}' not found.`);
+
+      return di;
+    } catch (error) {
+      throw error;
+    }
+  }
 
   async getAllDi(paginationConfig: PaginationConfigDi) {
     const { first, rows } = paginationConfig;
@@ -611,6 +638,16 @@ export class DiService {
       {
         $set: {
           status: STATUS_DI.InMagasin.status,
+        },
+      },
+    );
+  }
+  async changeStatusMagasinEstimation(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          status: STATUS_DI.MagasinEstimation.status,
         },
       },
     );

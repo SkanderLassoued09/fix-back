@@ -1,7 +1,10 @@
 import { Resolver, Query, Mutation, Args, Int } from '@nestjs/graphql';
 import { ComposantService } from './composant.service';
 import { Composant } from './entities/composant.entity';
-import { CreateComposantInput } from './dto/create-composant.input';
+import {
+  CreateComposantInput,
+  UpdateComposantResponse,
+} from './dto/create-composant.input';
 
 @Resolver(() => Composant)
 export class ComposantResolver {
@@ -24,15 +27,19 @@ export class ComposantResolver {
       throw new Error('Failed to delete Composant');
     }
   }
-  @Mutation(() => Boolean)
-  addComposantInfo(
+  @Mutation(() => UpdateComposantResponse)
+  async addComposantInfo(
     @Args('updateComposant') updateComposant: CreateComposantInput,
-  ) {
-    const isUpdated = this.composantService.addComposantInfo(updateComposant);
-    if (isUpdated) {
-      return true;
-    } else {
-      return false;
+  ): Promise<UpdateComposantResponse> {
+    try {
+      const updatedEntity = await this.composantService.addComposantInfo(
+        updateComposant,
+      );
+      if (updatedEntity) {
+        return updatedEntity;
+      }
+    } catch (error) {
+      throw new Error('Failed to update composant: ' + error.message);
     }
   }
 

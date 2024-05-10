@@ -14,7 +14,7 @@ export class ServiceContactSchema {
   phone: string;
 }
 
-@Schema({ timestamps: true })
+@Schema({ timestamps: true, autoIndex: false })
 export class CompanyDocument extends Document {
   @Prop()
   @IsString()
