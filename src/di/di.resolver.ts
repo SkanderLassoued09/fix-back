@@ -10,6 +10,7 @@ import { User as CurrentUser } from 'src/auth/profile.decorator';
 import { Profile } from 'src/profile/entities/profile.entity';
 import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
+import { error } from 'console';
 @Resolver(() => Di)
 export class DiResolver {
   constructor(private readonly diService: DiService) {}
@@ -197,6 +198,20 @@ export class DiResolver {
       return true;
     } else {
       return false;
+    }
+  }
+
+  //coordinator_ToDiag
+  @Mutation(() => Di)
+  coordinatorSendingDiDiag(
+    @Args('_idDI') _idDI: string,
+    @Args('tech_id') tech_id: string,
+  ) {
+    const diDiagnostic = this.diService.coordinator_ToDiag(_idDI, tech_id);
+    if (diDiagnostic) {
+      return diDiagnostic;
+    } else {
+      return error;
     }
   }
 }

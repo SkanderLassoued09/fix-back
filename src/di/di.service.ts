@@ -212,7 +212,8 @@ export class DiService {
         {
           $set: {
             current_workers_ids: tech_id,
-            current_roles: STATUS_DI.Diagnostic.role,
+            // Not worth doingcheck with skander
+            // current_roles: STATUS_DI.Diagnostic.role,
             status: STATUS_DI.Diagnostic.status,
           },
         },
