@@ -18,13 +18,18 @@ export class CreateDiInput {
   di_category_id: string;
   @Field({ nullable: true })
   contain_pdr: boolean;
-
   @Field({ nullable: true })
-  price: string;
+  client_id: string;
   @Field({ nullable: true })
-  finalPrice: string;
+  company_id: string;
   @Field({ nullable: true })
-  discount_percentage: boolean;
+  nSerie: string;
+  @Field({ nullable: true })
+  price: number;
+  @Field({ nullable: true })
+  finalPrice: number;
+  @Field({ nullable: true })
+  discount_percentage: number;
   @Field({ nullable: true })
   discount_value: number;
 
@@ -38,6 +43,8 @@ export class CreateDiInput {
   assigned_reperation: string;
   @Field({ nullable: true })
   assigned_retour: string;
+  @Field(() => [ComposantStructureInput], { nullable: true })
+  array_composants: ComposantStructureInput[];
 
   //files
   @Field({ nullable: true })
@@ -53,4 +60,31 @@ export class CreateDiInput {
 
   @Field({ nullable: true })
   status: string;
+}
+@InputType()
+export class PaginationConfigDi {
+  @Field()
+  rows: number; // number of element displayed in table
+  @Field()
+  first: number; // index of current pages
+}
+@InputType()
+export class ComposantStructureInput {
+  @Field()
+  nameComposant: string;
+
+  @Field()
+  quantity: number;
+}
+
+@InputType()
+export class DiagUpdate {
+  @Field()
+  remarqueTech: string;
+  @Field()
+  contain_pdr: boolean;
+  @Field()
+  can_be_repaired: boolean;
+  @Field(() => [ComposantStructureInput], { nullable: true })
+  array_composants: ComposantStructureInput[];
 }

@@ -1,8 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { CreateCompanyInput } from './dto/create-company.input';
+import {
+  CreateCompanyInput,
+  PaginationConfig,
+} from './dto/create-company.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Company } from './entities/company.entity';
+import { Company, CompanyTableData } from './entities/company.entity';
 
 @Injectable()
 export class CompanysService {
@@ -55,14 +58,21 @@ export class CompanysService {
       });
   }
 
-  async findAllCompanys(): Promise<[Company]> {
-    return await this.CompanyModel.find({})
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+  async findAllCompanys(
+    paginationConfig: PaginationConfig,
+  ): Promise<CompanyTableData> {
+    const { first, rows } = paginationConfig;
+
+    const companyRecords = await this.CompanyModel.find({})
+      .limit(rows)
+      .skip(first)
+      .exec();
+    const totalCompanyRecord = await this.CompanyModel.countDocuments().exec();
+    return { companyRecords, totalCompanyRecord };
+  }
+
+  async getAllComapnyforDropDown() {
+    return await this.CompanyModel.find({}).exec();
   }
 
   async findOneCompany(_id: string): Promise<Company> {

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { ApolloDriverConfig, ApolloDriver } from '@nestjs/apollo';
+// import { ApolloDriverConfig, ApolloDriver } from '@nestjs/apollo';
+import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { GraphQLModule } from '@nestjs/graphql';
 import { MongooseModule } from '@nestjs/mongoose';
 import { LocationModule } from './location/location.module';
@@ -11,6 +12,9 @@ import { DiCategoryModule } from './di_category/di_category.module';
 import { DiModule } from './di/di.module';
 import { TarifModule } from './tarif/tarif.module';
 import { RemarqueModule } from './remarque/remarque.module';
+import { ProfileModule } from './profile/profile.module';
+import { AuthModule } from './auth/auth.module';
+import { StatModule } from './stat/stat.module';
 
 @Module({
   imports: [
@@ -23,7 +27,10 @@ import { RemarqueModule } from './remarque/remarque.module';
       driver: ApolloDriver,
       playground: true,
       autoSchemaFile: true,
+      installSubscriptionHandlers: true,
     }),
+    ProfileModule,
+    AuthModule,
     ClientsModule,
     ComposantModule,
     ComposantCategoryModule,
@@ -31,6 +38,7 @@ import { RemarqueModule } from './remarque/remarque.module';
     DiModule,
     TarifModule,
     RemarqueModule,
+    StatModule,
   ],
   controllers: [],
   providers: [],

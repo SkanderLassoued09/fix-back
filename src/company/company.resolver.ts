@@ -1,7 +1,10 @@
 import { Resolver, Query, Mutation, Args, Int } from '@nestjs/graphql';
 import { CompanysService } from './company.service';
-import { Company } from './entities/company.entity';
-import { CreateCompanyInput } from './dto/create-company.input';
+import { Company, CompanyTableData } from './entities/company.entity';
+import {
+  CreateCompanyInput,
+  PaginationConfig,
+} from './dto/create-company.input';
 
 @Resolver(() => Company)
 export class CompanysResolver {
@@ -30,7 +33,15 @@ export class CompanysResolver {
   }
 
   @Query(() => [Company])
-  async findAllCompany(): Promise<[Company]> {
-    return await this.companysService.findAllCompanys();
+  async getAllComapnyforDropDown(): Promise<any> {
+    return await this.companysService.getAllComapnyforDropDown();
+  }
+
+  @Query(() => CompanyTableData)
+  async findAllCompany(
+    @Args('PaginationConfig') paginationConfig: PaginationConfig,
+  ): Promise<CompanyTableData> {
+    console.log('🍆[paginationConfig]:', paginationConfig);
+    return await this.companysService.findAllCompanys(paginationConfig);
   }
 }

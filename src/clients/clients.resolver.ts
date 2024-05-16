@@ -1,7 +1,8 @@
 import { Resolver, Query, Mutation, Args, Int } from '@nestjs/graphql';
 import { ClientsService } from './clients.service';
-import { Client } from './entities/client.entity';
+import { Client, ClientTableData } from './entities/client.entity';
 import { CreateClientInput } from './dto/create-client.input';
+import { PaginationConfig } from 'src/company/dto/create-company.input';
 
 @Resolver(() => Client)
 export class ClientsResolver {
@@ -31,7 +32,15 @@ export class ClientsResolver {
   }
 
   @Query(() => [Client])
-  async findAllClient(): Promise<[Client]> {
-    return await this.clientsService.findAllClients();
+  async getAllClient(): Promise<any> {
+    return await this.clientsService.getAllClient();
+  }
+
+  @Query(() => ClientTableData)
+  async findAllClient(
+    @Args('PaginationConfig') paginationConfig: PaginationConfig,
+  ): Promise<ClientTableData> {
+    console.log('🥝[paginationConfig]:', paginationConfig);
+    return await this.clientsService.findAllClients(paginationConfig);
   }
 }

@@ -5,63 +5,53 @@ import { Document } from 'mongoose';
 
 @Schema({ timestamps: true })
 export class ComposantDocument extends Document {
-  @Prop()
+  @Prop({ unique: true })
   _id: string;
-  @Prop()
-  @IsString()
+  @Prop({ unique: true })
   name: string;
   @Prop()
   package: string;
   @Prop()
-  @IsString()
   category_composant_id: string;
   @Prop()
-  @IsNumber()
   prix_achat: number;
   @Prop()
-  @IsNumber()
   prix_vente: number;
   @Prop()
-  @IsDate()
-  coming_date: Date;
+  coming_date: string;
   @Prop()
-  @IsString()
   link: string;
   @Prop()
-  @IsNumber()
-  quantity_Instock: string;
+  quantity_stocked: number;
   @Prop()
-  @IsString()
   pdf: string;
   @Prop()
-  @IsString()
   status_composant: string;
 }
 export const ComposantSchema = SchemaFactory.createForClass(ComposantDocument);
 @ObjectType()
 export class Composant {
-  @Field()
+  @Field({ nullable: true })
   _id: string;
-  @Field()
+  @Field({ nullable: true })
   name: string;
-  @Field()
+  @Field({ nullable: true })
   package: string;
   //the entity category composant
-  @Field()
+  @Field({ nullable: true })
   category_composant_id: string;
-  @Field()
+  @Field({ nullable: true })
   prix_achat: number;
-  @Field()
+  @Field({ nullable: true })
   prix_vente: number;
   @Field({ nullable: true })
-  @IsDate()
-  coming_date: Date;
+  coming_date: string;
   @Field({ nullable: true })
   link: string;
   @Field({ nullable: true })
   quantity_stocked: number;
-  @Field()
+  @Field({ nullable: true })
   pdf: string;
-  @Field()
+  @Field({ nullable: true })
   status: string;
 }

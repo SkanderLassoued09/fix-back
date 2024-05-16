@@ -14,7 +14,7 @@ export class ServiceContactSchema {
   phone: string;
 }
 
-@Schema({ timestamps: true })
+@Schema({ timestamps: true, autoIndex: false })
 export class CompanyDocument extends Document {
   @Prop()
   @IsString()
@@ -112,4 +112,12 @@ export class Company extends Document {
   @Field({ defaultValue: false })
   @IsBoolean()
   isDeleted: boolean;
+}
+
+@ObjectType()
+export class CompanyTableData {
+  @Field(() => [Company])
+  companyRecords: Company[];
+  @Field()
+  totalCompanyRecord: number;
 }
