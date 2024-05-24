@@ -79,6 +79,19 @@ export class StatResolver {
     }
   }
 
+  @Mutation(() => Boolean)
+  lapTimeForPauseAndGetBackForReaparation(
+    @Args('_id') _id: string,
+    @Args('repTime') repTime: string,
+  ) {
+    const isUpdated = this.statService.lapTimeForReaparation(_id, repTime);
+    if (isUpdated) {
+      return true;
+    } else {
+      false;
+    }
+  }
+
   /**
    * 
   this function will get last time pause to continue counting later 
@@ -86,6 +99,35 @@ export class StatResolver {
   @Query(() => Stat)
   getLastPauseTime(@Args('_id') _id: string) {
     return this.statService.getLastPauseTime(_id);
+  }
+
+  /**
+   * 
+   We gonna create method to save diagnostic when tech id finish his work,
+   functions for get last pause time for reparation  and one for lap time pause and back for reapration 
+   */
+
+  // this one to get last time when he makes pause for reapartion
+  @Query(() => Stat)
+  getLastPauseTimeforreaparation(@Args('_id') _id: string) {
+    return this.statService.getLastPauseTimeForReparation(_id);
+  }
+
+  /**
+   * 
+  this function will get last time pause to continue counting later for reparation
+   */
+  @Mutation(() => Boolean)
+  lapTimeForPauseAndGetBackForreaparation(
+    @Args('_id') _id: string,
+    @Args('diagTime') diagTime: string,
+  ) {
+    const isUpdated = this.statService.lapTime(_id, diagTime);
+    if (isUpdated) {
+      return true;
+    } else {
+      false;
+    }
   }
 
   @Query(() => [Stat])

@@ -68,7 +68,21 @@ export class StatService {
     );
   }
 
+  async lapTimeForReaparation(_id: string, rep_time: string) {
+    return await this.StatModel.updateOne(
+      { _id },
+      {
+        $set: {
+          rep_time,
+        },
+      },
+    );
+  }
+
   async getLastPauseTime(_id: string) {
+    return await this.StatModel.findOne({ _id }).exec();
+  }
+  async getLastPauseTimeForReparation(_id: string) {
     return await this.StatModel.findOne({ _id }).exec();
   }
 }

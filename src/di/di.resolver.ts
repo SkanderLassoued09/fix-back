@@ -1,6 +1,6 @@
 import { Resolver, Mutation, Args, Query } from '@nestjs/graphql';
 import { DiService } from './di.service';
-import { Di, DiTableData } from './entities/di.entity';
+import { Di, DiTableData, UpdateNego } from './entities/di.entity';
 import {
   CreateDiInput,
   DiagUpdate,
@@ -71,6 +71,30 @@ export class DiResolver {
       return false;
     }
   }
+
+  @Mutation(() => Boolean)
+  tech_startReperation(@Args('_id') _id: string) {
+    const isDiag = this.diService.tech_startReperation(_id);
+    if (isDiag) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  @Mutation(() => Boolean)
+  tech_finishReperation(
+    @Args('_id') _id: string,
+    @Args('remarque') remarque: string,
+  ) {
+    const isRep = this.diService.tech_finishReperation(_id, remarque);
+    if (isRep) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+
   @Mutation(() => Boolean)
   affectinitialPrice(@Args('_id') _id: string, @Args('price') price: number) {
     const priceaffecting = this.diService.affectinitialPrice(_id, price);
@@ -93,6 +117,23 @@ export class DiResolver {
   @Mutation(() => Di)
   managerAdminManager_Pending3(@Args('_id') _id: string) {
     return this.diService.managerAdminManager_Pending3(_id);
+  }
+
+  //Nego1 and Nego2 sending to the Magasin
+
+  @Mutation(() => UpdateNego)
+  async managerAdminManager_InMagasin(
+    @Args('_id') _id: string,
+    @Args('price') price: number,
+    @Args('final_price') final_price: number,
+  ) {
+    let mut = await this.diService.managerAdminManager_InMagasin(
+      _id,
+      price,
+      final_price,
+    );
+    console.log(mut, 'mutation from resolver');
+    return mut;
   }
 
   /**
@@ -203,11 +244,8 @@ export class DiResolver {
 
   //coordinator_ToDiag
   @Mutation(() => Di)
-  coordinatorSendingDiDiag(
-    @Args('_idDI') _idDI: string,
-    @Args('tech_id') tech_id: string,
-  ) {
-    const diDiagnostic = this.diService.coordinator_ToDiag(_idDI, tech_id);
+  coordinatorSendingDiDiag(@Args('_idDI') _idDI: string) {
+    const diDiagnostic = this.diService.coordinator_ToDiag(_idDI);
     if (diDiagnostic) {
       return diDiagnostic;
     } else {

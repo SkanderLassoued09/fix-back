@@ -7,6 +7,9 @@ export class CreateRemarqueInput {
   _id: string;
   @Field()
   @IsString()
+  _idDi: string;
+  @Field()
+  @IsString()
   remarque_manager: string;
   @Field()
   @IsString()

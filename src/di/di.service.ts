@@ -1,11 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import {
   CreateDiInput,
   DiagUpdate,
   PaginationConfigDi,
 } from './dto/create-di.input';
 import { InjectModel } from '@nestjs/mongoose';
-import { Di, DiDocument } from './entities/di.entity';
+import { Di, DiDocument, UpdateNego } from './entities/di.entity';
 import { Model } from 'mongoose';
 import { STATUS_DI } from './di.status';
 import { Role } from 'src/auth/roles';
@@ -13,6 +13,11 @@ import {
   Composant,
   ComposantDocument,
 } from 'src/composant/entities/composant.entity';
+import { error } from 'console';
+import {
+  Remarque,
+  RemarqueDocument,
+} from 'src/remarque/entities/remarque.entity';
 
 @Injectable()
 export class DiService {
@@ -20,6 +25,8 @@ export class DiService {
     @InjectModel(Di.name) private diModel: Model<DiDocument>,
     @InjectModel(Composant.name)
     private composantModel: Model<ComposantDocument>,
+    @InjectModel(Remarque.name)
+    private readonly remarqueModel: Model<RemarqueDocument>,
   ) {}
   async create(createDiInput: CreateDiInput) {
     return await new this.diModel(createDiInput).save();
@@ -182,7 +189,7 @@ export class DiService {
         return err;
       });
   }
-
+  //TODO check if we need to delet this one
   // Negotiation1 or Negotiation2 ==> PENDING3
   // Admin or manager ==> coordinator
   async managerAdminManager_Pending3(_idDI: string): Promise<Di> {
@@ -203,17 +210,46 @@ export class DiService {
         return err;
       });
   }
+  //New flow Nego1 & Nego2 sending DI to the INMagasin
+
+  async managerAdminManager_InMagasin(
+    _idDi: string,
+    price: number,
+    final_price: number,
+  ): Promise<UpdateNego> {
+    return await this.diModel
+      .updateOne(
+        { _id: _idDi },
+        {
+          $set: {
+            price,
+            final_price,
+          },
+        },
+      )
+      .then((res) => {
+        if (res.modifiedCount > 0 && res.acknowledged) {
+          return {
+            price,
+            final_price,
+          };
+        } else {
+          throw new HttpException('Error', HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+      })
+      .catch((Error) => {
+        throw new HttpException(Error, HttpStatus.INTERNAL_SERVER_ERROR);
+      });
+  }
 
   //coordinator sending to tech for  diagnostic
-  async coordinator_ToDiag(_idDI: string, tech_id: string) {
+  async coordinator_ToDiag(_idDI: string) {
     return this.diModel
       .updateOne(
         { _id: _idDI },
         {
           $set: {
-            current_workers_ids: tech_id,
-            // Not worth doingcheck with skander
-            // current_roles: STATUS_DI.Diagnostic.role,
+            current_roles: STATUS_DI.Diagnostic.role,
             status: STATUS_DI.Diagnostic.status,
           },
         },
@@ -354,23 +390,43 @@ export class DiService {
       });
   }
   //Tech finsih Reperation
-  async tech_finishReperation(_idDI: string) {
+  async tech_finishReperation(_idDI: string, remarque: string) {
+    console.log(_idDI);
+    console.log(remarque);
     return this.diModel
       .updateOne(
         { _id: _idDI },
         {
           $set: {
-            current_roles: Role.TECH,
+            current_roles: 'ùlknùlkn',
             status: STATUS_DI.Finished.status,
           },
         },
       )
       .then((res) => {
         console.log('tech_finishReperation');
+        if (res.acknowledged && res.modifiedCount > 0) {
+          this.addRemarqueTechForReaparation(_idDI, remarque);
+        }
         return res;
       })
       .catch((err) => {
         return err;
+      });
+  }
+
+  async addRemarqueTechForReaparation(_idDi: string, remarque: string) {
+    return await this.remarqueModel
+      .updateOne(
+        { _idDi },
+        {
+          $set: {
+            remarque_tech_repair: remarque,
+          },
+        },
+      )
+      .then((res) => {
+        console.log(res, 'sub');
       });
   }
 

@@ -259,3 +259,11 @@ export class DiTableData {
   @Field()
   totalDiCount: number;
 }
+
+@ObjectType()
+export class UpdateNego {
+  @Field()
+  price: number;
+  @Field()
+  final_price: number;
+}

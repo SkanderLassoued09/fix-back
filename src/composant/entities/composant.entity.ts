@@ -3,7 +3,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { IsDate, IsNumber, IsString } from 'class-validator';
 import { Document } from 'mongoose';
 
-@Schema({ timestamps: true })
+@Schema({ timestamps: true, autoIndex: false })
 export class ComposantDocument extends Document {
   @Prop({ unique: true })
   _id: string;

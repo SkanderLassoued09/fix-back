@@ -8,6 +8,8 @@ export class RemarqueDocument extends Document {
   @Prop()
   _id: string;
   @Prop()
+  _idDi: string;
+  @Prop()
   @IsString()
   remarque_manager: string;
   @Prop()
@@ -35,6 +37,8 @@ export const RemarqueSchema = SchemaFactory.createForClass(RemarqueDocument);
 export class Remarque {
   @Field()
   _id: string;
+  @Field({ nullable: true })
+  _idDi: string;
   @Field({ nullable: true })
   remarque_manager: string;
   @Field({ nullable: true })
