@@ -136,4 +136,14 @@ export class StatResolver {
   getDiForTech(@CurrentUser() tech: Profile) {
     return this.statService.getDiForTech(tech._id);
   }
+
+  @Query(() => Stat)
+  async getStatbyID(@Args('_idSTAT') _idSTAT: string) {
+    return await this.statService.getDIByStat(_idSTAT);
+  }
+
+  @Query(() => Stat)
+  getInfoStatByIdDi(@Args('_idDi') _idDi: string) {
+    return this.statService.getInfoStatByIdDi(_idDi);
+  }
 }

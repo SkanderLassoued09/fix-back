@@ -25,7 +25,7 @@ export class CreateComposantInput {
   @Field({ nullable: true })
   pdf: string;
   @Field({ nullable: true })
-  status: string;
+  status_composant: string;
 }
 @ObjectType()
 export class UpdateComposantResponse {
@@ -51,5 +51,5 @@ export class UpdateComposantResponse {
   @Field({ nullable: true })
   pdf: string;
   @Field({ nullable: true })
-  status: string;
+  status_composant: string;
 }

@@ -22,4 +22,8 @@ export class CreateStatInput {
   _idDi: string;
   @Field({ defaultValue: 'You got new task Hello', nullable: true })
   notificationMessage: string;
+  @Field({ defaultValue: false })
+  diagnostiquefinishedFLAG: boolean;
+  @Field({ defaultValue: false })
+  reperationfinishedFLAG: boolean;
 }

@@ -27,7 +27,7 @@ export class StatService {
 
   async createStat(createStatInput: CreateStatInput): Promise<Stat> {
     const index = await this.generateStatId();
-    console.log(index, 'index Stat');
+
     createStatInput._id = `STAT${index}`;
     return await new this.StatModel(createStatInput)
       .save()
@@ -84,5 +84,22 @@ export class StatService {
   }
   async getLastPauseTimeForReparation(_id: string) {
     return await this.StatModel.findOne({ _id }).exec();
+  }
+
+  async getDIByStat(_idStat: string) {
+    try {
+      const di = await this.StatModel.findById(_idStat);
+
+      if (!di) throw new Error(`Demande d'intervention with ID  not found.`);
+
+      return di;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  //get by ID_DI
+  async getInfoStatByIdDi(_idDi: string) {
+    return await this.StatModel.findOne({ _idDi }).exec();
   }
 }

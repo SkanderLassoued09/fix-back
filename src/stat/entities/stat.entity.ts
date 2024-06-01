@@ -52,6 +52,10 @@ export class Stat {
   retour_time: string;
   @Field({ nullable: true })
   retour_count: number;
+  @Field({ defaultValue: false })
+  diagnostiquefinishedFLAG: boolean;
+  @Field({ defaultValue: false })
+  reperationfinishedFLAG: boolean;
 }
 
 @ObjectType()

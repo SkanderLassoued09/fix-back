@@ -53,5 +53,5 @@ export class Composant {
   @Field({ nullable: true })
   pdf: string;
   @Field({ nullable: true })
-  status: string;
+  status_composant: string;
 }

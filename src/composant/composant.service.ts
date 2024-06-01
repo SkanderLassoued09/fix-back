@@ -100,7 +100,7 @@ export class ComposantService {
             link: updateComposant.link,
             quantity_stocked: updateComposant.quantity_stocked,
             pdf: updateComposant.pdf,
-            status: updateComposant.status,
+            status: updateComposant.status_composant,
           },
         },
       );
