@@ -110,6 +110,7 @@ export class DiService {
         _id: di._id,
         title: di.title,
         description: di.description,
+        ignoreCount: di.ignoreCount,
         can_be_repaired: di.can_be_repaired,
         bon_de_commande: di.bon_de_commande,
         bon_de_livraison: di.bon_de_livraison,
@@ -664,6 +665,31 @@ export class DiService {
         },
       },
     );
+  }
+
+  async countIgnore(_id: string) {
+    const countIgnore = await this.diModel.findOne({ _id });
+    let { ignoreCount } = countIgnore;
+    if (ignoreCount < 3) {
+      ignoreCount++;
+    }
+    console.log('🥘[ignoreCount]:', ignoreCount);
+    const isignore = await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          ignoreCount,
+        },
+      },
+    );
+
+    if (isignore.matchedCount === 0) {
+      console.log('not found doc');
+    }
+
+    const v = await this.diModel.findOne({ _id });
+    console.log('🥖[v]:', v);
+    return v;
   }
 
   /**

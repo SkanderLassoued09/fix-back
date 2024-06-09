@@ -87,6 +87,8 @@ export class DiDocument extends Document {
   current_roles: [string];
   @Prop({ defaultValue: false })
   isDeleted: boolean;
+  @Prop({ default: 0 })
+  ignoreCount: number;
 }
 export const DiSchema = SchemaFactory.createForClass(DiDocument);
 
@@ -163,6 +165,8 @@ export class Di {
   @Field({ nullable: true })
   service_quality: string;
 
+  @Field({ nullable: true })
+  ignoreCount: number;
   @Field({ nullable: true })
   status: string;
 }
@@ -245,6 +249,8 @@ export class DiTable {
   remarque_id: string;
   @Field({ nullable: true })
   createdBy: string;
+  @Field({ nullable: true })
+  ignoreCount: number;
   @Field({ nullable: true })
   location_id: string;
   @Field({ nullable: true })

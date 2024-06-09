@@ -252,4 +252,12 @@ export class DiResolver {
       return error;
     }
   }
+
+  // ignore
+
+  @Mutation(() => Di)
+  countIgnore(@Args('_idDI') _idDI: string) {
+    console.log('🌰[_idDI]:', _idDI);
+    return this.diService.countIgnore(_idDI);
+  }
 }
