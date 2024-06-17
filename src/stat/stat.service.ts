@@ -1,9 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { CreateStatInput } from './dto/create-stat.input';
-import { UpdateStatInput } from './dto/update-stat.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Stat } from './entities/stat.entity';
 import { Model } from 'mongoose';
+import { Di, DiDocument } from 'src/di/entities/di.entity';
 @Injectable()
 export class StatService {
   constructor(@InjectModel('Stat') private StatModel: Model<Stat>) {}

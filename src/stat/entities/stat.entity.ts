@@ -8,27 +8,24 @@ export class StatDocument extends Document {
   _id: string;
   @Prop()
   _idDi: string;
-
   @Prop()
   id_tech_diag: string;
-
   @Prop()
   diag_time: string;
-
   @Prop()
   id_tech_rep: string;
-
   @Prop()
   rep_time: string;
-
   @Prop()
   id_tech_retour: string[];
-
   @Prop({ type: Date })
   retour_time: Date;
-
   @Prop({ type: Number, default: 0 })
   retour_count: number;
+  @Prop({ defaultValue: false })
+  diagnostiquefinishedFLAG: boolean;
+  @Prop({ defaultValue: false })
+  reperationfinishedFLAG: boolean;
 }
 export const StatSchema = SchemaFactory.createForClass(StatDocument);
 
