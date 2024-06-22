@@ -15,14 +15,13 @@ import { RemarqueModule } from './remarque/remarque.module';
 import { ProfileModule } from './profile/profile.module';
 import { AuthModule } from './auth/auth.module';
 import { StatModule } from './stat/stat.module';
+import { CronModule } from './cron/cron.module';
 
 @Module({
   imports: [
     LocationModule,
     CompanysModule,
-    MongooseModule.forRoot(
-      'mongodb+srv://benjemianezih:fixtronix@fixtronixdatabase.1xkjlbq.mongodb.net/',
-    ),
+    MongooseModule.forRoot('mongodb://localhost:27017/fix'),
     GraphQLModule.forRoot<ApolloDriverConfig>({
       driver: ApolloDriver,
       playground: true,
@@ -39,6 +38,7 @@ import { StatModule } from './stat/stat.module';
     TarifModule,
     RemarqueModule,
     StatModule,
+    CronModule,
   ],
   controllers: [],
   providers: [],

@@ -60,6 +60,9 @@ export class CreateDiInput {
 
   @Field({ nullable: true })
   status: string;
+
+  @Field({ nullable: true })
+  isOpenedOnce: boolean;
 }
 @InputType()
 export class PaginationConfigDi {

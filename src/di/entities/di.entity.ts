@@ -89,6 +89,8 @@ export class DiDocument extends Document {
   isDeleted: boolean;
   @Prop({ default: 0 })
   ignoreCount: number;
+  @Field({ defaultValue: false })
+  isOpenedOnce: boolean;
 }
 export const DiSchema = SchemaFactory.createForClass(DiDocument);
 
@@ -167,6 +169,8 @@ export class Di {
 
   @Field({ nullable: true })
   ignoreCount: number;
+  @Field({ nullable: true })
+  isOpenedOnce: boolean;
   @Field({ nullable: true })
   status: string;
 }

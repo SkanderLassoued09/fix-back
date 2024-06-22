@@ -90,6 +90,10 @@ export class DiService {
     }
   }
 
+  async getAllNotOpeneddi() {
+    return await this.diModel.find({ isOpenedOnce: false });
+  }
+
   async getAllDi(paginationConfig: PaginationConfigDi) {
     const { first, rows } = paginationConfig;
     const totalDiCount = await this.diModel.countDocuments().exec();
@@ -252,6 +256,7 @@ export class DiService {
           $set: {
             current_roles: STATUS_DI.Diagnostic.role,
             status: STATUS_DI.Diagnostic.status,
+            isOpenedOnce: true,
           },
         },
       )
