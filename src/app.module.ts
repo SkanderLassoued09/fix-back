@@ -21,7 +21,9 @@ import { CronModule } from './cron/cron.module';
   imports: [
     LocationModule,
     CompanysModule,
-    MongooseModule.forRoot('mongodb://localhost:27017/fix'),
+    MongooseModule.forRoot(
+      'mongodb+srv://benjemianezih:fixtronix@fixtronixdatabase.1xkjlbq.mongodb.net/',
+    ),
     GraphQLModule.forRoot<ApolloDriverConfig>({
       driver: ApolloDriver,
       playground: true,

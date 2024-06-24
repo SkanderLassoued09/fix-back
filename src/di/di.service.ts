@@ -1,4 +1,9 @@
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import {
+  HttpException,
+  HttpStatus,
+  Injectable,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import {
   CreateDiInput,
   DiagUpdate,
@@ -18,6 +23,7 @@ import {
   Remarque,
   RemarqueDocument,
 } from 'src/remarque/entities/remarque.entity';
+import { StatService } from 'src/stat/stat.service';
 
 @Injectable()
 export class DiService {
@@ -27,6 +33,8 @@ export class DiService {
     private composantModel: Model<ComposantDocument>,
     @InjectModel(Remarque.name)
     private readonly remarqueModel: Model<RemarqueDocument>,
+
+    private readonly statsService: StatService,
   ) {}
   async create(createDiInput: CreateDiInput) {
     return await new this.diModel(createDiInput).save();
@@ -249,151 +257,139 @@ export class DiService {
 
   //coordinator sending to tech for  diagnostic
   async coordinator_ToDiag(_idDI: string) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: STATUS_DI.Diagnostic.role,
-            status: STATUS_DI.Diagnostic.status,
-            isOpenedOnce: true,
-          },
+    const result = await this.diModel.updateOne(
+      { _id: _idDI },
+      {
+        $set: {
+          current_roles: STATUS_DI.Diagnostic.role,
+          status: STATUS_DI.Diagnostic.status,
+          isOpenedOnce: true,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+    );
+
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('unable to find');
+    }
+    await this.statsService.updateStatus(_idDI, STATUS_DI.Diagnostic.status);
+    return result;
   }
   //coordinator sending to tech for list of di to reperation
   async coordinator_ToRep(_idDI: string, tech_id: string) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_workers_ids: tech_id,
-            current_roles: Role.TECH,
-            status: STATUS_DI.Reparation,
-          },
+    const result = await this.diModel.updateOne(
+      { _id: _idDI },
+      {
+        $set: {
+          current_workers_ids: tech_id,
+          current_roles: Role.TECH,
+          status: STATUS_DI.Reparation,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+    );
+
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('unable to find');
+    }
+    await this.statsService.updateStatus(_idDI, STATUS_DI.Reparation.status);
+    return result;
   }
 
   //Tech finsih diagnostic
   async tech_startDiagnostic(_idDI: string, diag: DiagUpdate) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: Role.MAGASIN,
-            status: STATUS_DI.InMagasin.status,
-            can_be_repaired: diag.can_be_repaired,
-            contain_pdr: diag.contain_pdr,
-            remarqueTech: diag.remarqueTech,
-            array_composants: diag.array_composants,
-          },
+    const result = await this.diModel.updateOne(
+      { _id: _idDI },
+      {
+        $set: {
+          current_roles: Role.MAGASIN,
+          status: STATUS_DI.InMagasin.status,
+          can_be_repaired: diag.can_be_repaired,
+          contain_pdr: diag.contain_pdr,
+          remarqueTech: diag.remarqueTech,
+          array_composants: diag.array_composants,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+    );
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('unable to find');
+    }
+    await this.statsService.updateStatus(_idDI, STATUS_DI.InMagasin.status);
+    return result;
   }
 
   //Tech closing diagnostic
   async tech_stopDiagnostic(_idDI: string) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: Role.TECH,
-            status: STATUS_DI.Diagnostic.status,
-          },
+    const result = await this.diModel.updateOne(
+      { _id: _idDI },
+      {
+        $set: {
+          current_roles: Role.TECH,
+          status: STATUS_DI.Diagnostic.status,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+    );
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('unable to find');
+    }
+    await this.statsService.updateStatus(_idDI, STATUS_DI.Diagnostic.status);
+    return result;
   }
   //Tech finsih diagnostic
   async tech_finishDiagnostic(_idDI: string, contain_pdr: boolean) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: Role.TECH,
-            status: {
-              $cond: {
-                contain_pdr,
-                then: STATUS_DI.InMagasin.status,
-                else: STATUS_DI.Pending2.status,
-              },
+    const result = await this.diModel.updateOne(
+      { _id: _idDI },
+      {
+        $set: {
+          current_roles: Role.TECH,
+          status: {
+            $cond: {
+              contain_pdr,
+              then: STATUS_DI.InMagasin.status,
+              else: STATUS_DI.Pending2.status,
             },
           },
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+    );
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('unable to find');
+    }
+    await this.statsService.updateStatus(_idDI, STATUS_DI.Diagnostic.status); // TODO nezih
+    return result;
   }
   //Tech starting Reperation
   async tech_startReperation(_idDI: string) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: Role.TECH,
-            status: STATUS_DI.InReparation.status,
-          },
+    const result = await this.diModel.updateOne(
+      { _id: _idDI },
+      {
+        $set: {
+          current_roles: Role.TECH,
+          status: STATUS_DI.InReparation.status,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+    );
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('unable to find');
+    }
+    await this.statsService.updateStatus(_idDI, STATUS_DI.InReparation.status);
+    return result;
   }
 
   //Tech closing reperation
   async tech_stopReperation(_idDI: string) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: Role.TECH,
-            status: STATUS_DI.Reparation.status,
-          },
+    const result = await this.diModel.updateOne(
+      { _id: _idDI },
+      {
+        $set: {
+          current_roles: Role.TECH,
+          status: STATUS_DI.Reparation.status,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+    );
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('unable to find');
+    }
+    await this.statsService.updateStatus(_idDI, STATUS_DI.Reparation.status);
+    return result;
   }
   //Tech finsih Reperation
   async tech_finishReperation(_idDI: string, remarque: string) {
@@ -696,12 +692,11 @@ export class DiService {
     console.log('🥖[v]:', v);
     return v;
   }
-
   /**
    * Changing status di section
    */
   async changeStatusPending1(_id: string) {
-    return await this.diModel.updateOne(
+    const result = await this.diModel.updateOne(
       { _id },
       {
         $set: {
@@ -709,9 +704,16 @@ export class DiService {
         },
       },
     );
+
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('Unable to update');
+    }
+    await this.statsService.updateStatus(_id, STATUS_DI.Pending1.status);
+    return result;
   }
+
   async changeStatusInDiagnostic(_id: string) {
-    return await this.diModel.updateOne(
+    const result = await this.diModel.updateOne(
       { _id },
       {
         $set: {
@@ -719,9 +721,16 @@ export class DiService {
         },
       },
     );
+
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('Unable to update');
+    }
+    await this.statsService.updateStatus(_id, STATUS_DI.InDiagnostic.status);
+    return result;
   }
+
   async changeStatusInMagasin(_id: string) {
-    return await this.diModel.updateOne(
+    const result = await this.diModel.updateOne(
       { _id },
       {
         $set: {
@@ -729,9 +738,16 @@ export class DiService {
         },
       },
     );
+
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('Unable to update');
+    }
+    await this.statsService.updateStatus(_id, STATUS_DI.InMagasin.status);
+    return result;
   }
+
   async changeStatusMagasinEstimation(_id: string) {
-    return await this.diModel.updateOne(
+    const result = await this.diModel.updateOne(
       { _id },
       {
         $set: {
@@ -739,9 +755,19 @@ export class DiService {
         },
       },
     );
+
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('Unable to update');
+    }
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.MagasinEstimation.status,
+    );
+    return result;
   }
+
   async changeStatusPending2(_id: string) {
-    return await this.diModel.updateOne(
+    const result = await this.diModel.updateOne(
       { _id },
       {
         $set: {
@@ -749,9 +775,16 @@ export class DiService {
         },
       },
     );
+
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('Unable to update');
+    }
+    await this.statsService.updateStatus(_id, STATUS_DI.Pending2.status);
+    return result;
   }
+
   async changeStatusPricing(_id: string) {
-    return await this.diModel.updateOne(
+    const result = await this.diModel.updateOne(
       { _id },
       {
         $set: {
@@ -759,9 +792,16 @@ export class DiService {
         },
       },
     );
+
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('Unable to update');
+    }
+    await this.statsService.updateStatus(_id, STATUS_DI.Pricing.status);
+    return result;
   }
+
   async changeStatusNegociate1(_id: string) {
-    return await this.diModel.updateOne(
+    const result = await this.diModel.updateOne(
       { _id },
       {
         $set: {
@@ -769,9 +809,16 @@ export class DiService {
         },
       },
     );
+
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('Unable to update');
+    }
+    await this.statsService.updateStatus(_id, STATUS_DI.Negotiation1.status);
+    return result;
   }
+
   async changeStatusNegociate2(_id: string) {
-    return await this.diModel.updateOne(
+    const result = await this.diModel.updateOne(
       { _id },
       {
         $set: {
@@ -779,9 +826,16 @@ export class DiService {
         },
       },
     );
+
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('Unable to update');
+    }
+    await this.statsService.updateStatus(_id, STATUS_DI.Negotiation2.status);
+    return result;
   }
+
   async changeStatusPending3(_id: string) {
-    return await this.diModel.updateOne(
+    const result = await this.diModel.updateOne(
       { _id },
       {
         $set: {
@@ -789,9 +843,16 @@ export class DiService {
         },
       },
     );
+
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('Unable to update');
+    }
+    await this.statsService.updateStatus(_id, STATUS_DI.Pending3.status);
+    return result;
   }
+
   async changeStatusRepaire(_id: string) {
-    return await this.diModel.updateOne(
+    const result = await this.diModel.updateOne(
       { _id },
       {
         $set: {
@@ -799,9 +860,16 @@ export class DiService {
         },
       },
     );
+
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('Unable to update');
+    }
+    await this.statsService.updateStatus(_id, STATUS_DI.Reparation.status);
+    return result;
   }
+
   async changeStatusInRepair(_id: string) {
-    return await this.diModel.updateOne(
+    const result = await this.diModel.updateOne(
       { _id },
       {
         $set: {
@@ -809,9 +877,16 @@ export class DiService {
         },
       },
     );
+
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('Unable to update');
+    }
+    await this.statsService.updateStatus(_id, STATUS_DI.InReparation.status);
+    return result;
   }
+
   async changeStatusFinished(_id: string) {
-    return await this.diModel.updateOne(
+    const result = await this.diModel.updateOne(
       { _id },
       {
         $set: {
@@ -819,5 +894,11 @@ export class DiService {
         },
       },
     );
+
+    if (result.matchedCount === 0) {
+      throw new InternalServerErrorException('Unable to update');
+    }
+    await this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
+    return result;
   }
 }

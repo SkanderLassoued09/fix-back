@@ -19,6 +19,8 @@ export class CreateStatInput {
   @Field(() => Int, { defaultValue: 0, nullable: true })
   retour_count: number;
   @Field({ nullable: true })
+  status: string;
+  @Field({ nullable: true })
   _idDi: string;
   @Field({ defaultValue: 'You got new task Hello', nullable: true })
   notificationMessage: string;

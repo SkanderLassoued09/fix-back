@@ -11,9 +11,12 @@ import {
   Remarque,
   RemarqueSchema,
 } from 'src/remarque/entities/remarque.entity';
+import { StatService } from 'src/stat/stat.service';
+import { StatModule } from 'src/stat/stat.module';
+import { StatSchema } from 'src/stat/entities/stat.entity';
 
 @Module({
-  providers: [DiResolver, DiService],
+  providers: [DiResolver, DiService, StatService],
   imports: [
     MongooseModule.forFeature([
       {
@@ -27,6 +30,10 @@ import {
       {
         name: Remarque.name,
         schema: RemarqueSchema,
+      },
+      {
+        name: 'Stat',
+        schema: StatSchema,
       },
     ]),
   ],

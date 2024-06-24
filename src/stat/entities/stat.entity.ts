@@ -17,6 +17,8 @@ export class StatDocument extends Document {
   @Prop()
   rep_time: string;
   @Prop()
+  status: string;
+  @Prop()
   id_tech_retour: string[];
   @Prop({ type: Date })
   retour_time: Date;
@@ -47,6 +49,8 @@ export class Stat {
   id_tech_retour: string;
   @Field({ nullable: true })
   retour_time: string;
+  @Field({ nullable: true })
+  status: string;
   @Field({ nullable: true })
   retour_count: number;
   @Field({ defaultValue: false })

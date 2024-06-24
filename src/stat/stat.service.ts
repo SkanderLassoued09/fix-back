@@ -102,4 +102,18 @@ export class StatService {
   async getInfoStatByIdDi(_idDi: string) {
     return await this.StatModel.findOne({ _idDi }).exec();
   }
+
+  // update status
+  async updateStatus(_id: string, status: string) {
+    console.log('🍖[status]:', status);
+    console.log('🌶[_id]:', _id);
+    return await this.StatModel.updateOne(
+      { _idDi: _id },
+      {
+        $set: {
+          status,
+        },
+      },
+    );
+  }
 }
