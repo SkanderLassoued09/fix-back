@@ -89,8 +89,10 @@ export class DiDocument extends Document {
   isDeleted: boolean;
   @Prop({ default: 0 })
   ignoreCount: number;
-  @Field({ defaultValue: false })
+  @Prop({ defaultValue: false })
   isOpenedOnce: boolean;
+  @Prop({ defaultValue: false })
+  gotComposantFromMagasin: boolean;
 }
 export const DiSchema = SchemaFactory.createForClass(DiDocument);
 
@@ -171,6 +173,9 @@ export class Di {
   ignoreCount: number;
   @Field({ nullable: true })
   isOpenedOnce: boolean;
+  // Magasin sending composants to coordinatrice
+  @Field({ defaultValue: false })
+  gotComposantFromMagasin: boolean;
   @Field({ nullable: true })
   status: string;
 }

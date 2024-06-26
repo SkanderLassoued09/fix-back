@@ -260,4 +260,9 @@ export class DiResolver {
     console.log('🌰[_idDI]:', _idDI);
     return this.diService.countIgnore(_idDI);
   }
+
+  @Mutation(() => Di)
+  confirmerRecoitComposant(@Args('_idDI') _idDI: string) {
+    return this.diService.confirmerRecoitComposant(_idDI);
+  }
 }

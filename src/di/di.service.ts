@@ -879,7 +879,9 @@ export class DiService {
     );
 
     if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('Unable to update');
+      throw new InternalServerErrorException(
+        `Unable to update stat DI  ${_id}`,
+      );
     }
     await this.statsService.updateStatus(_id, STATUS_DI.InReparation.status);
     return result;
@@ -899,6 +901,18 @@ export class DiService {
       throw new InternalServerErrorException('Unable to update');
     }
     await this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
+    return result;
+  }
+
+  async confirmerRecoitComposant(_id: string) {
+    const result = await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          gotComposantFromMagasin: true,
+        },
+      },
+    );
     return result;
   }
 }

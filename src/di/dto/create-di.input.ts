@@ -63,6 +63,9 @@ export class CreateDiInput {
 
   @Field({ nullable: true })
   isOpenedOnce: boolean;
+
+  @Field({ defaultValue: false })
+  gotComposantFromMagasin: boolean;
 }
 @InputType()
 export class PaginationConfigDi {
