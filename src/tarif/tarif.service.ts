@@ -14,6 +14,6 @@ export class TarifService {
   }
 
   getTarif() {
-    return this.TarifModel.find({});
+    return this.TarifModel.findOne({});
   }
 }
