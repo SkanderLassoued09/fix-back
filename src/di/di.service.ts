@@ -3,6 +3,7 @@ import {
   HttpStatus,
   Injectable,
   InternalServerErrorException,
+  NotFoundException,
 } from '@nestjs/common';
 import {
   CreateDiInput,
@@ -24,6 +25,7 @@ import {
   RemarqueDocument,
 } from 'src/remarque/entities/remarque.entity';
 import { StatService } from 'src/stat/stat.service';
+import { NotFoundError } from 'rxjs';
 
 @Injectable()
 export class DiService {
@@ -98,6 +100,29 @@ export class DiService {
     }
   }
 
+  async findbyId(_id: string) {
+    return await this.diModel.findById({ _id });
+  }
+
+  async deleteDi(_id: string) {
+    const result = await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          isDeleted: true,
+        },
+      },
+    );
+
+    if (result.matchedCount === 0) {
+      throw new NotFoundException(`Unable to delete DI ${_id}`);
+    }
+    console.log('🥪');
+    await this.statsService.deleteStat(_id);
+    console.log('🍒');
+    return await this.findbyId(_id);
+  }
+
   async getAllNotOpeneddi() {
     return await this.diModel.find({ isOpenedOnce: false });
   }
@@ -106,7 +131,7 @@ export class DiService {
     const { first, rows } = paginationConfig;
     const totalDiCount = await this.diModel.countDocuments().exec();
     const diRecords = await this.diModel
-      .find({})
+      .find({ isDeleted: false })
       .populate('client_id', 'first_name last_name')
       .populate('createdBy', 'firstName lastName')
       .populate('location_id', 'location_name')

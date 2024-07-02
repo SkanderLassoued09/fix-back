@@ -1,12 +1,22 @@
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateStatInput } from './dto/create-stat.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Stat } from './entities/stat.entity';
 import { Model } from 'mongoose';
 import { Di, DiDocument } from 'src/di/entities/di.entity';
+import { NotificationsGateway } from 'src/notification.gateway';
+import { ProfileService } from 'src/profile/profile.service';
 @Injectable()
 export class StatService {
-  constructor(@InjectModel('Stat') private StatModel: Model<Stat>) {}
+  constructor(
+    @InjectModel('Stat') private StatModel: Model<Stat>,
+    private readonly notificationGateway: NotificationsGateway,
+    private readonly profileService: ProfileService,
+  ) {}
 
   async generateStatId(): Promise<number> {
     let indexStat = 0;
@@ -29,14 +39,31 @@ export class StatService {
     const index = await this.generateStatId();
 
     createStatInput._id = `STAT${index}`;
-    return await new this.StatModel(createStatInput)
-      .save()
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+    const result = await new this.StatModel(createStatInput).save();
+
+    if (!result) {
+      throw new InternalServerErrorException('Unable to create');
+    }
+
+    const profile = await this.profileService.findProlileById(
+      result.id_tech_diag,
+    );
+    this.notificationGateway.sendNotificationDiag(profile);
+
+    return result;
+  }
+
+  async deleteStat(_id: string) {
+    console.log('🍆[_id]:', _id);
+    const result = await this.StatModel.deleteOne({ _idDi: _id });
+    if (result.deletedCount === 0) {
+      throw new NotFoundException(
+        `Unable to remove stats linked to di with id ${_id}`,
+      );
+    }
+
+    console.log('🍎 success');
+    return result;
   }
 
   async affectForRep(_idDi: string, _idTech: string) {

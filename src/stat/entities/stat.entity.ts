@@ -4,9 +4,9 @@ import { Document } from 'mongoose';
 
 @Schema({ timestamps: true })
 export class StatDocument extends Document {
-  @Prop()
+  @Prop({ unique: true })
   _id: string;
-  @Prop()
+  @Prop({ unique: true })
   _idDi: string;
   @Prop()
   id_tech_diag: string;

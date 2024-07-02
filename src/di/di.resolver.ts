@@ -40,6 +40,11 @@ export class DiResolver {
     return await this.diService.getDiById(_id);
   }
 
+  @Mutation(() => Di)
+  async deleteDi(@Args('_id') _id: string) {
+    return await this.diService.deleteDi(_id);
+  }
+
   @Query(() => DiTableData)
   async get_coordinatorDI(
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,

@@ -30,4 +30,8 @@ export class NotificationsGateway
   sendReminder(message: string) {
     this.server.emit('reminder', message);
   }
+
+  sendNotificationDiag(message: any) {
+    this.server.emit('sendDitoDiagnostique', message);
+  }
 }

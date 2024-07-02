@@ -85,7 +85,7 @@ export class DiDocument extends Document {
   current_workers_ids: [string];
   @Prop(() => [String])
   current_roles: [string];
-  @Prop({ defaultValue: false })
+  @Prop({ default: false })
   isDeleted: boolean;
   @Prop({ default: 0 })
   ignoreCount: number;

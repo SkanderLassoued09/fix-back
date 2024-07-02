@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import {
   CreateProfileInput,
   PaginationConfigProfile,
@@ -95,6 +95,13 @@ export class ProfileService {
       });
   }
 
+  async findProlileById(_id: string): Promise<Profile> {
+    const result = await this.profileModel.findById(_id);
+    if (!result) {
+      throw new NotFoundException(`Unable to find profile woth id:${_id}`);
+    }
+    return result;
+  }
   // async getAllTech() {
   // return await this.profileModel
   //   .aggregate([

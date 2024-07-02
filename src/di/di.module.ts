@@ -13,10 +13,20 @@ import {
 } from 'src/remarque/entities/remarque.entity';
 import { StatService } from 'src/stat/stat.service';
 import { StatModule } from 'src/stat/stat.module';
-import { StatSchema } from 'src/stat/entities/stat.entity';
+import { Stat, StatSchema } from 'src/stat/entities/stat.entity';
+import { NotificationsGateway } from 'src/notification.gateway';
+import { ProfileService } from 'src/profile/profile.service';
+import { ProfileModule } from 'src/profile/profile.module';
+import { Profile, ProfileSchema } from 'src/profile/entities/profile.entity';
 
 @Module({
-  providers: [DiResolver, DiService, StatService],
+  providers: [
+    DiResolver,
+    DiService,
+    StatService,
+    NotificationsGateway,
+    ProfileService,
+  ],
   imports: [
     MongooseModule.forFeature([
       {
@@ -32,8 +42,12 @@ import { StatSchema } from 'src/stat/entities/stat.entity';
         schema: RemarqueSchema,
       },
       {
-        name: 'Stat',
+        name: Stat.name,
         schema: StatSchema,
+      },
+      {
+        name: Profile.name,
+        schema: ProfileSchema,
       },
     ]),
   ],
