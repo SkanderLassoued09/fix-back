@@ -92,7 +92,10 @@ export class DiDocument extends Document {
   @Prop({ defaultValue: false })
   isOpenedOnce: boolean;
   @Prop({ defaultValue: false })
-  gotComposantFromMagasin: boolean;
+  gotComposantFromMagasin: string;
+
+  @Prop()
+  comment: string;
 }
 export const DiSchema = SchemaFactory.createForClass(DiDocument);
 
@@ -100,6 +103,8 @@ export const DiSchema = SchemaFactory.createForClass(DiDocument);
 export class Di {
   @Field({ nullable: true })
   _id: string;
+  @Field({ nullable: true })
+  comment: string;
   @Field({ nullable: true })
   title: string;
   @Field({ nullable: true })
@@ -175,7 +180,7 @@ export class Di {
   isOpenedOnce: boolean;
   // Magasin sending composants to coordinatrice
   @Field({ defaultValue: false })
-  gotComposantFromMagasin: boolean;
+  gotComposantFromMagasin: string;
   @Field({ nullable: true })
   status: string;
 }
@@ -232,6 +237,8 @@ export class CategoryDi {
 export class DiTable {
   @Field({ nullable: true })
   _id: string;
+  @Field({ nullable: true })
+  comment: string;
   @Field()
   title: string;
   @Field({ nullable: true })

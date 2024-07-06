@@ -5,6 +5,8 @@ export class CreateDiInput {
   @Field({ nullable: true })
   _id: string;
   @Field({ nullable: true })
+  comment: string;
+  @Field({ nullable: true })
   title: string;
   @Field({ nullable: true })
   location: string;

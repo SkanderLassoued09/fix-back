@@ -53,6 +53,10 @@ export class StatService {
     return result;
   }
 
+  async findUserLinkedToConcernedDi(_idDi: string) {
+    return await this.StatModel.findOne({ _idDi });
+  }
+
   async deleteStat(_id: string) {
     console.log('🍆[_id]:', _id);
     const result = await this.StatModel.deleteOne({ _idDi: _id });

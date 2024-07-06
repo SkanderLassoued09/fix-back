@@ -26,6 +26,8 @@ import {
 } from 'src/remarque/entities/remarque.entity';
 import { StatService } from 'src/stat/stat.service';
 import { NotFoundError } from 'rxjs';
+import { NotificationsGateway } from 'src/notification.gateway';
+import { ProfileService } from 'src/profile/profile.service';
 
 @Injectable()
 export class DiService {
@@ -37,6 +39,8 @@ export class DiService {
     private readonly remarqueModel: Model<RemarqueDocument>,
 
     private readonly statsService: StatService,
+    private readonly profileService: ProfileService,
+    private readonly notificationGateway: NotificationsGateway,
   ) {}
   async create(createDiInput: CreateDiInput) {
     return await new this.diModel(createDiInput).save();
@@ -325,8 +329,6 @@ export class DiService {
       { _id: _idDI },
       {
         $set: {
-          current_roles: Role.MAGASIN,
-          status: STATUS_DI.InMagasin.status,
           can_be_repaired: diag.can_be_repaired,
           contain_pdr: diag.contain_pdr,
           remarqueTech: diag.remarqueTech,
@@ -337,7 +339,14 @@ export class DiService {
     if (result.matchedCount === 0) {
       throw new InternalServerErrorException('unable to find');
     }
-    await this.statsService.updateStatus(_idDI, STATUS_DI.InMagasin.status);
+    if (diag.contain_pdr) {
+      await this.statsService.updateStatus(
+        _idDI,
+        STATUS_DI.MagasinEstimation.status,
+      );
+    } else {
+      await this.statsService.updateStatus(_idDI, STATUS_DI.Pending2.status);
+    }
     return result;
   }
 
@@ -635,6 +644,7 @@ export class DiService {
           STATUS_DI.Annuler.status,
         ],
       },
+      isDeleted: false,
     };
     const { first, rows } = paginationConfig;
     const totalDiCount = await this.diModel.countDocuments(queryCoordinator);
@@ -714,7 +724,7 @@ export class DiService {
     }
 
     const v = await this.diModel.findOne({ _id });
-    console.log('🥖[v]:', v);
+
     return v;
   }
   /**
@@ -730,9 +740,6 @@ export class DiService {
       },
     );
 
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('Unable to update');
-    }
     await this.statsService.updateStatus(_id, STATUS_DI.Pending1.status);
     return result;
   }
@@ -747,14 +754,12 @@ export class DiService {
       },
     );
 
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('Unable to update');
-    }
     await this.statsService.updateStatus(_id, STATUS_DI.InDiagnostic.status);
     return result;
   }
 
   async changeStatusInMagasin(_id: string) {
+    console.log('🍩[_id]:', _id);
     const result = await this.diModel.updateOne(
       { _id },
       {
@@ -764,9 +769,6 @@ export class DiService {
       },
     );
 
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('Unable to update');
-    }
     await this.statsService.updateStatus(_id, STATUS_DI.InMagasin.status);
     return result;
   }
@@ -781,9 +783,6 @@ export class DiService {
       },
     );
 
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('Unable to update');
-    }
     await this.statsService.updateStatus(
       _id,
       STATUS_DI.MagasinEstimation.status,
@@ -801,9 +800,6 @@ export class DiService {
       },
     );
 
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('Unable to update');
-    }
     await this.statsService.updateStatus(_id, STATUS_DI.Pending2.status);
     return result;
   }
@@ -818,10 +814,10 @@ export class DiService {
       },
     );
 
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('Unable to update');
-    }
     await this.statsService.updateStatus(_id, STATUS_DI.Pricing.status);
+    this.notificationGateway.sendNotifcationToAdmins(
+      'Veuillez affecter le prix de ce DI',
+    );
     return result;
   }
 
@@ -835,9 +831,6 @@ export class DiService {
       },
     );
 
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('Unable to update');
-    }
     await this.statsService.updateStatus(_id, STATUS_DI.Negotiation1.status);
     return result;
   }
@@ -852,9 +845,6 @@ export class DiService {
       },
     );
 
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('Unable to update');
-    }
     await this.statsService.updateStatus(_id, STATUS_DI.Negotiation2.status);
     return result;
   }
@@ -869,14 +859,12 @@ export class DiService {
       },
     );
 
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('Unable to update');
-    }
     await this.statsService.updateStatus(_id, STATUS_DI.Pending3.status);
     return result;
   }
 
   async changeStatusRepaire(_id: string) {
+    console.log('🍦[_id]:', _id);
     const result = await this.diModel.updateOne(
       { _id },
       {
@@ -886,9 +874,6 @@ export class DiService {
       },
     );
 
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('Unable to update');
-    }
     await this.statsService.updateStatus(_id, STATUS_DI.Reparation.status);
     return result;
   }
@@ -903,11 +888,6 @@ export class DiService {
       },
     );
 
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException(
-        `Unable to update stat DI  ${_id}`,
-      );
-    }
     await this.statsService.updateStatus(_id, STATUS_DI.InReparation.status);
     return result;
   }
@@ -922,22 +902,120 @@ export class DiService {
       },
     );
 
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('Unable to update');
-    }
     await this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
     return result;
   }
 
-  async confirmerRecoitComposant(_id: string) {
+  async sendConfirmerRecoitComposant(_id: string) {
     const result = await this.diModel.updateOne(
       { _id },
       {
         $set: {
-          gotComposantFromMagasin: true,
+          gotComposantFromMagasin: 'REQUEST',
         },
       },
     );
+
+    const stat = await this.statsService.findUserLinkedToConcernedDi(_id);
+    const profile = this.profileService.findProlileById(stat.id_tech_rep);
+    this.notificationGateway.confirmComposant(profile);
+
     return result;
   }
+
+  async responseConfirmerRecoitComposant(_id: string) {
+    const result = await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          gotComposantFromMagasin: 'RESPONSE',
+        },
+      },
+    );
+
+    this.notificationGateway.resConfirmComposant(
+      'Les documents et composants confirmé',
+    );
+
+    return result;
+  }
+
+  async changeDiRetour(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      { $set: { status: STATUS_DI.Pending3.status } },
+    );
+  }
+
+  async changeToPending1(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      { $set: { status: STATUS_DI.Pending1.status } },
+    );
+  }
+
+  // doc section :
+  //   function getFileExtension(base64) {
+  //   const metaData = base64.split(',')[0];
+  //   const fileType = metaData.split(':')[1].split(';')[0];
+  //   const extension = fileType.split('/')[1];
+  //   return extension;
+  // }
+
+  // async create(createTicketInput: CreateTicketInput) {
+  //   console.log(createTicketInput, 'add service');
+  //   const extension = getFileExtension(createTicketInput.image);
+  //   console.log(createTicketInput.image, 'bufferr11');
+  //   const buffer = Buffer.from(createTicketInput.image.split(',')[1], 'base64');
+  //   const randompdfFile = randomstring.generate({
+  //     length: 12,
+  //     charset: 'alphabetic',
+  //   });
+  //   fs.writeFileSync(
+  //     join(__dirname, `../../pdf/${randompdfFile}.${extension}`),
+  //     buffer,
+  //   );
+  //   const index = await this.generateClientId();
+  //   console.log('index ticket', index);
+  //   createTicketInput._id = `T${index}`;
+  //   console.log(createTicketInput._id, 'for saving');
+  //   createTicketInput.image = `${randompdfFile}.${extension}`;
+  //   console.log(createTicketInput.image, 'image');
+  //   return await new this.ticketModel(createTicketInput)
+  //     .save()
+  //     .then((res) => {
+  //       console.log(res, 'ticket added');
+  //       return res;
+  //     })
+  //     .catch((err) => {
+  //       console.log(err, 'ticket error');
+  //       return err;
+  //     });
+  // }
+  // HTML
+  //  <input
+  //         nbInput
+  //         fullWidth
+  //         placeholder="Textarea"
+  //         formControlName="image"
+  //         type="file"
+  //         (change)="onSelectFile($event)"
+  //       />
+  //     </div>
+
+  // onSelectFile(image: any) {
+  //   const file = image.target.files && image.target.files[0];
+
+  //   if (file) {
+  //     var reader = new FileReader();
+  //     reader.readAsDataURL(file);
+
+  //     reader.onload = (event) => {
+  //       console.log(event, 'event onload');
+  //       this.imageStr = reader.result;
+  //     };
+  //   }
+
+  //   console.log(this.imageStr, 'pdf str');
+  // }
 }

@@ -34,4 +34,13 @@ export class NotificationsGateway
   sendNotificationDiag(message: any) {
     this.server.emit('sendDitoDiagnostique', message);
   }
+  sendNotifcationToAdmins(message: any) {
+    this.server.emit('sendNotifcationToAdmins', message);
+  }
+  confirmComposant(message: any) {
+    this.server.emit('confirmAllComposant', message);
+  }
+  resConfirmComposant(message: any) {
+    this.server.emit('resConfirmComposant', message);
+  }
 }

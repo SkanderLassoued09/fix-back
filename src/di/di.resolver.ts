@@ -246,7 +246,25 @@ export class DiResolver {
       return false;
     }
   }
+  @Mutation(() => Boolean)
+  changeStatusRetour(@Args('_id') _id: string) {
+    const pending3 = this.diService.changeDiRetour(_id);
+    if (pending3) {
+      return true;
+    } else {
+      return false;
+    }
+  }
 
+  @Mutation(() => Boolean)
+  changeToPending1(@Args('_id') _id: string) {
+    const pending3 = this.diService.changeToPending1(_id);
+    if (pending3) {
+      return true;
+    } else {
+      return false;
+    }
+  }
   //coordinator_ToDiag
   @Mutation(() => Di)
   coordinatorSendingDiDiag(@Args('_idDI') _idDI: string) {
@@ -268,6 +286,11 @@ export class DiResolver {
 
   @Mutation(() => Di)
   confirmerRecoitComposant(@Args('_idDI') _idDI: string) {
-    return this.diService.confirmerRecoitComposant(_idDI);
+    return this.diService.sendConfirmerRecoitComposant(_idDI);
+  }
+
+  @Mutation(() => Di)
+  responseConfirmerRecoitComposant(@Args('_idDI') _idDI: string) {
+    return this.diService.responseConfirmerRecoitComposant(_idDI);
   }
 }
