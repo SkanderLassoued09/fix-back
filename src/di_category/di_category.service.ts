@@ -12,7 +12,7 @@ export class DiCategoryService {
   ) {}
 
   async generateDiCategoryId(): Promise<number> {
-    let indexDiCategory = 0;
+    let indexDiCategory = 20;
     const lastDiCategory = await this.DiCategoryModel.findOne(
       {},
       {},
@@ -22,6 +22,8 @@ export class DiCategoryService {
     if (lastDiCategory) {
       console.log('is entered');
       indexDiCategory = +lastDiCategory._id.substring(1);
+      console.log(lastDiCategory, 'lastDiCategory');
+
       console.log(indexDiCategory, '== index');
       return indexDiCategory + 1;
     }
@@ -34,7 +36,7 @@ export class DiCategoryService {
   ): Promise<DiCategory> {
     const index = await this.generateDiCategoryId();
     console.log(index, 'index DiCategory');
-    createDiCategoryInput._id = `C_DI ${index}`;
+    createDiCategoryInput._id = `C_DI${index}`;
     return await new this.DiCategoryModel(createDiCategoryInput)
       .save()
       .then((res) => {

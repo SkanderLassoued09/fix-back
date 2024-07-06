@@ -17,3 +17,21 @@ import { DiCategorySchema } from './entities/di_category.entity';
   exports: [DiCategoryService],
 })
 export class DiCategoryModule {}
+/**
+
+
+@Module({
+  providers: [LocationResolver, LocationService],
+  imports: [
+    MongooseModule.forFeature([
+      {
+        name: 'Location',
+        schema: LocationSchema,
+      },
+    ]),
+  ],
+  exports: [LocationService],
+})
+export class LocationModule {}
+
+ */

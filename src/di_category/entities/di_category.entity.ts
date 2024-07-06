@@ -9,7 +9,7 @@ export class DiCategoryDocument extends Document {
   _id: string;
   @Prop()
   @IsString()
-  category_Di: string;
+  category_DI: string;
 }
 export const DiCategorySchema =
   SchemaFactory.createForClass(DiCategoryDocument);
@@ -18,6 +18,6 @@ export const DiCategorySchema =
 export class DiCategory {
   @Field()
   _id: string;
-  @Field()
+  @Field({ nullable: true })
   category_DI: string;
 }
