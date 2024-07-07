@@ -138,7 +138,7 @@ export class StatService {
   async updateStatus(_id: string, status: string) {
     console.log('🍖[status]:', status);
     console.log('🌶[_id]:', _id);
-    return await this.StatModel.updateOne(
+    const result = await this.StatModel.updateOne(
       { _idDi: _id },
       {
         $set: {
@@ -146,5 +146,7 @@ export class StatService {
         },
       },
     );
+
+    return this.getInfoStatByIdDi(_id);
   }
 }

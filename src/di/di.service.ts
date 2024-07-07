@@ -42,9 +42,7 @@ export class DiService {
     private readonly profileService: ProfileService,
     private readonly notificationGateway: NotificationsGateway,
   ) {}
-  async create(createDiInput: CreateDiInput) {
-    return await new this.diModel(createDiInput).save();
-  }
+
   async generateDiId(): Promise<number> {
     let indexDi = 0;
     const lastDi = await this.diModel.findOne(

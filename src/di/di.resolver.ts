@@ -173,8 +173,8 @@ export class DiResolver {
   }
   @Mutation(() => Boolean)
   changeStatusMagasinEstimation(@Args('_id') _id: string) {
-    const isPending = this.diService.changeStatusMagasinEstimation(_id);
-    if (isPending) {
+    const result = this.diService.changeStatusMagasinEstimation(_id);
+    if (result) {
       return true;
     } else {
       return false;

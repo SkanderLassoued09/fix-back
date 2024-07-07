@@ -11,41 +11,38 @@ export class DiCategoryService {
     private DiCategoryModel: Model<DiCategory>,
   ) {}
 
-  async generateDiCategoryId(): Promise<number> {
-    let indexDiCategory = 0;
-    const lastDiCategory = await this.DiCategoryModel.findOne(
+  async generateDiId(): Promise<number> {
+    let indexDi = 0;
+    const lastDi = await this.DiCategoryModel.findOne(
       {},
       {},
       { sort: { createdAt: -1 } },
     );
 
-    if (lastDiCategory) {
-      console.log('is entered');
-      indexDiCategory = +lastDiCategory._id.substring(1);
-      console.log(indexDiCategory, '== index');
-      return indexDiCategory + 1;
+    if (lastDi) {
+      indexDi = +lastDi._id.substring(4);
+
+      return indexDi + 1;
     }
-    console.log(lastDiCategory, 'lastDiCategory');
-    return indexDiCategory;
+
+    return indexDi;
   }
 
-  async createDiCategory(
-    createDiCategoryInput: CreateDiCategoryInput,
-  ): Promise<DiCategory> {
-    const index = await this.generateDiCategoryId();
-    console.log(index, 'index DiCategory');
-    createDiCategoryInput._id = `C_DI ${index}`;
-    return await new this.DiCategoryModel(createDiCategoryInput)
-      .save()
-      .then((res) => {
-        console.log(res, 'DiCategory');
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+  // create
+  async createDiCategory(category: string): Promise<DiCategory> {
+    const index = await this.generateDiId();
+    let dataCategory = {} as CreateDiCategoryInput;
+    dataCategory._id = `DI_C${index}`;
+    dataCategory.category = category;
+
+    console.log('🥚[dataCategory]:', dataCategory);
+
+    const result = await new this.DiCategoryModel(dataCategory).save();
+    console.log('🍖[result]:', result);
+    return result;
   }
 
+  // remove
   async removeDiCategory(_id: string): Promise<Boolean> {
     return this.DiCategoryModel.deleteOne({ _id })
       .then(() => {
