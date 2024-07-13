@@ -2,8 +2,8 @@ import { InputType, Field } from '@nestjs/graphql';
 
 @InputType()
 export class CreateDiCategoryInput {
-  @Field()
+  @Field({ nullable: true })
   _id: string;
   @Field({ nullable: true })
-  category_DI: string;
+  category: string;
 }

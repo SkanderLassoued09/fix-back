@@ -9,15 +9,15 @@ export class DiCategoryDocument extends Document {
   _id: string;
   @Prop()
   @IsString()
-  category_DI: string;
+  category: string;
 }
 export const DiCategorySchema =
   SchemaFactory.createForClass(DiCategoryDocument);
 
 @ObjectType()
 export class DiCategory {
-  @Field()
+  @Field({ nullable: true })
   _id: string;
   @Field({ nullable: true })
-  category_DI: string;
+  category: string;
 }

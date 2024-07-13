@@ -9,10 +9,10 @@ export class DiCategoryResolver {
 
   @Mutation(() => DiCategory)
   createDiCategory(
-    @Args('createDiCategoryInput')
-    createDiCategoryInput: CreateDiCategoryInput,
+    @Args('category')
+    category: string,
   ) {
-    return this.diCategoryService.createDiCategory(createDiCategoryInput);
+    return this.diCategoryService.createDiCategory(category);
   }
 
   @Mutation(() => Boolean)
