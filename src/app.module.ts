@@ -16,6 +16,8 @@ import { ProfileModule } from './profile/profile.module';
 import { AuthModule } from './auth/auth.module';
 import { StatModule } from './stat/stat.module';
 import { CronModule } from './cron/cron.module';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 
 @Module({
   imports: [
@@ -30,6 +32,10 @@ import { CronModule } from './cron/cron.module';
       autoSchemaFile: true,
       installSubscriptionHandlers: true,
     }),
+    ServeStaticModule.forRoot({
+      rootPath: join(__dirname, '..', 'docs'),
+    }),
+
     ProfileModule,
     AuthModule,
     ClientsModule,

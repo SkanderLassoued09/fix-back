@@ -28,6 +28,10 @@ import { StatService } from 'src/stat/stat.service';
 import { NotFoundError } from 'rxjs';
 import { NotificationsGateway } from 'src/notification.gateway';
 import { ProfileService } from 'src/profile/profile.service';
+import * as randomstring from 'randomstring';
+import { join } from 'path';
+import * as fs from 'fs';
+import { getFileExtension } from './shared.files';
 
 @Injectable()
 export class DiService {
@@ -61,9 +65,26 @@ export class DiService {
     return indexDi;
   }
   async createDi(createDiInput: CreateDiInput): Promise<Di> {
+    // --
+    // the same code
+    console.log(createDiInput.image, 'add service');
+    const extension = getFileExtension(createDiInput.image);
+    console.log(createDiInput.image, 'bufferr11');
+    const buffer = Buffer.from(createDiInput.image.split(',')[1], 'base64');
+    const randompdfFile = randomstring.generate({
+      length: 12,
+      charset: 'alphabetic',
+    });
+    fs.writeFileSync(
+      join(__dirname, `../../docs/${randompdfFile}.${extension}`),
+      buffer,
+    );
+
+    // --
     const index = await this.generateDiId();
 
     createDiInput._id = `DI${index}`;
+    createDiInput.image = `${randompdfFile}.${extension}`;
     return await new this.diModel(createDiInput)
       .save()
       .then((res) => {

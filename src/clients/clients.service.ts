@@ -62,6 +62,7 @@ export class ClientsService {
       .limit(rows)
       .skip(first)
       .exec();
+    console.log('🍋[clientRecords]:', clientRecords);
 
     const totalClientRecord = await this.ClientModel.countDocuments().exec();
     console.log('🍮[clientRecords]:', clientRecords);
