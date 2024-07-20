@@ -34,7 +34,7 @@ export class CompanysService {
   ): Promise<Company> {
     const index = await this.generateCompanyId();
     console.log(index, 'index Company');
-    createCompanyInput._id = `S ${index}`; //Societe
+    createCompanyInput._id = `S${index}`; //Societe
     return await new this.CompanyModel(createCompanyInput)
       .save()
       .then((res) => {

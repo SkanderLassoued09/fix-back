@@ -43,7 +43,7 @@ export class ClientsService {
   }
 
   async removeClient(_id: string): Promise<Boolean> {
-    return this.ClientModel.deleteOne({ _id })
+    return await this.ClientModel.deleteOne({ _id })
       .then(() => {
         console.log('Item has been deleted', _id);
         return true;
