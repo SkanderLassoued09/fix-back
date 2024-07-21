@@ -165,26 +165,16 @@ export class ProfileResolver {
     return combinedData;
   }
 
-  @Mutation(() => Boolean)
+  @Mutation(() => Profile)
   updateProfile(
     @Args('_id') _id: string,
     @Args('updateProfileInput') updateProfileInput: UpdateProfileInput,
   ) {
-    const update = this.profileService.updateProfile(_id, updateProfileInput);
-    if (update) {
-      return true;
-    } else {
-      return false;
-    }
+    return this.profileService.updateProfile(_id, updateProfileInput);
   }
-  @Mutation(() => Boolean)
+  @Mutation(() => Profile)
   deleteProfile(@Args('_id') _id: string) {
-    const update = this.profileService.deleteUser(_id);
-    if (update) {
-      return true;
-    } else {
-      return false;
-    }
+    return this.profileService.deleteUser(_id);
   }
 
   @Mutation(() => Profile)

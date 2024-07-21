@@ -4,6 +4,7 @@ import { Company, CompanyTableData } from './entities/company.entity';
 import {
   CreateCompanyInput,
   PaginationConfig,
+  UpdateCompanyInput,
 } from './dto/create-company.input';
 
 @Resolver(() => Company)
@@ -43,5 +44,12 @@ export class CompanysResolver {
   ): Promise<CompanyTableData> {
     console.log('🍆[paginationConfig]:', paginationConfig);
     return await this.companysService.findAllCompanys(paginationConfig);
+  }
+
+  @Mutation(() => Company)
+  updateCompany(
+    @Args('updateCompanyInput') updateCompanyInput: UpdateCompanyInput,
+  ) {
+    return this.companysService.updateCompany(updateCompanyInput);
   }
 }

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import {
   CreateCompanyInput,
   PaginationConfig,
+  UpdateCompanyInput,
 } from './dto/create-company.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -45,7 +46,10 @@ export class CompanysService {
         return err;
       });
   }
-
+  /**
+ * 
+it should be soft delete ya nezih change it 
+ */
   async removeCompany(_id: string): Promise<Boolean> {
     return this.CompanyModel.deleteOne({ _id })
       .then(() => {
@@ -86,5 +90,24 @@ export class CompanysService {
     } catch (error) {
       throw error;
     }
+  }
+
+  async updateCompany(payload: UpdateCompanyInput) {
+    return await this.CompanyModel.findOneAndUpdate(
+      { _id: payload._id },
+      {
+        $set: {
+          name: payload.name,
+          region: payload.region,
+          address: payload.address,
+          email: payload.email,
+          Exoneration: payload.Exoneration,
+          fax: payload.fax,
+          raisonSociale: payload.raisonSociale,
+          webSiteLink: payload.webSiteLink,
+        },
+      },
+      { new: true },
+    );
   }
 }

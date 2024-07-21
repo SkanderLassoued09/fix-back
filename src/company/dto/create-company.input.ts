@@ -59,3 +59,24 @@ export class PaginationConfig {
   @Field()
   first: number; // index of current pages
 }
+@InputType()
+export class UpdateCompanyInput {
+  @Field({ nullable: true })
+  _id: string;
+  @Field({ nullable: true })
+  name: string;
+  @Field({ nullable: true })
+  region: string;
+  @Field({ nullable: true })
+  address: string;
+  @Field({ nullable: true })
+  email: string;
+  @Field({ nullable: true })
+  Exoneration: string;
+  @Field({ nullable: true })
+  raisonSociale: string;
+  @Field({ nullable: true })
+  fax: string;
+  @Field({ nullable: true })
+  webSiteLink: string;
+}
