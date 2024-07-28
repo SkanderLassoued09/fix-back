@@ -1,5 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { CreateClientInput } from './dto/create-client.input';
+import {
+  CreateClientInput,
+  UpdateClientInput,
+} from './dto/create-client.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Client, ClientTableData } from './entities/client.entity';
@@ -84,5 +87,28 @@ export class ClientsService {
 
   async getAllClient() {
     return await this.ClientModel.find({}).exec();
+  }
+
+  async updateClient(payload: UpdateClientInput) {
+    const result = await this.ClientModel.findOneAndUpdate(
+      { _id: payload._id },
+      {
+        $set: {
+          first_name: payload.first_name,
+          last_name: payload.last_name,
+          region: payload.region,
+          address: payload.address,
+          email: payload.email,
+          phone: payload.phone,
+        },
+      },
+      { new: true },
+    );
+
+    if (!result) {
+      console.error('error while updating client', result);
+    }
+
+    return result;
   }
 }
