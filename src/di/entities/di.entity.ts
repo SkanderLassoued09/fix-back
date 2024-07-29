@@ -199,6 +199,18 @@ export class RemarqueDi {
   _id: string;
   @Field()
   remarque_manager: string;
+  @Field({ nullable: true })
+  remarque_admin_manager: string;
+  @Field({ nullable: true })
+  remarque_admin_tech: string;
+  @Field({ nullable: true })
+  remarque_tech_diagnostic: string;
+  @Field({ nullable: true })
+  remarque_tech_repair: string;
+  @Field({ nullable: true })
+  remarque_magasin: string;
+  @Field({ nullable: true })
+  remarque_coordinator: string;
 }
 @ObjectType()
 export class ClientDi {
