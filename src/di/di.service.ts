@@ -445,43 +445,19 @@ export class DiService {
   }
   //Tech finsih Reperation
   async tech_finishReperation(_idDI: string, remarque: string) {
-    console.log(_idDI);
-    console.log(remarque);
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: 'ùlknùlkn',
-            status: STATUS_DI.Finished.status,
-          },
+    console.log('🍗 fired');
+    console.log('_idDI', _idDI);
+    console.log('remarque', remarque);
+    return await this.diModel.findOneAndUpdate(
+      { _id: _idDI },
+      {
+        $set: {
+          status: STATUS_DI.Finished.status,
+          remarque_tech_repair: remarque,
         },
-      )
-      .then((res) => {
-        console.log('tech_finishReperation');
-        if (res.acknowledged && res.modifiedCount > 0) {
-          this.addRemarqueTechForReaparation(_idDI, remarque);
-        }
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
-  }
-
-  async addRemarqueTechForReaparation(_idDi: string, remarque: string) {
-    return await this.remarqueModel
-      .updateOne(
-        { _idDi },
-        {
-          $set: {
-            remarque_tech_repair: remarque,
-          },
-        },
-      )
-      .then((res) => {
-        console.log(res, 'sub');
-      });
+      },
+      { new: true },
+    );
   }
 
   //Coordiantor sending to the Admins for affecting price

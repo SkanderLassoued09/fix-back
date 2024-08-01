@@ -92,17 +92,13 @@ export class DiResolver {
     }
   }
 
-  @Mutation(() => Boolean)
+  @Mutation(() => Di)
   tech_finishReperation(
     @Args('_id') _id: string,
     @Args('remarque') remarque: string,
   ) {
-    const isRep = this.diService.tech_finishReperation(_id, remarque);
-    if (isRep) {
-      return true;
-    } else {
-      return false;
-    }
+    console.log('🍝');
+    return this.diService.tech_finishReperation(_id, remarque);
   }
 
   @Mutation(() => Boolean)
