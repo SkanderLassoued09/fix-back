@@ -35,9 +35,7 @@ export class DiDocument extends Document {
   @Prop({ type: String, ref: 'Company' })
   // belongs to which company
   company_id: Company;
-  @Prop({ type: String, ref: 'Remarque' })
-  // belongs to remarque
-  remarque_id: Remarque;
+
   @Prop({ type: String, ref: 'DiCategory' })
   // belongs to which category
   di_category_id: DiCategory;
@@ -96,6 +94,21 @@ export class DiDocument extends Document {
 
   @Prop()
   comment: string;
+  /** remarque section  */
+  @Prop({ nullable: true })
+  remarque_manager: string;
+  @Prop({ nullable: true })
+  remarque_admin_manager: string;
+  @Prop({ nullable: true })
+  remarque_admin_tech: string;
+  @Prop({ nullable: true })
+  remarque_tech_diagnostic: string;
+  @Prop({ nullable: true })
+  remarque_tech_repair: string;
+  @Prop({ nullable: true })
+  remarque_magasin: string;
+  @Prop({ nullable: true })
+  remarque_coordinator: string;
 }
 export const DiSchema = SchemaFactory.createForClass(DiDocument);
 
@@ -136,8 +149,7 @@ export class Di {
   array_composants: ComposantStructure[];
 
   //! Remarque entity containing all the Remarques
-  @Field({ nullable: true })
-  remarque_id: string;
+
   //! entity created by admins
   @Field({ nullable: true })
   di_category_id: string;
@@ -183,6 +195,20 @@ export class Di {
   gotComposantFromMagasin: string;
   @Field({ nullable: true })
   status: string;
+  @Field({ nullable: true })
+  remarque_manager: string;
+  @Field({ nullable: true })
+  remarque_admin_manager: string;
+  @Field({ nullable: true })
+  remarque_admin_tech: string;
+  @Field({ nullable: true })
+  remarque_tech_diagnostic: string;
+  @Field({ nullable: true })
+  remarque_tech_repair: string;
+  @Field({ nullable: true })
+  remarque_magasin: string;
+  @Field({ nullable: true })
+  remarque_coordinator: string;
 }
 
 @ObjectType()
@@ -273,8 +299,7 @@ export class DiTable {
   current_roles: string;
   @Field({ nullable: true })
   client_id: string;
-  @Field({ nullable: true })
-  remarque_id: string;
+
   @Field({ nullable: true })
   createdBy: string;
   @Field({ nullable: true })
@@ -285,6 +310,21 @@ export class DiTable {
   di_category_id: string;
   @Field(() => [ComposantStructure], { nullable: true })
   array_composants: ComposantStructure[];
+  /** remarque section  */
+  @Field({ nullable: true })
+  remarque_manager: string;
+  @Field({ nullable: true })
+  remarque_admin_manager: string;
+  @Field({ nullable: true })
+  remarque_admin_tech: string;
+  @Field({ nullable: true })
+  remarque_tech_diagnostic: string;
+  @Field({ nullable: true })
+  remarque_tech_repair: string;
+  @Field({ nullable: true })
+  remarque_magasin: string;
+  @Field({ nullable: true })
+  remarque_coordinator: string;
 } //
 @ObjectType()
 export class DiTableData {

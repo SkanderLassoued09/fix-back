@@ -158,7 +158,6 @@ export class DiService {
       .populate('client_id', 'first_name last_name')
       .populate('createdBy', 'firstName lastName')
       .populate('location_id', 'location_name')
-      .populate('remarque_id', 'remarque_manager')
       .populate('di_category_id', 'category_Di')
 
       .limit(rows)
@@ -350,7 +349,7 @@ export class DiService {
         $set: {
           can_be_repaired: diag.can_be_repaired,
           contain_pdr: diag.contain_pdr,
-          remarqueTech: diag.remarqueTech,
+          remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
           array_composants: diag.array_composants,
         },
       },
@@ -746,6 +745,11 @@ export class DiService {
 
     return v;
   }
+
+  async getAllRemarque(_idDI: string) {
+    return await this.diModel.findOne({ _id: _idDI }).exec();
+  }
+
   /**
    * Changing status di section
    */

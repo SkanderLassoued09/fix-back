@@ -20,11 +20,11 @@ export class NotificationsGateway
   }
 
   handleConnection(client: Socket, ...args: any[]) {
-    this.logger.log(`Client connected: ${client.id}`);
+    // this.logger.log(`Client connected: ${client.id}`);
   }
 
   handleDisconnect(client: Socket) {
-    this.logger.log(`Client disconnected: ${client.id}`);
+    // this.logger.log(`Client disconnected: ${client.id}`);
   }
 
   sendReminder(message: string) {

@@ -45,6 +45,11 @@ export class DiResolver {
     return await this.diService.deleteDi(_id);
   }
 
+  @Query(() => Di)
+  getAllRemarque(@Args('_id') _id: string) {
+    return this.diService.getAllRemarque(_id);
+  }
+
   @Query(() => DiTableData)
   async get_coordinatorDI(
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,

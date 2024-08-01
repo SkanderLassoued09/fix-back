@@ -68,6 +68,22 @@ export class CreateDiInput {
 
   @Field({ defaultValue: false })
   gotComposantFromMagasin: boolean;
+
+  /** remarque section  */
+  @Field({ nullable: true })
+  remarque_manager: string;
+  @Field({ nullable: true })
+  remarque_admin_manager: string;
+  @Field({ nullable: true })
+  remarque_admin_tech: string;
+  @Field({ nullable: true })
+  remarque_tech_diagnostic: string;
+  @Field({ nullable: true })
+  remarque_tech_repair: string;
+  @Field({ nullable: true })
+  remarque_magasin: string;
+  @Field({ nullable: true })
+  remarque_coordinator: string;
 }
 @InputType()
 export class PaginationConfigDi {
@@ -88,7 +104,7 @@ export class ComposantStructureInput {
 @InputType()
 export class DiagUpdate {
   @Field()
-  remarqueTech: string;
+  remarque_tech_diagnostic: string;
   @Field()
   contain_pdr: boolean;
   @Field()
