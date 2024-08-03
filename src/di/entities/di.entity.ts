@@ -298,8 +298,9 @@ export class DiTable {
   @Field({ nullable: true })
   current_roles: string;
   @Field({ nullable: true })
+  image: string;
+  @Field({ nullable: true })
   client_id: string;
-
   @Field({ nullable: true })
   createdBy: string;
   @Field({ nullable: true })

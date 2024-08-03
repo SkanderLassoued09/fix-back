@@ -177,6 +177,7 @@ export class DiService {
         current_roles: di.current_roles,
         array_composants: di.array_composants,
         status: di.status,
+        image: di.image,
         client_id: di.client_id?.first_name ?? null,
         createdBy: `${di.createdBy?.firstName ?? ''} ${
           di.createdBy?.lastName ?? ''
