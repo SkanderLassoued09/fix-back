@@ -150,6 +150,41 @@ export class DiService {
     return await this.diModel.find({ isOpenedOnce: false });
   }
 
+  async addDevisPDF(_id: string, pdf: string) {
+    const extension = getFileExtension(pdf);
+    const buffer = Buffer.from(pdf.split(',')[1], 'base64');
+
+    const randompdfFile = randomstring.generate({
+      length: 12,
+      charset: 'alphabetic',
+    });
+    fs.writeFileSync(
+      join(__dirname, `../../docs/${randompdfFile}.${extension}`),
+      buffer,
+    );
+    return await this.diModel.updateOne(
+      { _id },
+      { $set: { devis: `${randompdfFile}.${extension}` } },
+    );
+  }
+  async addBCPDF(_id: string, pdf: string) {
+    const extension = getFileExtension(pdf);
+    const buffer = Buffer.from(pdf.split(',')[1], 'base64');
+
+    const randompdfFile = randomstring.generate({
+      length: 12,
+      charset: 'alphabetic',
+    });
+    fs.writeFileSync(
+      join(__dirname, `../../docs/${randompdfFile}.${extension}`),
+      buffer,
+    );
+    return await this.diModel.updateOne(
+      { _id },
+      { $set: { bon_de_commande: `${randompdfFile}.${extension}` } },
+    );
+  }
+
   async getAllDi(paginationConfig: PaginationConfigDi) {
     const { first, rows } = paginationConfig;
     const totalDiCount = await this.diModel.countDocuments().exec();
@@ -157,9 +192,8 @@ export class DiService {
       .find({ isDeleted: false })
       .populate('client_id', 'first_name last_name')
       .populate('createdBy', 'firstName lastName')
-      .populate('location_id', 'location_name')
-      .populate('di_category_id', 'category_Di')
-
+      .populate('location_id', '_id location_name')
+      .populate('di_category_id', '_id category')
       .limit(rows)
       .skip(first)
       .exec();
@@ -176,10 +210,12 @@ export class DiService {
         contain_pdr: di.contain_pdr,
         current_roles: di.current_roles,
         array_composants: di.array_composants,
+        di_category_id: di.di_category_id?.category,
+        location_id: di.location_id?.location_name ?? 'N/A',
         status: di.status,
         image: di.image,
-        client_id: di.client_id?.first_name ?? null,
-        createdBy: `${di.createdBy?.firstName ?? ''} ${
+        client_id: di.client_id?.first_name ?? 'Unknown', // Provide default values if necessary
+        createdBy: `${di.createdBy?.firstName ?? 'Unknown'} ${
           di.createdBy?.lastName ?? ''
         }`,
         // Use optional chaining and nullish coalescing for other properties as well

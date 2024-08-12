@@ -31,7 +31,11 @@ export class DiCategoryResolver {
   }
 
   @Query(() => [DiCategory])
-  async findAllDiCategory(): Promise<[DiCategory]> {
-    return await this.diCategoryService.findAllDiCategorys();
+  async findAllDiCategory(): Promise<DiCategory[]> {
+    try {
+      return await this.diCategoryService.findAllDiCategorys();
+    } catch (error) {
+      throw error;
+    }
   }
 }

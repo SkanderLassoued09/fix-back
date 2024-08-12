@@ -8,7 +8,6 @@ export class DiCategoryDocument extends Document {
   @Prop()
   _id: string;
   @Prop()
-  @IsString()
   category: string;
 }
 export const DiCategorySchema =

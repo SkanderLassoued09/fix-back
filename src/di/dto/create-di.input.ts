@@ -17,6 +17,8 @@ export class CreateDiInput {
   @Field({ nullable: true })
   can_be_repaired: boolean;
   @Field({ nullable: true })
+  location_id: string;
+  @Field({ nullable: true })
   di_category_id: string;
   @Field({ nullable: true })
   contain_pdr: boolean;

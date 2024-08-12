@@ -8,19 +8,14 @@ export class LocationDocument extends Document {
   @Prop()
   _id: string;
   @Prop()
-  @IsString()
   location_name: string;
   @Prop()
-  @IsInt()
   location_number: number;
   @Prop()
-  @IsInt()
   max_capacity: number;
   @Prop()
-  @IsInt()
   current_item_stored: number;
   @Prop()
-  @IsBoolean()
   avaible: boolean;
 }
 export const LocationSchema = SchemaFactory.createForClass(LocationDocument);

@@ -21,10 +21,26 @@ export class DiResolver {
     @Args('createDiInput') createDiInput: CreateDiInput,
     @CurrentUser() profile: Profile,
   ) {
+    console.log('🥓[createDiInput]:', createDiInput);
+
     createDiInput.createdBy = profile._id;
     console.log('🍯[profile._id]:', profile._id);
 
     return this.diService.createDi(createDiInput);
+  }
+
+  @Mutation(() => Di)
+  addDevis(@Args('_id') _id: string, @Args('pdf') pdf: string) {
+    console.log('🎂[_id]:', _id);
+    console.log('🌯[pdf]:', pdf);
+    return this.diService.addDevisPDF(_id, pdf);
+  }
+
+  @Mutation(() => Di)
+  addBC(@Args('_id') _id: string, @Args('pdf') pdf: string) {
+    console.log('🎂[_id]:', _id);
+    console.log('🌯[pdf]:', pdf);
+    return this.diService.addBCPDF(_id, pdf);
   }
 
   @Query(() => DiTableData)

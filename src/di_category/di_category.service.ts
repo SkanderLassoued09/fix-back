@@ -1,4 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateDiCategoryInput } from './dto/create-di_category.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { DiCategory } from './entities/di_category.entity';
@@ -30,6 +34,7 @@ export class DiCategoryService {
 
   // create
   async createDiCategory(category: string): Promise<DiCategory> {
+    console.log('🍰[category]:', category);
     const index = await this.generateDiId();
     let dataCategory = {} as CreateDiCategoryInput;
     dataCategory._id = `DI_C${index}`;
@@ -44,6 +49,7 @@ export class DiCategoryService {
 
   // remove
   async removeDiCategory(_id: string): Promise<Boolean> {
+    console.log('🍪[_id]:', _id);
     return this.DiCategoryModel.deleteOne({ _id })
       .then(() => {
         console.log('Item has been deleted', _id);
@@ -55,14 +61,19 @@ export class DiCategoryService {
       });
   }
 
-  async findAllDiCategorys(): Promise<[DiCategory]> {
-    return await this.DiCategoryModel.find({})
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+  async findAllDiCategorys(): Promise<DiCategory[]> {
+    try {
+      const categories = await this.DiCategoryModel.find({});
+      if (categories.length === 0) {
+        throw new NotFoundException('Unable to find catorgories');
+      }
+      return categories;
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new InternalServerErrorException('Unable to find categories');
+    }
   }
 
   async findOneDiCategory(_id: string): Promise<DiCategory> {
