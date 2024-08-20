@@ -14,7 +14,7 @@ export class CronService {
     private readonly notificationsGateway: NotificationsGateway,
   ) {}
 
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  @Cron(CronExpression.EVERY_5_SECONDS)
   async handleNotOpenedDi() {
     const result = await this.diService.getAllNotOpeneddi();
     if (result.length === 0) {
