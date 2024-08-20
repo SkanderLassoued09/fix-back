@@ -6,7 +6,10 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Composant } from './entities/composant.entity';
 import { Model } from 'mongoose';
-
+import { join } from 'path';
+import * as fs from 'fs';
+import * as randomstring from 'randomstring';
+import { getFileExtension } from 'src/di/shared.files';
 @Injectable()
 export class ComposantService {
   constructor(
@@ -37,6 +40,23 @@ export class ComposantService {
     const index = await this.generateComposantId();
     console.log(index, 'index Composant');
     createComposantInput._id = `Cmp${index}`;
+
+    const extension = getFileExtension(createComposantInput.pdf);
+    const buffer = Buffer.from(
+      createComposantInput.pdf.split(',')[1],
+      'base64',
+    );
+
+    const randompdfFile = randomstring.generate({
+      length: 12,
+      charset: 'alphabetic',
+    });
+    fs.writeFileSync(
+      join(__dirname, `../../docs/${randompdfFile}.${extension}`),
+      buffer,
+    );
+
+    createComposantInput.pdf = `${randompdfFile}.${extension}`;
     return await new this.ComposantModel(createComposantInput)
       .save()
       .then((res) => {
