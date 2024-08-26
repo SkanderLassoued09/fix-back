@@ -117,6 +117,11 @@ export class DiResolver {
     return this.diService.tech_finishReperation(_id, remarque);
   }
 
+  @Mutation(() => Di)
+  changestatusToFinishReparation(@Args('_id') _id: string) {
+    return this.diService.changeStatusTofinsh(_id);
+  }
+
   @Mutation(() => Boolean)
   affectinitialPrice(@Args('_id') _id: string, @Args('price') price: number) {
     const priceaffecting = this.diService.affectinitialPrice(_id, price);

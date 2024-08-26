@@ -489,7 +489,6 @@ export class DiService {
       { _id: _idDI },
       {
         $set: {
-          status: STATUS_DI.Finished.status,
           remarque_tech_repair: remarque,
         },
       },
@@ -497,6 +496,20 @@ export class DiService {
     );
   }
 
+  async changeStatusTofinsh(_id: string) {
+    const result = await this.diModel.findOneAndUpdate(
+      { _id },
+      { $set: { status: STATUS_DI.Finished.status } },
+      { new: true },
+    );
+
+    if (result) {
+      this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
+    }
+
+    console.log('🍥[result]:', result);
+    return result;
+  }
   //Coordiantor sending to the Admins for affecting price
   // PENDING2 => Pricing
   async coordinator_ToPricing(_idDI: string) {
