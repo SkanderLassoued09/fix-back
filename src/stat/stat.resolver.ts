@@ -137,11 +137,6 @@ export class StatResolver {
     return this.statService.getDiForTech(tech._id);
   }
 
-  @Query(() => [Stat])
-  getDiForTechDashboard(@Args('_idtech') _idtech: string) {
-    return this.statService.getDiForTechDashboard(_idtech);
-  }
-
   @Query(() => Stat)
   async getStatbyID(@Args('_idSTAT') _idSTAT: string) {
     return await this.statService.getDIByStat(_idSTAT);
