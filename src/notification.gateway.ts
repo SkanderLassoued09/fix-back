@@ -27,7 +27,7 @@ export class NotificationsGateway
     // this.logger.log(`Client disconnected: ${client.id}`);
   }
 
-  sendReminder(message: string) {
+  sendReminder(message: any) {
     this.server.emit('reminder', message);
   }
 

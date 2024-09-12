@@ -12,11 +12,11 @@ import {
   RemarqueSchema,
 } from 'src/remarque/entities/remarque.entity';
 import { StatService } from 'src/stat/stat.service';
-import { StatModule } from 'src/stat/stat.module';
+
 import { Stat, StatSchema } from 'src/stat/entities/stat.entity';
 import { NotificationsGateway } from 'src/notification.gateway';
 import { ProfileService } from 'src/profile/profile.service';
-import { ProfileModule } from 'src/profile/profile.module';
+
 import { Profile, ProfileSchema } from 'src/profile/entities/profile.entity';
 
 @Module({
