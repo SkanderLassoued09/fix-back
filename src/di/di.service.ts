@@ -694,10 +694,37 @@ export class DiService {
     const totalDiCount = await this.diModel.countDocuments(queryCoordinator);
     const di = await this.diModel
       .find(queryCoordinator)
+      .populate('client_id', 'first_name last_name')
+      .populate('createdBy', 'firstName lastName')
+      .populate('location_id', '_id location_name')
       .limit(rows)
       .skip(first);
 
-    return { di, totalDiCount };
+    const coordDiList = di.map((di) => {
+      return {
+        _id: di._id,
+        title: di.title,
+        description: di.description,
+        ignoreCount: di.ignoreCount,
+        can_be_repaired: di.can_be_repaired,
+        bon_de_commande: di.bon_de_commande,
+        bon_de_livraison: di.bon_de_livraison,
+        contain_pdr: di.contain_pdr,
+        current_roles: di.current_roles,
+        array_composants: di.array_composants,
+        di_category_id: di.di_category_id?.category,
+        location_id: di.location_id?.location_name ?? 'N/A',
+        status: di.status,
+        image: di.image,
+        client_id: di.client_id?.first_name ?? 'Unknown', // Provide default values if necessary
+        createdBy: `${di.createdBy?.firstName ?? 'Unknown'} ${
+          di.createdBy?.lastName ?? ''
+        }`,
+      };
+    });
+
+    console.log('🦐[coordDiList]:', coordDiList);
+    return { di: coordDiList, totalDiCount };
   }
   // Query For Tech
   async getAll_TechDI(tech_id: string) {
