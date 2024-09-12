@@ -48,7 +48,9 @@ export class StatService {
     const profile = await this.profileService.findProlileById(
       result.id_tech_diag,
     );
-    this.notificationGateway.sendNotificationDiag(profile);
+
+    const payload = { profile, stat: result };
+    this.notificationGateway.sendNotificationDiag(payload);
 
     return result;
   }

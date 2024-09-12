@@ -23,14 +23,14 @@ export class CronService {
     this.logger.debug('cron start');
     // this.sendReminder(result);
   }
-  //! reminder
-  // sendReminder(di: any) {
-  //   di.forEach((di) => {
-  //     this.logger.debug(`Sending reminder for DI: ${di.title}`);
-  //     this.notificationsGateway.sendReminder(
-  //       `Sending reminder for DI: ${di.title}`,
-  //     );
-  //   });
-  //   // this.notificationsGateway.sendReminder('Hello from the other side');
-  // }
+
+  sendReminder(di: any) {
+    di.forEach((di) => {
+      this.logger.debug(`Sending reminder for DI: ${di.title}`);
+      this.notificationsGateway.sendReminder(
+        `Sending reminder for DI: ${di.title}`,
+      );
+    });
+    this.notificationsGateway.sendReminder('Hello from the other side');
+  }
 }
