@@ -1030,6 +1030,19 @@ export class DiService {
     );
   }
 
+  async changeToDiagnosticInPause(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      { $set: { status: STATUS_DI.DiagnosticInPause.status } },
+    );
+  }
+  async changeToReparationInPause(_id: string) {
+    return await this.diModel.updateOne(
+      { _id },
+      { $set: { status: STATUS_DI.ReparationInPause.status } },
+    );
+  }
+
   // doc section :
   //   function getFileExtension(base64) {
   //   const metaData = base64.split(',')[0];

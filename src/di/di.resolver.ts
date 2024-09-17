@@ -297,6 +297,27 @@ export class DiResolver {
       return error;
     }
   }
+  //Diagnostique in Pause
+  @Mutation(() => Di)
+  changeToDiagnosticInPause(@Args('_idDI') _idDI: string) {
+    const diDiagnosticPause = this.diService.changeToDiagnosticInPause(_idDI);
+    if (diDiagnosticPause) {
+      return diDiagnosticPause;
+    } else {
+      return error;
+    }
+  }
+
+  //Repair in Pause
+  @Mutation(() => Di)
+  changeToReparationInPause(@Args('_idDI') _idDI: string) {
+    const diRepairPause = this.diService.changeToReparationInPause(_idDI);
+    if (diRepairPause) {
+      return diRepairPause;
+    } else {
+      return error;
+    }
+  }
 
   // ignore
 
