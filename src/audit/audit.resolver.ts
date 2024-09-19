@@ -2,7 +2,6 @@ import { Resolver, Query, Mutation, Args, Int } from '@nestjs/graphql';
 import { AuditService } from './audit.service';
 import { Audit } from './entities/audit.entity';
 import { AuditInput } from './dto/create-audit.input';
-import { UpdateAuditInput } from './dto/update-audit.input';
 
 @Resolver(() => Audit)
 export class AuditResolver {

@@ -10,6 +10,7 @@ import { Model } from 'mongoose';
 import { Di, DiDocument } from 'src/di/entities/di.entity';
 import { NotificationsGateway } from 'src/notification.gateway';
 import { ProfileService } from 'src/profile/profile.service';
+import { STATUS_DI } from 'src/di/di.status';
 @Injectable()
 export class StatService {
   constructor(
@@ -150,5 +151,12 @@ export class StatService {
     );
 
     return this.getInfoStatByIdDi(_id);
+  }
+
+  async changeStatToDiagnosticInPause(_idDi: string) {
+    return await this.StatModel.updateOne(
+      { _idDi },
+      { $set: { status: STATUS_DI.DiagnosticInPause.status } },
+    );
   }
 }

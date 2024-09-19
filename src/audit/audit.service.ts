@@ -8,7 +8,6 @@ import { UpdateAuditInput } from './dto/update-audit.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Audit } from './entities/audit.entity';
 import { Model } from 'mongoose';
-import { NotFoundError } from 'rxjs';
 
 @Injectable()
 export class AuditService {

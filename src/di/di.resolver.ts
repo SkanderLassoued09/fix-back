@@ -11,12 +11,12 @@ import { Profile } from 'src/profile/entities/profile.entity';
 import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 import { error } from 'console';
-import { AuditService } from 'src/audit/audit.service';
+import { StatService } from 'src/stat/stat.service';
 @Resolver(() => Di)
 export class DiResolver {
   constructor(
     private readonly diService: DiService,
-    private readonly auditservice: AuditService,
+    private statService: StatService,
   ) {}
 
   @Mutation(() => Di)
@@ -311,6 +311,7 @@ export class DiResolver {
   @Mutation(() => Di)
   changeToDiagnosticInPause(@Args('_idDI') _idDI: string) {
     const diDiagnosticPause = this.diService.changeToDiagnosticInPause(_idDI);
+    const statDiagnosticPause = this.statService.changeStatToDiagnosticInPause;
     if (diDiagnosticPause) {
       return diDiagnosticPause;
     } else {

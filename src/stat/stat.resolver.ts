@@ -146,4 +146,14 @@ export class StatResolver {
   getInfoStatByIdDi(@Args('_idDi') _idDi: string) {
     return this.statService.getInfoStatByIdDi(_idDi);
   }
+  @Mutation(() => Stat)
+  changeStatToDiagnosticInPause(@Args('_idDI') _idDI: string) {
+    const statDiagnosticPause =
+      this.statService.changeStatToDiagnosticInPause(_idDI);
+    if (statDiagnosticPause) {
+      return statDiagnosticPause;
+    } else {
+      return Error;
+    }
+  }
 }

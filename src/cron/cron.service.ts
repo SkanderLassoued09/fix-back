@@ -28,7 +28,7 @@ export class CronService {
       this.logger.debug('All DI are opned');
     }
     this.logger.debug('cron start');
-    this.sendReminder(result); //REMINDER
+    //this.sendReminder(result); //REMINDER_here
   }
 
   // dont create audit for ticket al ready exists
