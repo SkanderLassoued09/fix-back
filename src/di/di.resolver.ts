@@ -11,9 +11,13 @@ import { Profile } from 'src/profile/entities/profile.entity';
 import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 import { error } from 'console';
+import { AuditService } from 'src/audit/audit.service';
 @Resolver(() => Di)
 export class DiResolver {
-  constructor(private readonly diService: DiService) {}
+  constructor(
+    private readonly diService: DiService,
+    private readonly auditservice: AuditService,
+  ) {}
 
   @Mutation(() => Di)
   @UseGuards(JwtAuthGuard)
@@ -96,6 +100,12 @@ export class DiResolver {
     } else {
       return false;
     }
+  }
+
+  @Mutation(() => Di)
+  async markAsSeen(@Args('_id') _id: string) {
+    // await this.auditservice.markReminderAsSeenForaudit()
+    return this.diService.markAsSeen(_id);
   }
 
   @Mutation(() => Boolean)

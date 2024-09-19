@@ -29,6 +29,21 @@ export class AuditService {
     }
   }
 
+  async markReminderAsSeenForaudit(
+    auditId: string,
+    reminderId: string,
+  ): Promise<Audit> {
+    return this.auditModel
+      .findOneAndUpdate(
+        { _id: auditId, 'reminder.data._id': reminderId }, // Find by audit _id and reminder _id
+        {
+          $set: { 'reminder.data.$.isSeen': true }, // Set isSeen to true for the matching reminder
+        },
+        { new: true }, // Return the updated document
+      )
+      .exec();
+  }
+
   async getRemindernotOpenedTickets() {
     try {
       const result = await this.auditModel
@@ -75,6 +90,10 @@ export class AuditService {
   // Method to find existing reminders by _id
   async findExistingReminders(ids: string[]): Promise<Audit[]> {
     return this.auditModel.find({ 'reminder.data._id': { $in: ids } }).exec();
+  }
+
+  async emptyAudit() {
+    return await this.auditModel.deleteMany({});
   }
   findOne(id: number) {
     return `This action returns a #${id} audit`;

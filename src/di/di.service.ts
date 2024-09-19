@@ -405,6 +405,18 @@ export class DiService {
     return result;
   }
 
+  async markAsSeen(_id: string) {
+    return await this.diModel.findByIdAndUpdate(
+      { _id },
+      {
+        $set: {
+          isOpenedOnce: true,
+        },
+      },
+      { new: true },
+    );
+  }
+
   //Tech closing diagnostic
   async tech_stopDiagnostic(_idDI: string) {
     const result = await this.diModel.updateOne(
