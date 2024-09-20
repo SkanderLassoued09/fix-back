@@ -21,14 +21,14 @@ export class CronService {
     this.auditService.emptyAudit();
   }
 
-  @Cron(CronExpression.EVERY_5_SECONDS)
+  @Cron(CronExpression.EVERY_10_HOURS)
   async handleNotOpenedDi() {
     const result = await this.diService.getAllNotOpeneddi();
     if (result.length === 0) {
       this.logger.debug('All DI are opned');
     }
     this.logger.debug('cron start');
-    //this.sendReminder(result); //REMINDER_here
+    // this.sendReminder(result); REMINDER
   }
 
   // dont create audit for ticket al ready exists

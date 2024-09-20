@@ -23,8 +23,11 @@ export class AuditResolver {
   }
 
   @Mutation(() => Audit)
-  markReminderAsSeen(@Args('_id') _id: string) {
-    return this.auditService.markReminderAsSeen(_id);
+  markReminderAsSeen(
+    @Args('auditId') auditId: string,
+    @Args('reminderId') reminderId: string,
+  ) {
+    return this.auditService.markReminderAsSeenForaudit(auditId, reminderId);
   }
 
   @Mutation(() => Audit)

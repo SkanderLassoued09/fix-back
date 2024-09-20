@@ -185,6 +185,44 @@ export class DiService {
     );
   }
 
+  async addPDFFile(_id: string, facture: string, bl: string) {
+    // facture
+    const extension = getFileExtension(facture);
+    const buffer = Buffer.from(facture.split(',')[1], 'base64');
+
+    const randompdfFile = randomstring.generate({
+      length: 12,
+      charset: 'alphabetic',
+    });
+    fs.writeFileSync(
+      join(__dirname, `../../docs/${randompdfFile}.${extension}`),
+      buffer,
+    );
+    //  bl
+    const extensionbl = getFileExtension(bl);
+    const bufferbl = Buffer.from(facture.split(',')[1], 'base64');
+
+    const randompdfFilebl = randomstring.generate({
+      length: 12,
+      charset: 'alphabetic',
+    });
+    fs.writeFileSync(
+      join(__dirname, `../../docs/${randompdfFilebl}.${extensionbl}`),
+      bufferbl,
+    );
+
+    //  save
+    return await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          facture: `${randompdfFile}.${extension}`,
+          bon_de_livraison: `${randompdfFilebl}.${extensionbl}`,
+        },
+      },
+    );
+  }
+
   async getAllDi(paginationConfig: PaginationConfigDi) {
     const { first, rows } = paginationConfig;
     const totalDiCount = await this.diModel.countDocuments().exec();

@@ -14,10 +14,7 @@ import { error } from 'console';
 import { StatService } from 'src/stat/stat.service';
 @Resolver(() => Di)
 export class DiResolver {
-  constructor(
-    private readonly diService: DiService,
-    private statService: StatService,
-  ) {}
+  constructor(private readonly diService: DiService) {}
 
   @Mutation(() => Di)
   @UseGuards(JwtAuthGuard)
@@ -89,6 +86,16 @@ export class DiResolver {
   manager_Pending1(@Args('_id') _id: string) {
     return this.diService.manager_Pending1(_id);
   }
+
+  @Mutation(() => Di)
+  addPDFFile(
+    @Args('_id') _id: string,
+    @Args('facture') facture: string,
+    @Args('bl') bl: string,
+  ) {
+    console.log('🥦');
+    return this.diService.addPDFFile(_id, facture, bl);
+  }
   @Mutation(() => Boolean)
   tech_startDiagnostic(
     @Args('_id') _id: string,
@@ -104,7 +111,6 @@ export class DiResolver {
 
   @Mutation(() => Di)
   async markAsSeen(@Args('_id') _id: string) {
-    // await this.auditservice.markReminderAsSeenForaudit()
     return this.diService.markAsSeen(_id);
   }
 
