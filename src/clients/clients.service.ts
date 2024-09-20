@@ -21,23 +21,18 @@ export class ClientsService {
     );
 
     if (lastClient) {
-      console.log('is entered');
       indexClient = +lastClient._id.substring(1);
-      console.log(indexClient, '== index');
       return indexClient + 1;
     }
-    console.log(lastClient, 'lastClient');
     return indexClient;
   }
 
   async createClient(createClientInput: CreateClientInput): Promise<Client> {
     const index = await this.generateClientId();
-    console.log(index, 'index Client');
     createClientInput._id = `C${index}`;
     return await new this.ClientModel(createClientInput)
       .save()
       .then((res) => {
-        console.log(res, 'Client');
         return res;
       })
       .catch((err) => {
@@ -48,11 +43,9 @@ export class ClientsService {
   async removeClient(_id: string): Promise<Boolean> {
     return await this.ClientModel.deleteOne({ _id })
       .then(() => {
-        console.log('Item has been deleted', _id);
         return true;
       })
       .catch(() => {
-        console.log('Errur with item', _id);
         return false;
       });
   }
@@ -65,10 +58,7 @@ export class ClientsService {
       .limit(rows)
       .skip(first)
       .exec();
-    console.log('🍋[clientRecords]:', clientRecords);
-
     const totalClientRecord = await this.ClientModel.countDocuments().exec();
-    console.log('🍮[clientRecords]:', clientRecords);
     return { clientRecords, totalClientRecord };
   }
 

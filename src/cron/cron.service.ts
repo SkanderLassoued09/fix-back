@@ -43,8 +43,6 @@ export class CronService {
     });
 
     // Log the transformed data
-    console.log('🍷[dataToSend]:', dataToSend);
-
     // Prepare the input data for the service call
     const createAuditInput = {
       reminder: {
@@ -57,10 +55,7 @@ export class CronService {
       return [el._id];
     });
 
-    console.log('🍤[ids]:', ids);
     const isExist = await this.auditService.findExistingReminders(ids);
-    console.log('🥦[isExist]:', isExist);
-
     if (isExist.length === 0) {
       // Call the create method in the audit service
       const reminder = await this.auditService.create(createAuditInput);
@@ -72,6 +67,5 @@ export class CronService {
         });
       }
     }
-    console.log('🎂 not create');
   }
 }

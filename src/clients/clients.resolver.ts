@@ -55,7 +55,6 @@ export class ClientsResolver {
   async findAllClient(
     @Args('PaginationConfig') paginationConfig: PaginationConfig,
   ): Promise<ClientTableData> {
-    console.log('🥝[paginationConfig]:', paginationConfig);
     return await this.clientsService.findAllClients(paginationConfig);
   }
 }

@@ -61,7 +61,6 @@ export class StatService {
   }
 
   async deleteStat(_id: string) {
-    console.log('🍆[_id]:', _id);
     const result = await this.StatModel.deleteOne({ _idDi: _id });
     if (result.deletedCount === 0) {
       throw new NotFoundException(
@@ -69,7 +68,6 @@ export class StatService {
       );
     }
 
-    console.log('🍎 success');
     return result;
   }
 
@@ -85,7 +83,6 @@ export class StatService {
   }
 
   async getDiForTech(_idtech) {
-    console.log('🍭[_idtech]:', _idtech);
     return await this.StatModel.find({
       $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }],
     });
@@ -139,8 +136,6 @@ export class StatService {
 
   // update status
   async updateStatus(_id: string, status: string) {
-    console.log('🍖[status]:', status);
-    console.log('🌶[_id]:', _id);
     const result = await this.StatModel.updateOne(
       { _idDi: _id },
       {

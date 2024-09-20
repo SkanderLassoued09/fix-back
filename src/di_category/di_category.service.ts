@@ -34,29 +34,22 @@ export class DiCategoryService {
 
   // create
   async createDiCategory(category: string): Promise<DiCategory> {
-    console.log('🍰[category]:', category);
     const index = await this.generateDiId();
     let dataCategory = {} as CreateDiCategoryInput;
     dataCategory._id = `DI_C${index}`;
     dataCategory.category = category;
 
-    console.log('🥚[dataCategory]:', dataCategory);
-
     const result = await new this.DiCategoryModel(dataCategory).save();
-    console.log('🍖[result]:', result);
     return result;
   }
 
   // remove
   async removeDiCategory(_id: string): Promise<Boolean> {
-    console.log('🍪[_id]:', _id);
     return this.DiCategoryModel.deleteOne({ _id })
       .then(() => {
-        console.log('Item has been deleted', _id);
         return true;
       })
       .catch(() => {
-        console.log('Errur with item', _id);
         return false;
       });
   }

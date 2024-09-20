@@ -21,12 +21,9 @@ export class CompanysService {
     );
 
     if (lastCompany) {
-      console.log('is entered');
       indexCompany = +lastCompany._id.substring(1);
-      console.log(indexCompany, '== index');
       return indexCompany + 1;
     }
-    console.log(lastCompany, 'lastCompany');
     return indexCompany;
   }
 
@@ -34,12 +31,10 @@ export class CompanysService {
     createCompanyInput: CreateCompanyInput,
   ): Promise<Company> {
     const index = await this.generateCompanyId();
-    console.log(index, 'index Company');
     createCompanyInput._id = `S${index}`; //Societe
     return await new this.CompanyModel(createCompanyInput)
       .save()
       .then((res) => {
-        console.log(res, 'Company');
         return res;
       })
       .catch((err) => {
@@ -53,11 +48,9 @@ it should be soft delete ya nezih change it
   async removeCompany(_id: string): Promise<Boolean> {
     return this.CompanyModel.deleteOne({ _id })
       .then(() => {
-        console.log('Item has been deleted', _id);
         return true;
       })
       .catch(() => {
-        console.log('Errur with item', _id);
         return false;
       });
   }

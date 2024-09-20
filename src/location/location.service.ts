@@ -19,12 +19,9 @@ export class LocationService {
     );
 
     if (lastLocation) {
-      console.log('is entered');
       indexLocation = +lastLocation._id.substring(1);
-      console.log(indexLocation, '== index');
       return indexLocation + 1;
     }
-    console.log(lastLocation, 'lastLocation');
     return indexLocation;
   }
 
@@ -32,12 +29,10 @@ export class LocationService {
     createLocationInput: CreateLocationInput,
   ): Promise<Location> {
     const index = await this.generateLocationId();
-    console.log(index, 'index location');
     createLocationInput._id = `E${index}`; // E => Emplacement
     return await new this.LocationModel(createLocationInput)
       .save()
       .then((res) => {
-        console.log(res, 'location');
         return res;
       })
       .catch((err) => {
@@ -48,11 +43,9 @@ export class LocationService {
   async removeLocation(_id: string): Promise<Boolean> {
     return this.LocationModel.deleteOne({ _id })
       .then(() => {
-        console.log('Item has been deleted', _id);
         return true;
       })
       .catch(() => {
-        console.log('Errur with item', _id);
         return false;
       });
   }

@@ -43,7 +43,7 @@ export class ProfileService {
         return res;
       })
       .catch((err) => {
-        // console.log('err');
+        //
       });
   }
   // for listing profiles pagination
@@ -56,7 +56,7 @@ export class ProfileService {
       .limit(rows)
       .skip(first)
       .exec();
-    console.log('🥒', profileRecord);
+
     return { profileRecord, totalProfileCount };
   }
 
@@ -64,11 +64,11 @@ export class ProfileService {
     return await this.profileModel
       .findOne({ username })
       .then((res) => {
-        // console.log('find one auth ', res);
+        //
         return res;
       })
       .catch((err) => {
-        // console.log('Err find one auth', err);
+        //
         return err;
       });
   }
@@ -112,11 +112,11 @@ export class ProfileService {
   //     },
   //   ])
   //   .then((res) => {
-  //     // console.log('join ticket tech', res);
+  //     //
   //     return res;
   //   })
   //   .catch((err) => {
-  //     // console.log(err, 'err');
+  //     //
   //     return err;
   //   });
   // }
@@ -164,11 +164,11 @@ export class ProfileService {
         },
       ])
       .then((res) => {
-        // console.log(res, 'res');
+        //
         return res;
       })
       .catch((err) => {
-        // console.log(err, 'err');
+        //
         return err;
       });
   }
@@ -279,11 +279,11 @@ export class ProfileService {
         { new: true }, // Return the updated document
       )
       .then((res) => {
-        // console.log('profile update', res);
+        //
         return res;
       })
       .catch((err) => {
-        // console.log('err', err);
+        //
         return err;
       });
   }

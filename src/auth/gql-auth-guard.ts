@@ -16,7 +16,6 @@ export class GqlAuthGuard extends AuthGuard('local') {
     const ctx = GqlExecutionContext.create(context);
     const request = ctx.getContext().req;
     request.body = ctx.getArgs().loginAuthInput;
-    console.log(request.body, 'request.body');
     if (!request) {
       throw new UnauthorizedException('You are not allowed');
     }

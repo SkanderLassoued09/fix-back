@@ -114,3 +114,14 @@ export class DiagUpdate {
   @Field(() => [ComposantStructureInput], { nullable: true })
   array_composants: ComposantStructureInput[];
 }
+
+@InputType()
+export class UpdateDi {
+  @Field()
+  _id: string;
+
+  @Field()
+  title: string;
+  @Field()
+  description: string;
+}

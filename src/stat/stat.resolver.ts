@@ -24,7 +24,6 @@ export class StatResolver {
   ) {}
   @Mutation(() => CreateStatNotificationReturn)
   createStat(@Args('createStatInput') createStatInput: CreateStatInput) {
-    console.log('🥘[createStatInput]:', createStatInput);
     this.pubsub.publish('you-got-notification-diagnostic', {
       notificationDiagnostic: {
         _idDi: createStatInput._idDi,

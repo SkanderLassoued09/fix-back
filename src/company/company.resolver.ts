@@ -42,7 +42,6 @@ export class CompanysResolver {
   async findAllCompany(
     @Args('PaginationConfig') paginationConfig: PaginationConfig,
   ): Promise<CompanyTableData> {
-    console.log('🍆[paginationConfig]:', paginationConfig);
     return await this.companysService.findAllCompanys(paginationConfig);
   }
 

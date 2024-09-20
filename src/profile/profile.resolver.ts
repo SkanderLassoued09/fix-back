@@ -36,7 +36,7 @@ export class ProfileResolver {
   @Query(() => TokenData)
   @UseGuards(JwtAuthGuard)
   getTokenData(@CurrentUser() profile: TokenData) {
-    // console.log(profile);
+    //
     if (profile !== null) {
       return profile;
     }
@@ -61,7 +61,6 @@ export class ProfileResolver {
   async getAllProfiles(
     @Args('paginationConfig') paginationConfig: PaginationConfigProfile,
   ) {
-    console.log('🍦[paginationConfig]:', paginationConfig);
     return await this.profileService.getAllProfile(paginationConfig);
   }
 
@@ -72,7 +71,7 @@ export class ProfileResolver {
 
   sumTimes(times: string[]): string {
     if (!Array.isArray(times)) {
-      // console.log('');
+      //
       return '00:00:00';
     }
     if (times.length === 0) {
@@ -98,7 +97,7 @@ export class ProfileResolver {
 
   avgTime(times: string[]): string {
     if (!Array.isArray(times)) {
-      // console.log('Input is not array');
+      //
       return '00:00:00';
     }
     if (times.length === 0) {
@@ -161,7 +160,6 @@ export class ProfileResolver {
       }
     });
 
-    console.log('combinedData', combinedData);
     return combinedData;
   }
 

@@ -5,6 +5,7 @@ import {
   CreateDiInput,
   DiagUpdate,
   PaginationConfigDi,
+  UpdateDi,
 } from './dto/create-di.input';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
 import { Profile } from 'src/profile/entities/profile.entity';
@@ -14,7 +15,10 @@ import { error } from 'console';
 import { StatService } from 'src/stat/stat.service';
 @Resolver(() => Di)
 export class DiResolver {
-  constructor(private readonly diService: DiService) {}
+  constructor(
+    private readonly diService: DiService,
+    private readonly statService: StatService,
+  ) {}
 
   @Mutation(() => Di)
   @UseGuards(JwtAuthGuard)
@@ -22,25 +26,17 @@ export class DiResolver {
     @Args('createDiInput') createDiInput: CreateDiInput,
     @CurrentUser() profile: Profile,
   ) {
-    console.log('🥓[createDiInput]:', createDiInput);
-
     createDiInput.createdBy = profile._id;
-    console.log('🍯[profile._id]:', profile._id);
-
     return this.diService.createDi(createDiInput);
   }
 
   @Mutation(() => Di)
   addDevis(@Args('_id') _id: string, @Args('pdf') pdf: string) {
-    console.log('🎂[_id]:', _id);
-    console.log('🌯[pdf]:', pdf);
     return this.diService.addDevisPDF(_id, pdf);
   }
 
   @Mutation(() => Di)
   addBC(@Args('_id') _id: string, @Args('pdf') pdf: string) {
-    console.log('🎂[_id]:', _id);
-    console.log('🌯[pdf]:', pdf);
     return this.diService.addBCPDF(_id, pdf);
   }
 
@@ -48,7 +44,6 @@ export class DiResolver {
   async getAllDi(
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
   ) {
-    console.log('🍦[paginationConfig]:', paginationConfig);
     return await this.diService.getAllDi(paginationConfig);
   }
 
@@ -62,6 +57,11 @@ export class DiResolver {
     return await this.diService.deleteDi(_id);
   }
 
+  @Mutation(() => Di)
+  async updateDi(@Args('UpdateDi') updateDi: UpdateDi) {
+    return await this.diService.updateDi(updateDi);
+  }
+
   @Query(() => Di)
   getAllRemarque(@Args('_id') _id: string) {
     return this.diService.getAllRemarque(_id);
@@ -71,14 +71,12 @@ export class DiResolver {
   async get_coordinatorDI(
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
   ) {
-    console.log('🍦[paginationConfig]:', paginationConfig);
     return await this.diService.get_coordinatorDI(paginationConfig);
   }
   @Query(() => DiTableData)
   async getDiForMagasin(
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
   ) {
-    console.log('🍦[paginationConfig]:', paginationConfig);
     return await this.diService.getDiForMagasin(paginationConfig);
   }
 
@@ -93,7 +91,6 @@ export class DiResolver {
     @Args('facture') facture: string,
     @Args('bl') bl: string,
   ) {
-    console.log('🥦');
     return this.diService.addPDFFile(_id, facture, bl);
   }
   @Mutation(() => Boolean)
@@ -129,7 +126,6 @@ export class DiResolver {
     @Args('_id') _id: string,
     @Args('remarque') remarque: string,
   ) {
-    console.log('🍝');
     return this.diService.tech_finishReperation(_id, remarque);
   }
 
@@ -175,7 +171,6 @@ export class DiResolver {
       price,
       final_price,
     );
-    console.log(mut, 'mutation from resolver');
     return mut;
   }
 
@@ -340,7 +335,6 @@ export class DiResolver {
 
   @Mutation(() => Di)
   countIgnore(@Args('_idDI') _idDI: string) {
-    console.log('🌰[_idDI]:', _idDI);
     return this.diService.countIgnore(_idDI);
   }
 

@@ -20,12 +20,9 @@ export class Composant_CategoryService {
     );
 
     if (lastComposant_Category) {
-      console.log('is entered');
       indexComposant_Category = +lastComposant_Category._id.substring(1);
-      console.log(indexComposant_Category, '== index');
       return indexComposant_Category + 1;
     }
-    console.log(lastComposant_Category, 'lastComposant_Category');
     return indexComposant_Category;
   }
 
@@ -33,12 +30,10 @@ export class Composant_CategoryService {
     createComposant_CategoryInput: CreateComposant_CategoryInput,
   ): Promise<Composant_Category> {
     const index = await this.generateComposant_CategoryId();
-    console.log(index, 'index Composant_Category');
     createComposant_CategoryInput._id = `C_Composant ${index}`;
     return await new this.Composant_CategoryModel(createComposant_CategoryInput)
       .save()
       .then((res) => {
-        console.log(res, 'Composant_Category');
         return res;
       })
       .catch((err) => {
@@ -49,11 +44,9 @@ export class Composant_CategoryService {
   async removeComposant_Category(_id: string): Promise<Boolean> {
     return this.Composant_CategoryModel.deleteOne({ _id })
       .then(() => {
-        console.log('Item has been deleted', _id);
         return true;
       })
       .catch(() => {
-        console.log('Errur with item', _id);
         return false;
       });
   }

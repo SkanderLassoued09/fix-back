@@ -9,6 +9,7 @@ import {
   CreateDiInput,
   DiagUpdate,
   PaginationConfigDi,
+  UpdateDi,
 } from './dto/create-di.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Di, DiDocument, UpdateNego } from './entities/di.entity';
@@ -56,20 +57,15 @@ export class DiService {
     );
 
     if (lastDi) {
-      console.log('is entered');
       indexDi = +lastDi._id.substring(2);
-      console.log(indexDi, '== index');
       return indexDi + 1;
     }
-    console.log(lastDi, 'lastDi');
     return indexDi;
   }
   async createDi(createDiInput: CreateDiInput): Promise<Di> {
     // --
     // the same code
-    console.log(createDiInput.image, 'add service');
     const extension = getFileExtension(createDiInput.image);
-    console.log(createDiInput.image, 'bufferr11');
     const buffer = Buffer.from(createDiInput.image.split(',')[1], 'base64');
     const randompdfFile = randomstring.generate({
       length: 12,
@@ -88,7 +84,6 @@ export class DiService {
     return await new this.diModel(createDiInput)
       .save()
       .then((res) => {
-        console.log(res, 'Di');
         return res;
       })
       .catch((err) => {
@@ -140,9 +135,7 @@ export class DiService {
     if (result.matchedCount === 0) {
       throw new NotFoundException(`Unable to delete DI ${_id}`);
     }
-    console.log('🥪');
     await this.statsService.deleteStat(_id);
-    console.log('🍒');
     return await this.findbyId(_id);
   }
 
@@ -183,6 +176,17 @@ export class DiService {
       { _id },
       { $set: { bon_de_commande: `${randompdfFile}.${extension}` } },
     );
+  }
+
+  async updateDi(updateDi: UpdateDi) {
+    const { _id, ...rest } = updateDi;
+    const update = await this.diModel.findOneAndUpdate(
+      { _id },
+      { $set: { ...rest } },
+      { new: true },
+    );
+
+    return update;
   }
 
   async addPDFFile(_id: string, facture: string, bl: string) {
@@ -235,7 +239,6 @@ export class DiService {
       .limit(rows)
       .skip(first)
       .exec();
-    console.log('🍊[diRecords]:', diRecords);
     const di = diRecords.map((di) => {
       let obj = {
         _id: di._id,
@@ -245,6 +248,7 @@ export class DiService {
         can_be_repaired: di.can_be_repaired,
         bon_de_commande: di.bon_de_commande,
         bon_de_livraison: di.bon_de_livraison,
+        facture: di.facture,
         contain_pdr: di.contain_pdr,
         current_roles: di.current_roles,
         array_composants: di.array_composants,
@@ -261,7 +265,6 @@ export class DiService {
       return obj;
     });
 
-    console.log('🥘', di);
     return { di, totalDiCount };
   }
 
@@ -532,9 +535,6 @@ export class DiService {
   }
   //Tech finsih Reperation
   async tech_finishReperation(_idDI: string, remarque: string) {
-    console.log('🍗 fired');
-    console.log('_idDI', _idDI);
-    console.log('remarque', remarque);
     return await this.diModel.findOneAndUpdate(
       { _id: _idDI },
       {
@@ -557,7 +557,6 @@ export class DiService {
       this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
     }
 
-    console.log('🍥[result]:', result);
     return result;
   }
   //Coordiantor sending to the Admins for affecting price
@@ -773,7 +772,6 @@ export class DiService {
       };
     });
 
-    console.log('🦐[coordDiList]:', coordDiList);
     return { di: coordDiList, totalDiCount };
   }
   // Query For Tech
@@ -830,7 +828,6 @@ export class DiService {
     if (ignoreCount < 3) {
       ignoreCount++;
     }
-    console.log('🥘[ignoreCount]:', ignoreCount);
     const isignore = await this.diModel.updateOne(
       { _id },
       {
@@ -841,7 +838,6 @@ export class DiService {
     );
 
     if (isignore.matchedCount === 0) {
-      console.log('not found doc');
     }
 
     const v = await this.diModel.findOne({ _id });
@@ -885,7 +881,6 @@ export class DiService {
   }
 
   async changeStatusInMagasin(_id: string) {
-    console.log('🍩[_id]:', _id);
     const result = await this.diModel.updateOne(
       { _id },
       {
@@ -990,7 +985,6 @@ export class DiService {
   }
 
   async changeStatusRepaire(_id: string) {
-    console.log('🍦[_id]:', _id);
     const result = await this.diModel.updateOne(
       { _id },
       {
@@ -1102,10 +1096,8 @@ export class DiService {
   // }
 
   // async create(createTicketInput: CreateTicketInput) {
-  //   console.log(createTicketInput, 'add service');
-  //   const extension = getFileExtension(createTicketInput.image);
-  //   console.log(createTicketInput.image, 'bufferr11');
-  //   const buffer = Buffer.from(createTicketInput.image.split(',')[1], 'base64');
+  //         //   const extension = getFileExtension(createTicketInput.image);
+  //         //   const buffer = Buffer.from(createTicketInput.image.split(',')[1], 'base64');
   //   const randompdfFile = randomstring.generate({
   //     length: 12,
   //     charset: 'alphabetic',
@@ -1115,20 +1107,15 @@ export class DiService {
   //     buffer,
   //   );
   //   const index = await this.generateClientId();
-  //   console.log('index ticket', index);
-  //   createTicketInput._id = `T${index}`;
-  //   console.log(createTicketInput._id, 'for saving');
-  //   createTicketInput.image = `${randompdfFile}.${extension}`;
-  //   console.log(createTicketInput.image, 'image');
-  //   return await new this.ticketModel(createTicketInput)
+  //         //   createTicketInput._id = `T${index}`;
+  //         //   createTicketInput.image = `${randompdfFile}.${extension}`;
+  //         //   return await new this.ticketModel(createTicketInput)
   //     .save()
   //     .then((res) => {
-  //       console.log(res, 'ticket added');
-  //       return res;
+  //             //       return res;
   //     })
   //     .catch((err) => {
-  //       console.log(err, 'ticket error');
-  //       return err;
+  //             //       return err;
   //     });
   // }
   // HTML
@@ -1150,11 +1137,9 @@ export class DiService {
   //     reader.readAsDataURL(file);
 
   //     reader.onload = (event) => {
-  //       console.log(event, 'event onload');
-  //       this.imageStr = reader.result;
+  //             //       this.imageStr = reader.result;
   //     };
   //   }
 
-  //   console.log(this.imageStr, 'pdf str');
-  // }
+  //         // }
 }

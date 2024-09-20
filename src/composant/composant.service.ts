@@ -25,12 +25,9 @@ export class ComposantService {
     );
 
     if (lastComposant) {
-      console.log('is entered');
       indexComposant = +lastComposant._id.substring(3);
-      console.log(indexComposant, '== index');
       return indexComposant + 1;
     }
-    console.log(lastComposant, 'lastComposant');
     return indexComposant;
   }
 
@@ -38,7 +35,6 @@ export class ComposantService {
     createComposantInput: CreateComposantInput,
   ): Promise<Composant> {
     const index = await this.generateComposantId();
-    console.log(index, 'index Composant');
     createComposantInput._id = `Cmp${index}`;
 
     const extension = getFileExtension(createComposantInput.pdf);
@@ -60,7 +56,6 @@ export class ComposantService {
     return await new this.ComposantModel(createComposantInput)
       .save()
       .then((res) => {
-        console.log(res, 'Composant');
         return res;
       })
       .catch((err) => {
@@ -71,11 +66,9 @@ export class ComposantService {
   async removeComposant(_id: string): Promise<Boolean> {
     return this.ComposantModel.deleteOne({ _id })
       .then(() => {
-        console.log('Item has been deleted', _id);
         return true;
       })
       .catch(() => {
-        console.log('Errur with item', _id);
         return false;
       });
   }
