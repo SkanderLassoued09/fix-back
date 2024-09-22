@@ -13,6 +13,6 @@ export class AuthResolver {
   @UseGuards(GqlAuthGuard)
   async login(@Args('loginAuthInput') loginAuthInput: LoginAuthInput) {
     let data = await this.authService.login(loginAuthInput);
-    //         return data;
+    return data;
   }
 }
