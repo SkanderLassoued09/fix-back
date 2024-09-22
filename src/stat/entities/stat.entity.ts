@@ -1,6 +1,7 @@
 import { ObjectType, Field, Int } from '@nestjs/graphql';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
+import { LocationDocument } from 'src/location/entities/location.entity';
 
 @Schema({ timestamps: true, autoIndex: false })
 export class StatDocument extends Document {
@@ -18,6 +19,9 @@ export class StatDocument extends Document {
   rep_time: string;
   @Prop()
   status: string;
+  @Prop({ type: String, ref: 'Location' })
+  // belongs to which location
+  location_id: LocationDocument;
   @Prop()
   id_tech_retour: string[];
   @Prop({ type: Date })
@@ -56,6 +60,8 @@ export class Stat {
   id_tech_retour: string;
   @Field({ nullable: true })
   retour_time: string;
+  @Field({ nullable: true })
+  location_id: string;
   @Field({ nullable: true })
   status: string;
   @Field({ nullable: true })

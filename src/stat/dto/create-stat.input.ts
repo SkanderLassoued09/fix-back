@@ -19,6 +19,8 @@ export class CreateStatInput {
   @Field(() => Int, { defaultValue: 0, nullable: true })
   retour_count: number;
   @Field({ nullable: true })
+  location_id: string;
+  @Field({ nullable: true })
   status: string;
   @Field({ nullable: true })
   _idDi: string;
