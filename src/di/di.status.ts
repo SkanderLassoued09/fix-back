@@ -75,7 +75,7 @@ export const STATUS_DI = {
     status: 'REPARATION',
     description: 'Waiting for Repair',
     role: ['Tech'],
-    future_status: ['ReparationInPause'],
+    future_status: ['REPARATION_Pause'],
   },
   ReparationInPause: {
     status: 'REPARATION_Pause',
