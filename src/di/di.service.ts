@@ -1075,11 +1075,26 @@ export class DiService {
   }
 
   async changeToDiagnosticInPause(_id: string) {
-    return await this.diModel.updateOne(
+    console.log('🍣[_id]:', _id);
+
+    const stat = await this.statsService.changeStatToDiagnosticInPause(_id);
+
+    if (!stat) {
+      throw new InternalServerErrorException(
+        'error while changing status stat',
+      );
+    }
+
+    const diStatus = await this.diModel.findOneAndUpdate(
       { _id },
       { $set: { status: STATUS_DI.DiagnosticInPause.status } },
+      { new: true },
     );
+
+    console.log('🍿[diStatus]:', diStatus);
+    return diStatus;
   }
+
   async changeToReparationInPause(_id: string) {
     return await this.diModel.updateOne(
       { _id },

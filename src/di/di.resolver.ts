@@ -311,13 +311,8 @@ export class DiResolver {
   //Diagnostique in Pause
   @Mutation(() => Di)
   changeToDiagnosticInPause(@Args('_idDI') _idDI: string) {
-    const diDiagnosticPause = this.diService.changeToDiagnosticInPause(_idDI);
-    const statDiagnosticPause = this.statService.changeStatToDiagnosticInPause;
-    if (diDiagnosticPause) {
-      return diDiagnosticPause;
-    } else {
-      return error;
-    }
+    console.log('🍭[_idDI]:', _idDI);
+    return this.diService.changeToDiagnosticInPause(_idDI);
   }
 
   //Repair in Pause

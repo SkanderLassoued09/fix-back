@@ -32,6 +32,13 @@ export class StatDocument extends Document {
 export const StatSchema = SchemaFactory.createForClass(StatDocument);
 
 @ObjectType()
+export class StatsCount {
+  @Field()
+  status: string;
+  @Field()
+  count: number;
+}
+@ObjectType()
 export class Stat {
   @Field()
   _id: string;

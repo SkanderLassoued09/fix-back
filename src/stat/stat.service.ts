@@ -7,7 +7,6 @@ import { CreateStatInput } from './dto/create-stat.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Stat } from './entities/stat.entity';
 import { Model } from 'mongoose';
-import { Di, DiDocument } from 'src/di/entities/di.entity';
 import { NotificationsGateway } from 'src/notification.gateway';
 import { ProfileService } from 'src/profile/profile.service';
 import { STATUS_DI } from 'src/di/di.status';
@@ -82,12 +81,76 @@ export class StatService {
     );
   }
 
-  async getDiForTech(_idtech) {
-    return await this.StatModel.find({
-      $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }],
-    });
+  // Fiter tech data
+
+  async getDiStatusCounts(_idtech: string, startDate?: Date, endDate?: Date) {
+    console.log('🍶[endDate]:', endDate);
+    console.log('🌰[startDate]:', startDate);
+    // Build the date filter if both startDate and endDate are provided
+    const dateFilter =
+      startDate && endDate
+        ? {
+            createdAt: {
+              $gte: startDate,
+              $lte: endDate,
+            },
+          }
+        : {};
+
+    const result = await this.StatModel.aggregate([
+      {
+        // Filter documents by technician's ID and date range if provided
+        $match: {
+          $and: [
+            {
+              $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }],
+            },
+            dateFilter, // Apply date filter if provided
+          ],
+        },
+      },
+      {
+        // Group by the 'status' field and count occurrences
+        $group: {
+          _id: '$status', // Group by 'status' field
+          count: { $sum: 1 }, // Count occurrences
+        },
+      },
+
+      {
+        // Reshape the result to have the desired { status: string, count: number } format
+        $project: {
+          _id: 0, // Exclude the _id field
+          status: '$_id', // Use _id as the status field
+          count: 1, // Include the count field as-is
+        },
+      },
+    ]);
+
+    console.log('🦀[result]:', result);
+    return result;
   }
 
+  async getDiForTech(_idtech: string, startDate?: Date, endDate?: Date) {
+    // Building the date filter if both startDate and endDate are provided
+    const dateFilter =
+      startDate && endDate
+        ? {
+            createdAt: {
+              $gte: startDate,
+              $lte: endDate,
+            },
+          }
+        : {};
+
+    // Querying with the date filter and technician IDs
+    return await this.StatModel.find({
+      $and: [
+        { $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }] },
+        dateFilter, // Applying the date filter if provided
+      ],
+    });
+  }
   async lapTime(_id: string, diag_time: string) {
     return await this.StatModel.updateOne(
       { _id },
@@ -149,9 +212,18 @@ export class StatService {
   }
 
   async changeStatToDiagnosticInPause(_idDi: string) {
-    return await this.StatModel.updateOne(
+    console.log('🦑[_idDi]:', _idDi);
+
+    const stat = await this.StatModel.findOneAndUpdate(
       { _idDi },
       { $set: { status: STATUS_DI.DiagnosticInPause.status } },
+      { new: true },
     );
+
+    if (!stat) {
+      throw new InternalServerErrorException('Error in update state in pause ');
+    }
+
+    return stat;
   }
 }

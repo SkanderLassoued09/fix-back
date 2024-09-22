@@ -7,7 +7,11 @@ import {
   Subscription,
 } from '@nestjs/graphql';
 import { StatService } from './stat.service';
-import { CreateStatNotificationReturn, Stat } from './entities/stat.entity';
+import {
+  CreateStatNotificationReturn,
+  Stat,
+  StatsCount,
+} from './entities/stat.entity';
 import { CreateStatInput } from './dto/create-stat.input';
 import { UpdateStatInput } from './dto/update-stat.input';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
@@ -132,8 +136,30 @@ export class StatResolver {
 
   @Query(() => [Stat])
   @UseGuards(JwtAuthGuard)
-  getDiForTech(@CurrentUser() tech: Profile) {
-    return this.statService.getDiForTech(tech._id);
+  getDiForTech(
+    @CurrentUser() tech: Profile,
+    @Args('startDate', { nullable: true }) startDate?: string,
+    @Args('endDate', { nullable: true }) endDate?: string,
+  ) {
+    // Convert the date strings to JavaScript Date objects if provided
+    const start = startDate ? new Date(startDate) : undefined;
+    const end = endDate ? new Date(endDate) : undefined;
+
+    return this.statService.getDiForTech(tech._id, start, end);
+  }
+
+  @Query(() => [StatsCount])
+  @UseGuards(JwtAuthGuard)
+  getDiStatusCounts(
+    @CurrentUser() tech: Profile,
+    @Args('startDate', { nullable: true }) startDate?: string,
+    @Args('endDate', { nullable: true }) endDate?: string,
+  ) {
+    // Convert the date strings to JavaScript Date objects if provided
+    const start = startDate ? new Date(startDate) : undefined;
+    const end = endDate ? new Date(endDate) : undefined;
+
+    return this.statService.getDiStatusCounts(tech._id, start, end);
   }
 
   @Query(() => Stat)
@@ -144,15 +170,5 @@ export class StatResolver {
   @Query(() => Stat)
   getInfoStatByIdDi(@Args('_idDi') _idDi: string) {
     return this.statService.getInfoStatByIdDi(_idDi);
-  }
-  @Mutation(() => Stat)
-  changeStatToDiagnosticInPause(@Args('_idDI') _idDI: string) {
-    const statDiagnosticPause =
-      this.statService.changeStatToDiagnosticInPause(_idDI);
-    if (statDiagnosticPause) {
-      return statDiagnosticPause;
-    } else {
-      return Error;
-    }
   }
 }
