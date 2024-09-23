@@ -178,6 +178,10 @@ export class DiService {
     );
   }
 
+  // async getDiById(_id:string){
+  //   return await
+  // }
+
   async updateDi(updateDi: UpdateDi) {
     const { _id, ...rest } = updateDi;
     const update = await this.diModel.findOneAndUpdate(
