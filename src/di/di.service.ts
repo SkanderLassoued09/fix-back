@@ -60,7 +60,6 @@ export class DiService {
       indexDi = +lastDi._id.substring(2);
       return indexDi + 1;
     }
-    console.log('🍍');
     return indexDi;
   }
   async createDi(createDiInput: CreateDiInput): Promise<Di> {
