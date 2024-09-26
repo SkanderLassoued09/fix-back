@@ -1,4 +1,4 @@
-import { Resolver, Mutation, Args, Query } from '@nestjs/graphql';
+import { Resolver, Mutation, Args, Query, Subscription } from '@nestjs/graphql';
 import { DiService } from './di.service';
 import { Di, DiTableData, UpdateNego } from './entities/di.entity';
 import {
@@ -13,11 +13,13 @@ import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 import { error } from 'console';
 import { StatService } from 'src/stat/stat.service';
+import { PubSub } from 'graphql-subscriptions';
 @Resolver(() => Di)
 export class DiResolver {
   constructor(
     private readonly diService: DiService,
     private readonly statService: StatService,
+    private readonly pubsub: PubSub,
   ) {}
 
   @Mutation(() => Di)
@@ -50,6 +52,27 @@ export class DiResolver {
   @Query(() => Di)
   async getDiById(@Args('_id') _id: string) {
     return await this.diService.getDiById(_id);
+  }
+
+  @Mutation(() => Di)
+  async confirmationComposant(
+    @Args('_id') _id: string,
+    @Args('confirmationState') confirmationState: string,
+  ) {
+    this.pubsub.publish('confirmation-composant', {
+      notificationConfirmation: {
+        _id,
+      },
+    });
+    return await this.diService.confirmationBetweenMagasinAndCoordinator(
+      _id,
+      confirmationState,
+    );
+  }
+
+  @Subscription(() => Di)
+  notificationConfirmation() {
+    return this.pubsub.asyncIterator('confirmation-composant');
   }
 
   @Mutation(() => Di)

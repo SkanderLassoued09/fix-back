@@ -18,6 +18,7 @@ import { NotificationsGateway } from 'src/notification.gateway';
 import { ProfileService } from 'src/profile/profile.service';
 
 import { Profile, ProfileSchema } from 'src/profile/entities/profile.entity';
+import { PubSubModule } from 'src/pubsub/pubsub.module';
 
 @Module({
   providers: [
@@ -28,6 +29,7 @@ import { Profile, ProfileSchema } from 'src/profile/entities/profile.entity';
     ProfileService,
   ],
   imports: [
+    PubSubModule,
     MongooseModule.forFeature([
       {
         name: Di.name,

@@ -272,6 +272,24 @@ export class DiService {
     return { di, totalDiCount };
   }
 
+  async confirmationBetweenMagasinAndCoordinator(
+    _id: string,
+    confirmationComposant: string,
+  ) {
+    const result = await this.diModel.findOneAndUpdate(
+      { _id },
+      { $set: { confirmationComposant } },
+      { new: true },
+    );
+
+    if (!result) {
+      throw new Error('Error while confirmation composant');
+    }
+    this.notificationGateway.confirmComposant('check confirmation');
+
+    return result;
+  }
+
   async calculateTicketComposantPrice(ticketId: string) {
     const ticket = await this.diModel.findById(ticketId);
     if (!ticket) {

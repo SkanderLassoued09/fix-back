@@ -109,6 +109,8 @@ export class DiDocument extends Document {
   remarque_magasin: string;
   @Prop({ nullable: true })
   remarque_coordinator: string;
+  @Prop({ nullable: true })
+  confirmationComposant: string;
 }
 export const DiSchema = SchemaFactory.createForClass(DiDocument);
 
@@ -122,6 +124,8 @@ export class Di {
   title: string;
   @Field({ nullable: true })
   nSerie: string;
+  @Field({ nullable: true })
+  confirmationComposant: string;
   @Field({ nullable: true })
   description: string;
 
