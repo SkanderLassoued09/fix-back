@@ -56,16 +56,16 @@ export class CronService {
     });
 
     const isExist = await this.auditService.findExistingReminders(ids);
-    if (isExist.length === 0) {
-      // Call the create method in the audit service
-      const reminder = await this.auditService.create(createAuditInput);
+    // if (isExist.length === 0) {
+    //   // Call the create method in the audit service
+    //   // const reminder = await this.auditService.create(createAuditInput);
 
-      if (reminder) {
-        this.notificationsGateway.sendReminder({
-          message: 'You got reminder',
-          payload: reminder,
-        });
-      }
-    }
+    //   if (reminder) {
+    //     this.notificationsGateway.sendReminder({
+    //       message: 'You got reminder',
+    //       payload: reminder,
+    //     });
+    //   }
+    // }
   }
 }

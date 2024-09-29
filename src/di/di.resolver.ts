@@ -58,6 +58,7 @@ export class DiResolver {
   async confirmationComposant(
     @Args('_id') _id: string,
     @Args('confirmationState') confirmationState: string,
+    @Args('_idNotification', { nullable: true }) _idNotification?: string,
   ) {
     this.pubsub.publish('confirmation-composant', {
       notificationConfirmation: {
@@ -67,6 +68,7 @@ export class DiResolver {
     return await this.diService.confirmationBetweenMagasinAndCoordinator(
       _id,
       confirmationState,
+      _idNotification,
     );
   }
 
@@ -354,15 +356,5 @@ export class DiResolver {
   @Mutation(() => Di)
   countIgnore(@Args('_idDI') _idDI: string) {
     return this.diService.countIgnore(_idDI);
-  }
-
-  @Mutation(() => Di)
-  confirmerRecoitComposant(@Args('_idDI') _idDI: string) {
-    return this.diService.sendConfirmerRecoitComposant(_idDI);
-  }
-
-  @Mutation(() => Di)
-  responseConfirmerRecoitComposant(@Args('_idDI') _idDI: string) {
-    return this.diService.responseConfirmerRecoitComposant(_idDI);
   }
 }

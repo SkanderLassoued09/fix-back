@@ -13,8 +13,8 @@ export class AuditResolver {
   }
 
   @Query(() => [Audit])
-  remindersNotification() {
-    return this.auditService.getRemindernotOpenedTickets();
+  getAllNotification() {
+    return this.auditService.getAllNotification();
   }
 
   @Query(() => Audit, { name: 'audit' })
@@ -23,11 +23,8 @@ export class AuditResolver {
   }
 
   @Mutation(() => Audit)
-  markReminderAsSeen(
-    @Args('auditId') auditId: string,
-    @Args('reminderId') reminderId: string,
-  ) {
-    return this.auditService.markReminderAsSeenForaudit(auditId, reminderId);
+  markAsSeenNotification(@Args('_id') auditId: string) {
+    return this.auditService.markAsSeen(auditId);
   }
 
   @Mutation(() => Audit)

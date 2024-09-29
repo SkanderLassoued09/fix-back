@@ -40,7 +40,4 @@ export class NotificationsGateway
   confirmComposant(message: any) {
     this.server.emit('confirmAllComposant', message);
   }
-  resConfirmComposant(message: any) {
-    this.server.emit('resConfirmComposant', message);
-  }
 }

@@ -28,6 +28,30 @@ export class AuditService {
     }
   }
 
+  async getAllNotification() {
+    return await this.auditModel.find({ isSeen: false });
+  }
+
+  async updateConfirm(_id: string, confirmationComposant: string) {
+    return await this.auditModel.findOneAndUpdate(
+      { _id },
+      {
+        $set: {
+          message: confirmationComposant,
+        },
+      },
+      { new: true },
+    );
+  }
+
+  async markAsSeen(_id: string) {
+    return await this.auditModel.findOneAndUpdate(
+      { _id },
+      { $set: { isSeen: true } },
+      { new: true },
+    );
+  }
+
   async markReminderAsSeenForaudit(
     auditId: string,
     reminderId: string,

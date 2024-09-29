@@ -33,6 +33,8 @@ import * as randomstring from 'randomstring';
 import { join } from 'path';
 import * as fs from 'fs';
 import { getFileExtension } from './shared.files';
+import { AuditService } from 'src/audit/audit.service';
+import { AuditInput } from 'src/audit/dto/create-audit.input';
 
 @Injectable()
 export class DiService {
@@ -46,6 +48,7 @@ export class DiService {
     private readonly statsService: StatService,
     private readonly profileService: ProfileService,
     private readonly notificationGateway: NotificationsGateway,
+    private readonly auditService: AuditService,
   ) {}
 
   async generateDiId(): Promise<number> {
@@ -275,6 +278,7 @@ export class DiService {
   async confirmationBetweenMagasinAndCoordinator(
     _id: string,
     confirmationComposant: string,
+    _idNotification?: string,
   ) {
     const result = await this.diModel.findOneAndUpdate(
       { _id },
@@ -285,7 +289,30 @@ export class DiService {
     if (!result) {
       throw new Error('Error while confirmation composant');
     }
-    this.notificationGateway.confirmComposant('check confirmation');
+
+    if (confirmationComposant === 'CONFIRM') {
+      let auditInput: AuditInput = {
+        _idDoc: _id,
+        message: confirmationComposant,
+        type: 'CONFIRMATION_COMPOSANT',
+        isSeen: false,
+      };
+      await this.auditService.create(auditInput);
+      this.notificationGateway.confirmComposant(auditInput);
+    }
+    if (confirmationComposant === 'REPLY') {
+      let reply: any = {
+        _idDoc: _id,
+        message: confirmationComposant,
+        type: 'CONFIRMATION_COMPOSANT',
+        isSeen: true,
+      };
+      await this.auditService.updateConfirm(
+        _idNotification,
+        confirmationComposant,
+      );
+      this.notificationGateway.confirmComposant(reply);
+    }
 
     return result;
   }
@@ -1045,40 +1072,6 @@ export class DiService {
     );
 
     await this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
-    return result;
-  }
-
-  async sendConfirmerRecoitComposant(_id: string) {
-    const result = await this.diModel.updateOne(
-      { _id },
-      {
-        $set: {
-          gotComposantFromMagasin: 'REQUEST',
-        },
-      },
-    );
-
-    const stat = await this.statsService.findUserLinkedToConcernedDi(_id);
-    const profile = this.profileService.findProlileById(stat.id_tech_rep);
-    this.notificationGateway.confirmComposant(profile);
-
-    return result;
-  }
-
-  async responseConfirmerRecoitComposant(_id: string) {
-    const result = await this.diModel.updateOne(
-      { _id },
-      {
-        $set: {
-          gotComposantFromMagasin: 'RESPONSE',
-        },
-      },
-    );
-
-    this.notificationGateway.resConfirmComposant(
-      'Les documents et composants confirmé',
-    );
-
     return result;
   }
 
