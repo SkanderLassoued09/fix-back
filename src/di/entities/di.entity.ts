@@ -306,6 +306,8 @@ export class DiTable {
   @Field({ nullable: true })
   image: string;
   @Field({ nullable: true })
+  company_id: string;
+  @Field({ nullable: true })
   client_id: string;
   @Field({ nullable: true })
   createdBy: string;

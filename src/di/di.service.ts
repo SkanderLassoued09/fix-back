@@ -68,22 +68,27 @@ export class DiService {
   async createDi(createDiInput: CreateDiInput): Promise<Di> {
     // --
     // the same code
-    const extension = getFileExtension(createDiInput.image);
-    const buffer = Buffer.from(createDiInput.image.split(',')[1], 'base64');
-    const randompdfFile = randomstring.generate({
-      length: 12,
-      charset: 'alphabetic',
-    });
-    fs.writeFileSync(
-      join(__dirname, `../../docs/${randompdfFile}.${extension}`),
-      buffer,
-    );
-
+    console.log('createDiInput.image', createDiInput.image);
+    console.log('createDiInput.image', typeof createDiInput.image);
+    console.log('createDiInput.image', createDiInput.image.length);
+    if (createDiInput.image.length !== 0) {
+      const extension = getFileExtension(createDiInput.image);
+      const buffer = Buffer.from(createDiInput.image.split(',')[1], 'base64');
+      const randompdfFile = randomstring.generate({
+        length: 12,
+        charset: 'alphabetic',
+      });
+      fs.writeFileSync(
+        join(__dirname, `../../docs/${randompdfFile}.${extension}`),
+        buffer,
+      );
+      createDiInput.image = `${randompdfFile}.${extension}`;
+    }
     // --
     const index = await this.generateDiId();
 
     createDiInput._id = `DI${index}`;
-    createDiInput.image = `${randompdfFile}.${extension}`;
+
     return await new this.diModel(createDiInput)
       .save()
       .then((res) => {
@@ -238,14 +243,17 @@ export class DiService {
     const { first, rows } = paginationConfig;
     const totalDiCount = await this.diModel.countDocuments().exec();
     const diRecords = await this.diModel
+
       .find({ isDeleted: false })
       .populate('client_id', 'first_name last_name')
+      .populate('company_id', 'name ')
       .populate('createdBy', 'firstName lastName')
       .populate('location_id', '_id location_name')
       .populate('di_category_id', '_id category')
       .limit(rows)
       .skip(first)
       .exec();
+
     const di = diRecords.map((di) => {
       let obj = {
         _id: di._id,
@@ -262,9 +270,11 @@ export class DiService {
         di_category_id: di.di_category_id?.category,
         location_id: di.location_id?.location_name ?? 'N/A',
         status: di.status,
-        image: di.image,
-        client_id: di.client_id?.first_name ?? 'Unknown', // Provide default values if necessary
-        createdBy: `${di.createdBy?.firstName ?? 'Unknown'} ${
+
+        image: di?.image?.length > 0 ? di.image : '-',
+        client_id: di.client_id?.first_name ?? '-', // Provide default values if necessary
+        company_id: di.company_id?.name ?? '-', // Provide default values if necessary
+        createdBy: `${di.createdBy?.firstName ?? '-'} ${
           di.createdBy?.lastName ?? ''
         }`,
         // Use optional chaining and nullish coalescing for other properties as well
@@ -272,6 +282,7 @@ export class DiService {
       return obj;
     });
 
+    console.log('🧀[di]:', di);
     return { di, totalDiCount };
   }
 
