@@ -270,7 +270,6 @@ export class DiService {
         di_category_id: di.di_category_id?.category,
         location_id: di.location_id?.location_name ?? 'N/A',
         status: di.status,
-
         image: di?.image?.length > 0 ? di.image : '-',
         client_id: di.client_id?.first_name ?? '-', // Provide default values if necessary
         company_id: di.company_id?.name ?? '-', // Provide default values if necessary

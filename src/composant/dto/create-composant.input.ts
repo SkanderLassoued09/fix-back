@@ -1,5 +1,4 @@
 import { InputType, Field, ObjectType } from '@nestjs/graphql';
-import { IsDate } from 'class-validator';
 
 @InputType()
 export class CreateComposantInput {
