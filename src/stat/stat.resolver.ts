@@ -11,6 +11,7 @@ import {
   CreateStatNotificationReturn,
   Stat,
   StatsCount,
+  StatsTableData,
 } from './entities/stat.entity';
 import { CreateStatInput } from './dto/create-stat.input';
 import { UpdateStatInput } from './dto/update-stat.input';
@@ -19,6 +20,7 @@ import { Profile } from 'src/profile/entities/profile.entity';
 import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 import { PubSub } from 'graphql-subscriptions';
+import { PaginationConfigDi } from 'src/di/dto/create-di.input';
 
 @Resolver(() => Stat)
 export class StatResolver {
@@ -134,10 +136,11 @@ export class StatResolver {
   //   }
   // }
 
-  @Query(() => [Stat])
+  @Query(() => StatsTableData)
   @UseGuards(JwtAuthGuard)
   getDiForTech(
     @CurrentUser() tech: Profile,
+    @Args('paginationConfig') paginationConfig: PaginationConfigDi,
     @Args('startDate', { nullable: true }) startDate?: string,
     @Args('endDate', { nullable: true }) endDate?: string,
   ) {
@@ -145,7 +148,12 @@ export class StatResolver {
     const start = startDate ? new Date(startDate) : undefined;
     const end = endDate ? new Date(endDate) : undefined;
 
-    return this.statService.getDiForTech(tech._id, start, end);
+    return this.statService.getDiForTech(
+      paginationConfig,
+      tech._id,
+      start,
+      end,
+    );
   }
 
   @Query(() => [StatsCount])

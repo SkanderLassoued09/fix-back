@@ -73,6 +73,14 @@ export class Stat {
 }
 
 @ObjectType()
+export class StatsTableData {
+  @Field(() => [Stat])
+  stat: Stat[];
+  @Field()
+  totalTechDataCount: number;
+}
+
+@ObjectType()
 export class CreateStatNotificationReturn {
   @Field({ nullable: true })
   _idDi: string;

@@ -10,6 +10,7 @@ import { Model } from 'mongoose';
 import { NotificationsGateway } from 'src/notification.gateway';
 import { ProfileService } from 'src/profile/profile.service';
 import { STATUS_DI } from 'src/di/di.status';
+import { PaginationConfigDi } from 'src/di/dto/create-di.input';
 @Injectable()
 export class StatService {
   constructor(
@@ -132,7 +133,13 @@ export class StatService {
     return result;
   }
 
-  async getDiForTech(_idtech: string, startDate?: Date, endDate?: Date) {
+  async getDiForTech(
+    paginationConfig: PaginationConfigDi,
+    _idtech: string,
+    startDate?: Date,
+    endDate?: Date,
+  ) {
+    const { first, rows } = paginationConfig;
     // Building the date filter if both startDate and endDate are provided
     const dateFilter =
       startDate && endDate
@@ -144,13 +151,24 @@ export class StatService {
           }
         : {};
 
-    // Querying with the date filter and technician IDs
-    return await this.StatModel.find({
+    const totalTechDataCount = await this.StatModel.countDocuments({
       $and: [
         { $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }] },
         dateFilter, // Applying the date filter if provided
       ],
     });
+
+    // Querying with the date filter and technician IDs
+    const stat = await this.StatModel.find({
+      $and: [
+        { $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }] },
+        dateFilter, // Applying the date filter if provided
+      ],
+    })
+      .limit(rows)
+      .skip(first);
+
+    return { stat, totalTechDataCount };
   }
   async lapTime(_id: string, diag_time: string) {
     return await this.StatModel.updateOne(
