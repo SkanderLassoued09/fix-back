@@ -11,10 +11,12 @@ import { NotificationsGateway } from 'src/notification.gateway';
 import { ProfileService } from 'src/profile/profile.service';
 import { STATUS_DI } from 'src/di/di.status';
 import { PaginationConfigDi } from 'src/di/dto/create-di.input';
+import { Di } from 'src/di/entities/di.entity';
 @Injectable()
 export class StatService {
   constructor(
     @InjectModel('Stat') private StatModel: Model<Stat>,
+    @InjectModel('Di') private diModel: Model<Di>,
     private readonly notificationGateway: NotificationsGateway,
     private readonly profileService: ProfileService,
   ) {}
@@ -46,14 +48,31 @@ export class StatService {
       throw new InternalServerErrorException('Unable to create');
     }
 
+    // Fetch the di entity
+    const di = await this.diModel.findOne({ _id: result._idDi });
+
+    // Fetch the statTech entity (statistic)
+    const statTech = await this.StatModel.findOne({ _id: result._id });
+    console.log('🍹[statTech]:', statTech);
+
+    // Add the status from di to statTech
+    const statWithStatus = {
+      ...statTech.toObject(), // Convert statTech to a plain object
+      status: di?.status || null, // Add the status from di, set null if not found
+    };
+
+    // Log the updated statTech with status
+    console.log('🍹[statWithStatus]:', statWithStatus);
+
     const profile = await this.profileService.findProlileById(
       result.id_tech_diag,
     );
 
-    const payload = { profile, stat: result };
+    // Send the notification with the profile and updated statTech (with status)
+    const payload = { profile, stat: statWithStatus };
     this.notificationGateway.sendNotificationDiag(payload);
 
-    return result;
+    return statWithStatus;
   }
 
   async findUserLinkedToConcernedDi(_idDi: string) {
@@ -129,7 +148,7 @@ export class StatService {
       },
     ]);
 
-    console.log('🦀[result]:', result);
+    // console.log('🦀[result]:', result);
     return result;
   }
 
@@ -139,6 +158,8 @@ export class StatService {
     startDate?: Date,
     endDate?: Date,
   ) {
+    const statTech = await this.StatModel.findOne({ _id: 'STAT14' });
+    console.log('🍹[statTech]:', statTech);
     const { first, rows } = paginationConfig;
     // Building the date filter if both startDate and endDate are provided
     const dateFilter =

@@ -7,6 +7,7 @@ import { PubSubModule } from 'src/pubsub/pubsub.module';
 import { NotificationsGateway } from 'src/notification.gateway';
 import { ProfileService } from 'src/profile/profile.service';
 import { Profile, ProfileSchema } from 'src/profile/entities/profile.entity';
+import { Di } from 'src/di/entities/di.entity';
 
 @Module({
   providers: [StatResolver, StatService, NotificationsGateway, ProfileService],
@@ -19,6 +20,10 @@ import { Profile, ProfileSchema } from 'src/profile/entities/profile.entity';
       },
       {
         name: Profile.name,
+        schema: ProfileSchema,
+      },
+      {
+        name: Di.name,
         schema: ProfileSchema,
       },
     ]),
