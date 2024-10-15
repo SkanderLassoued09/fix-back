@@ -14,6 +14,7 @@ import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 import { error } from 'console';
 import { StatService } from 'src/stat/stat.service';
 import { PubSub } from 'graphql-subscriptions';
+import { STATUS_DI } from './di.status';
 @Resolver(() => Di)
 export class DiResolver {
   constructor(
@@ -336,7 +337,8 @@ export class DiResolver {
   //Diagnostique in Pause
   @Mutation(() => Di)
   changeToDiagnosticInPause(@Args('_idDI') _idDI: string) {
-    console.log('🍭[_idDI]:', _idDI);
+    console.log('🍒 diag en pause fired');
+
     return this.diService.changeToDiagnosticInPause(_idDI);
   }
 

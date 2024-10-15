@@ -39,6 +39,7 @@ export class StatService {
   }
 
   async createStat(createStatInput: CreateStatInput): Promise<Stat> {
+    console.log('🌶 fired');
     const index = await this.generateStatId();
 
     createStatInput._id = `STAT${index}`;
@@ -53,7 +54,6 @@ export class StatService {
 
     // Fetch the statTech entity (statistic)
     const statTech = await this.StatModel.findOne({ _id: result._id });
-    console.log('🍹[statTech]:', statTech);
 
     // Add the status from di to statTech
     const statWithStatus = {
@@ -62,7 +62,6 @@ export class StatService {
     };
 
     // Log the updated statTech with status
-    console.log('🍹[statWithStatus]:', statWithStatus);
 
     const profile = await this.profileService.findProlileById(
       result.id_tech_diag,
@@ -70,6 +69,7 @@ export class StatService {
 
     // Send the notification with the profile and updated statTech (with status)
     const payload = { profile, stat: statWithStatus };
+
     this.notificationGateway.sendNotificationDiag(payload);
 
     return statWithStatus;
@@ -104,8 +104,6 @@ export class StatService {
   // Fiter tech data
 
   async getDiStatusCounts(_idtech: string, startDate?: Date, endDate?: Date) {
-    console.log('🍶[endDate]:', endDate);
-    console.log('🌰[startDate]:', startDate);
     // Build the date filter if both startDate and endDate are provided
     const dateFilter =
       startDate && endDate
@@ -148,7 +146,6 @@ export class StatService {
       },
     ]);
 
-    // console.log('🦀[result]:', result);
     return result;
   }
 
@@ -159,7 +156,7 @@ export class StatService {
     endDate?: Date,
   ) {
     const statTech = await this.StatModel.findOne({ _id: 'STAT14' });
-    console.log('🍹[statTech]:', statTech);
+
     const { first, rows } = paginationConfig;
     // Building the date filter if both startDate and endDate are provided
     const dateFilter =
@@ -252,8 +249,6 @@ export class StatService {
   }
 
   async changeStatToDiagnosticInPause(_idDi: string) {
-    console.log('🦑[_idDi]:', _idDi);
-
     const stat = await this.StatModel.findOneAndUpdate(
       { _idDi },
       { $set: { status: STATUS_DI.DiagnosticInPause.status } },

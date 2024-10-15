@@ -66,11 +66,6 @@ export class DiService {
     return indexDi;
   }
   async createDi(createDiInput: CreateDiInput): Promise<Di> {
-    // --
-    // the same code
-    console.log('createDiInput.image', createDiInput.image);
-    console.log('createDiInput.image', typeof createDiInput.image);
-    console.log('createDiInput.image', createDiInput.image.length);
     if (createDiInput.image.length !== 0) {
       const extension = getFileExtension(createDiInput.image);
       const buffer = Buffer.from(createDiInput.image.split(',')[1], 'base64');
@@ -281,7 +276,6 @@ export class DiService {
       return obj;
     });
 
-    console.log('🧀[di]:', di);
     return { di, totalDiCount };
   }
 
@@ -476,6 +470,18 @@ export class DiService {
     }
     await this.statsService.updateStatus(_idDI, STATUS_DI.Reparation.status);
     return result;
+  }
+
+  async setDiInPause(_id: string) {
+    return await this.diModel.findByIdAndUpdate(
+      { _id },
+      {
+        $set: {
+          is_paused: true,
+        },
+      },
+      { new: true },
+    );
   }
 
   //Tech finsih diagnostic
@@ -1100,8 +1106,6 @@ export class DiService {
   }
 
   async changeToDiagnosticInPause(_id: string) {
-    console.log('🍣[_id]:', _id);
-
     const stat = await this.statsService.changeStatToDiagnosticInPause(_id);
 
     if (!stat) {
@@ -1109,6 +1113,10 @@ export class DiService {
         'error while changing status stat',
       );
     }
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.DiagnosticInPause.status,
+    );
 
     const diStatus = await this.diModel.findOneAndUpdate(
       { _id },
@@ -1116,7 +1124,6 @@ export class DiService {
       { new: true },
     );
 
-    console.log('🍿[diStatus]:', diStatus);
     return diStatus;
   }
 
