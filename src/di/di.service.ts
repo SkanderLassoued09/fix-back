@@ -1127,6 +1127,21 @@ export class DiService {
     return diStatus;
   }
 
+  async changeStateInReparationPause(_id: string) {
+    const diStatus = await this.diModel.findOneAndUpdate(
+      { _id },
+      { $set: { status: STATUS_DI.ReparationInPause.status } },
+      { new: true },
+    );
+
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.DiagnosticInPause.status,
+    );
+
+    return diStatus;
+  }
+
   async changeToReparationInPause(_id: string) {
     return await this.diModel.updateOne(
       { _id },

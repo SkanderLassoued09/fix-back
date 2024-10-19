@@ -345,7 +345,7 @@ export class DiResolver {
   //Repair in Pause
   @Mutation(() => Di)
   changeToReparationInPause(@Args('_idDI') _idDI: string) {
-    const diRepairPause = this.diService.changeToReparationInPause(_idDI);
+    const diRepairPause = this.diService.changeStateInReparationPause(_idDI);
     if (diRepairPause) {
       return diRepairPause;
     } else {

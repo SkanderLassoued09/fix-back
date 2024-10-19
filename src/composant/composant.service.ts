@@ -34,6 +34,7 @@ export class ComposantService {
   async createComposant(
     createComposantInput: CreateComposantInput,
   ): Promise<Composant> {
+    console.log({ createComposantInput });
     const index = await this.generateComposantId();
     createComposantInput._id = `Cmp${index}`;
 
@@ -101,12 +102,11 @@ export class ComposantService {
   ): Promise<UpdateComposantResponse> {
     try {
       // Perform the update operation
-      await this.ComposantModel.updateOne(
+      return await this.ComposantModel.findOneAndUpdate(
         { name: updateComposant.name },
         {
           $set: {
             package: updateComposant.package,
-            category_composant_id: updateComposant.category_composant_id,
             prix_achat: updateComposant.prix_achat,
             prix_vente: updateComposant.prix_vente,
             coming_date: updateComposant.coming_date,
@@ -116,15 +116,8 @@ export class ComposantService {
             status: updateComposant.status_composant,
           },
         },
+        { new: true },
       );
-
-      const updatedEntity = await this.ComposantModel.findOne({
-        name: updateComposant.name,
-      });
-
-      if (updatedEntity) {
-        return updatedEntity;
-      }
     } catch (error) {
       throw new Error('Failed to update composant: ' + error.message);
     }

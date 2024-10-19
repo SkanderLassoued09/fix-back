@@ -11,8 +11,8 @@ export class ComposantDocument extends Document {
   name: string;
   @Prop()
   package: string;
-  @Prop()
-  category_composant_id: string;
+  // @Prop()
+  // category_composant_id: string;
   @Prop()
   prix_achat: number;
   @Prop()
@@ -38,8 +38,8 @@ export class Composant {
   @Field({ nullable: true })
   package: string;
   //the entity category composant
-  @Field({ nullable: true })
-  category_composant_id: string;
+  // @Field({ nullable: true })
+  // category_composant_id: string;
   @Field({ nullable: true })
   prix_achat: number;
   @Field({ nullable: true })
