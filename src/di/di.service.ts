@@ -790,8 +790,6 @@ export class DiService {
       });
   }
 
-  //!Query for every role
-
   // *Query For Coordinator
   async get_coordinatorDI(paginationConfig: PaginationConfigDi) {
     const queryCoordinator = {
@@ -811,6 +809,7 @@ export class DiService {
       .populate('client_id', 'first_name last_name')
       .populate('createdBy', 'firstName lastName')
       .populate('location_id', '_id location_name')
+      .populate('company_id', 'name ')
       .limit(rows)
       .skip(first);
 
@@ -830,6 +829,7 @@ export class DiService {
         location_id: di.location_id?.location_name ?? 'N/A',
         status: di.status,
         image: di.image,
+        company_id: di.company_id?.name ?? '-', // Provide default values if necessary
         client_id: di.client_id?.first_name ?? 'Unknown', // Provide default values if necessary
         createdBy: `${di.createdBy?.firstName ?? 'Unknown'} ${
           di.createdBy?.lastName ?? ''
