@@ -73,6 +73,12 @@ export class ProfileService {
       });
   }
 
+  async getTech(_id: string) {
+    const tech = await this.profileModel.findOne({ _id }).exec();
+
+    return `${tech.firstName} ${tech.lastName}`;
+  }
+
   async findProlileById(_id: string): Promise<Profile> {
     const result = await this.profileModel.findById(_id);
     if (!result) {

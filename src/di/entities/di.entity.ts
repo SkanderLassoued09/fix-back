@@ -1,13 +1,12 @@
 import { ObjectType, Field } from '@nestjs/graphql';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
-import * as mongoose from 'mongoose';
 import { Client } from 'src/clients/entities/client.entity';
 import { Company } from 'src/company/entities/company.entity';
 import { DiCategory } from 'src/di_category/entities/di_category.entity';
 import { Location } from 'src/location/entities/location.entity';
 import { Profile } from 'src/profile/entities/profile.entity';
-import { Remarque } from 'src/remarque/entities/remarque.entity';
+
 @Schema({ timestamps: true })
 export class DiDocument extends Document {
   @Prop()
@@ -285,6 +284,10 @@ export class DiTable {
   title: string;
   @Field({ nullable: true })
   description: string;
+  @Field({ nullable: true })
+  techRep: string;
+  @Field({ nullable: true })
+  techDiag: string;
   @Field({ nullable: true })
   can_be_repaired: boolean;
   @Field({ nullable: true })

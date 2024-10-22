@@ -35,6 +35,7 @@ import * as fs from 'fs';
 import { getFileExtension } from './shared.files';
 import { AuditService } from 'src/audit/audit.service';
 import { AuditInput } from 'src/audit/dto/create-audit.input';
+import { Stat } from 'src/stat/entities/stat.entity';
 
 @Injectable()
 export class DiService {
@@ -45,6 +46,8 @@ export class DiService {
     @InjectModel(Remarque.name)
     private readonly remarqueModel: Model<RemarqueDocument>,
 
+    @InjectModel(Stat.name)
+    private readonly statModel: Model<Stat>,
     private readonly statsService: StatService,
     private readonly profileService: ProfileService,
     private readonly notificationGateway: NotificationsGateway,
@@ -236,12 +239,14 @@ export class DiService {
 
   async getAllDi(paginationConfig: PaginationConfigDi) {
     const { first, rows } = paginationConfig;
-    const totalDiCount = await this.diModel.countDocuments().exec();
-    const diRecords = await this.diModel
+    const totalDiCount = await this.diModel
+      .countDocuments({ isDeleted: false })
+      .exec();
 
+    const diRecords = await this.diModel
       .find({ isDeleted: false })
       .populate('client_id', 'first_name last_name')
-      .populate('company_id', 'name ')
+      .populate('company_id', 'name')
       .populate('createdBy', 'firstName lastName')
       .populate('location_id', '_id location_name')
       .populate('di_category_id', '_id category')
@@ -249,33 +254,45 @@ export class DiService {
       .skip(first)
       .exec();
 
-    const di = diRecords.map((di) => {
-      let obj = {
-        _id: di._id,
-        title: di.title,
-        description: di.description,
-        ignoreCount: di.ignoreCount,
-        can_be_repaired: di.can_be_repaired,
-        bon_de_commande: di.bon_de_commande,
-        bon_de_livraison: di.bon_de_livraison,
-        facture: di.facture,
-        contain_pdr: di.contain_pdr,
-        current_roles: di.current_roles,
-        array_composants: di.array_composants,
-        di_category_id: di.di_category_id?.category,
-        location_id: di.location_id?.location_name ?? 'N/A',
-        status: di.status,
-        image: di?.image?.length > 0 ? di.image : '-',
-        client_id: di.client_id?.first_name ?? '-', // Provide default values if necessary
-        company_id: di.company_id?.name ?? '-', // Provide default values if necessary
-        createdBy: `${di.createdBy?.firstName ?? '-'} ${
-          di.createdBy?.lastName ?? ''
-        }`,
-        // Use optional chaining and nullish coalescing for other properties as well
-      };
-      return obj;
-    });
+    // Fetch linked stats for each DI
+    const di = await Promise.all(
+      diRecords.map(async (di) => {
+        // Fetch the stat document based on the DI's _id
+        const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
 
+        // Construct the DI response object including some fields from the linked stat
+        return {
+          _id: di._id,
+          title: di.title,
+          description: di.description,
+          ignoreCount: di.ignoreCount,
+          can_be_repaired: di.can_be_repaired,
+          bon_de_commande: di.bon_de_commande,
+          bon_de_livraison: di.bon_de_livraison,
+          facture: di.facture,
+          contain_pdr: di.contain_pdr,
+          current_roles: di.current_roles,
+          array_composants: di.array_composants,
+          di_category_id: di.di_category_id?.category,
+          location_id: di.location_id?.location_name ?? 'N/A',
+          status: di.status,
+          image: di?.image?.length > 0 ? di.image : '-',
+          client_id: di.client_id?.first_name ?? '-',
+          company_id: di.company_id?.name ?? '-',
+          createdBy: `${di.createdBy?.firstName ?? '-'} ${
+            di.createdBy?.lastName ?? ''
+          }`,
+          // Include some fields from the linked stat if available
+          techDiag: stat?.id_tech_diag
+            ? await this.profileService.getTech(stat?.id_tech_diag)
+            : 'N/A',
+          techRep: stat?.id_tech_rep
+            ? await this.profileService.getTech(stat?.id_tech_rep)
+            : 'N/A',
+        };
+      }),
+    );
+    console.log('🍉[di]:', di);
     return { di, totalDiCount };
   }
 
@@ -865,7 +882,10 @@ export class DiService {
   }
 
   async getDiForMagasin(paginationConfig: PaginationConfigDi) {
-    const queryCoordinator = { contain_pdr: true };
+    const queryCoordinator = {
+      contain_pdr: true,
+      status: { $in: ['MagasinEstimation', 'INMAGASIN'] },
+    };
     const { first, rows } = paginationConfig;
     const totalDiCount = await this.diModel.countDocuments(queryCoordinator);
     const di = await this.diModel
