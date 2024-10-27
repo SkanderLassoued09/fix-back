@@ -34,26 +34,41 @@ export class ComposantService {
   async createComposant(
     createComposantInput: CreateComposantInput,
   ): Promise<Composant> {
-    console.log({ createComposantInput });
+    console.log('🍑[createComposantInput]:', createComposantInput);
+
+    // Check if the PDF is a valid base64 string
+    if (
+      createComposantInput.pdf &&
+      createComposantInput.pdf !== 'null' &&
+      createComposantInput.pdf.includes(',')
+    ) {
+      const extension = getFileExtension(createComposantInput.pdf);
+      const buffer = Buffer.from(
+        createComposantInput.pdf.split(',')[1], // Split base64 string to get the data
+        'base64',
+      );
+
+      const randompdfFile = randomstring.generate({
+        length: 12,
+        charset: 'alphabetic',
+      });
+
+      fs.writeFileSync(
+        join(__dirname, `../../docs/${randompdfFile}.${extension}`),
+        buffer,
+      );
+
+      createComposantInput.pdf = `${randompdfFile}.${extension}`;
+    } else {
+      // If the PDF is not valid, set it to null
+      createComposantInput.pdf = null;
+    }
+
+    // Generate a unique ID for the composant
     const index = await this.generateComposantId();
     createComposantInput._id = `Cmp${index}`;
 
-    const extension = getFileExtension(createComposantInput.pdf);
-    const buffer = Buffer.from(
-      createComposantInput.pdf.split(',')[1],
-      'base64',
-    );
-
-    const randompdfFile = randomstring.generate({
-      length: 12,
-      charset: 'alphabetic',
-    });
-    fs.writeFileSync(
-      join(__dirname, `../../docs/${randompdfFile}.${extension}`),
-      buffer,
-    );
-
-    createComposantInput.pdf = `${randompdfFile}.${extension}`;
+    // Save the new composant
     return await new this.ComposantModel(createComposantInput)
       .save()
       .then((res) => {

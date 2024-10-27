@@ -948,6 +948,14 @@ export class DiService {
     );
 
     await this.statsService.updateStatus(_id, STATUS_DI.Pending1.status);
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
     return result;
   }
 
@@ -962,6 +970,14 @@ export class DiService {
     );
 
     await this.statsService.updateStatus(_id, STATUS_DI.InDiagnostic.status);
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
     return result;
   }
 
@@ -976,6 +992,14 @@ export class DiService {
     );
 
     await this.statsService.updateStatus(_id, STATUS_DI.InMagasin.status);
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
     return result;
   }
 
@@ -993,6 +1017,14 @@ export class DiService {
       _id,
       STATUS_DI.MagasinEstimation.status,
     );
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
     return result;
   }
 
@@ -1007,6 +1039,14 @@ export class DiService {
     );
 
     await this.statsService.updateStatus(_id, STATUS_DI.Pending2.status);
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
     return result;
   }
 
@@ -1024,6 +1064,14 @@ export class DiService {
     this.notificationGateway.sendNotifcationToAdmins(
       'Veuillez affecter le prix de ce DI',
     );
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
     return result;
   }
 
@@ -1038,6 +1086,14 @@ export class DiService {
     );
 
     await this.statsService.updateStatus(_id, STATUS_DI.Negotiation1.status);
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
     return result;
   }
 
@@ -1052,6 +1108,14 @@ export class DiService {
     );
 
     await this.statsService.updateStatus(_id, STATUS_DI.Negotiation2.status);
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
     return result;
   }
 
@@ -1066,6 +1130,14 @@ export class DiService {
     );
 
     await this.statsService.updateStatus(_id, STATUS_DI.Pending3.status);
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
     return result;
   }
 
@@ -1080,6 +1152,14 @@ export class DiService {
     );
 
     await this.statsService.updateStatus(_id, STATUS_DI.Reparation.status);
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
     return result;
   }
 
@@ -1094,6 +1174,14 @@ export class DiService {
     );
 
     await this.statsService.updateStatus(_id, STATUS_DI.InReparation.status);
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
     return result;
   }
 
@@ -1108,21 +1196,49 @@ export class DiService {
     );
 
     await this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
     return result;
   }
 
   async changeDiRetour(_id: string) {
-    return await this.diModel.updateOne(
+    const retour = await this.diModel.updateOne(
       { _id },
       { $set: { status: STATUS_DI.Pending3.status } },
     );
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
+
+    return retour;
   }
 
   async changeToPending1(_id: string) {
-    return await this.diModel.updateOne(
+    const pending1 = await this.diModel.updateOne(
       { _id },
       { $set: { status: STATUS_DI.Pending1.status } },
     );
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
+
+    return pending1;
   }
 
   async changeToDiagnosticInPause(_id: string) {
@@ -1144,6 +1260,13 @@ export class DiService {
       { new: true },
     );
 
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
     return diStatus;
   }
 
@@ -1159,69 +1282,31 @@ export class DiService {
       STATUS_DI.DiagnosticInPause.status,
     );
 
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
+
     return diStatus;
   }
 
   async changeToReparationInPause(_id: string) {
-    return await this.diModel.updateOne(
+    const repInPause = await this.diModel.updateOne(
       { _id },
       { $set: { status: STATUS_DI.ReparationInPause.status } },
     );
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
+
+    return repInPause;
   }
-
-  // doc section :
-  //   function getFileExtension(base64) {
-  //   const metaData = base64.split(',')[0];
-  //   const fileType = metaData.split(':')[1].split(';')[0];
-  //   const extension = fileType.split('/')[1];
-  //   return extension;
-  // }
-
-  // async create(createTicketInput: CreateTicketInput) {
-  //         //   const extension = getFileExtension(createTicketInput.image);
-  //         //   const buffer = Buffer.from(createTicketInput.image.split(',')[1], 'base64');
-  //   const randompdfFile = randomstring.generate({
-  //     length: 12,
-  //     charset: 'alphabetic',
-  //   });
-  //   fs.writeFileSync(
-  //     join(__dirname, `../../pdf/${randompdfFile}.${extension}`),
-  //     buffer,
-  //   );
-  //   const index = await this.generateClientId();
-  //         //   createTicketInput._id = `T${index}`;
-  //         //   createTicketInput.image = `${randompdfFile}.${extension}`;
-  //         //   return await new this.ticketModel(createTicketInput)
-  //     .save()
-  //     .then((res) => {
-  //             //       return res;
-  //     })
-  //     .catch((err) => {
-  //             //       return err;
-  //     });
-  // }
-  // HTML
-  //  <input
-  //         nbInput
-  //         fullWidth
-  //         placeholder="Textarea"
-  //         formControlName="image"
-  //         type="file"
-  //         (change)="onSelectFile($event)"
-  //       />
-  //     </div>
-
-  // onSelectFile(image: any) {
-  //   const file = image.target.files && image.target.files[0];
-
-  //   if (file) {
-  //     var reader = new FileReader();
-  //     reader.readAsDataURL(file);
-
-  //     reader.onload = (event) => {
-  //             //       this.imageStr = reader.result;
-  //     };
-  //   }
-
-  //         // }
 }

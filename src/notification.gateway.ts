@@ -40,4 +40,14 @@ export class NotificationsGateway
   confirmComposant(message: any) {
     this.server.emit('confirmAllComposant', message);
   }
+
+  /**
+   *
+   * @param ticket
+   * content will contains ticket and profile data
+   * target == profile
+   */
+  updateTicket(message: { action: string; content: any; target?: any }) {
+    this.server.emit('updateTicket', message);
+  }
 }

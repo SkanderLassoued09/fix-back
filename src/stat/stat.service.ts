@@ -70,7 +70,12 @@ export class StatService {
     // Send the notification with the profile and updated statTech (with status)
     const payload = { profile, stat: statWithStatus };
 
-    this.notificationGateway.sendNotificationDiag(payload);
+    // this.notificationGateway.sendNotificationDiag(payload);
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: statWithStatus },
+      target: profile,
+    });
 
     return statWithStatus;
   }
