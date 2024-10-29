@@ -517,14 +517,15 @@ export class DiService {
     if (result.matchedCount === 0) {
       throw new InternalServerErrorException('unable to find');
     }
-    if (diag.contain_pdr) {
+    //! Rabi ihdik skander
+    /*if (diag.contain_pdr) {
       await this.statsService.updateStatus(
         _idDI,
         STATUS_DI.MagasinEstimation.status,
       );
     } else {
       await this.statsService.updateStatus(_idDI, STATUS_DI.Pending2.status);
-    }
+    }*/
     return result;
   }
 
