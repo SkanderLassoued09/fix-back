@@ -113,10 +113,11 @@ export class DiService {
    */
   async getDiById(_id: string) {
     try {
-      const di = await this.diModel.findById(_id).lean();
+      const di = await this.diModel.findById(_id);
 
-      if (!di)
-        throw new Error(`Demande d'intervention with ID '${_id}' not found.`);
+      // if (!di) {
+      //   throw new Error(`Demande d'intervention with ID '${_id}' not found.`);
+      // }
 
       return di;
     } catch (error) {
@@ -1308,6 +1309,7 @@ export class DiService {
       target: {},
     });
 
+    console.log('🍱[repInPause]:', repInPause);
     return repInPause;
   }
 }

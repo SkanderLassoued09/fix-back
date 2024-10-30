@@ -52,7 +52,13 @@ export class DiResolver {
 
   @Query(() => Di)
   async getDiById(@Args('_id') _id: string) {
-    return await this.diService.getDiById(_id);
+    console.log('🌰[_id]:', _id);
+    try {
+      return await this.diService.getDiById(_id);
+    } catch (error) {
+      console.log('🥓[error]:', error);
+      throw new Error(error);
+    }
   }
 
   @Mutation(() => Di)
@@ -344,8 +350,12 @@ export class DiResolver {
 
   //Repair in Pause
   @Mutation(() => Di)
-  changeToReparationInPause(@Args('_idDI') _idDI: string) {
-    const diRepairPause = this.diService.changeStateInReparationPause(_idDI);
+  async changeToReparationInPause(@Args('_idDI') _idDI: string) {
+    console.log('🍷[_idDI]:', _idDI);
+    const diRepairPause = await this.diService.changeStateInReparationPause(
+      _idDI,
+    );
+    console.log('🥥[diRepairPause]:', diRepairPause);
     if (diRepairPause) {
       return diRepairPause;
     } else {
