@@ -110,6 +110,8 @@ export class DiagUpdate {
   @Field()
   contain_pdr: boolean;
   @Field()
+  di_category_id: string;
+  @Field()
   can_be_repaired: boolean;
   @Field(() => [ComposantStructureInput], { nullable: true })
   array_composants: ComposantStructureInput[];

@@ -52,7 +52,6 @@ export class DiResolver {
 
   @Query(() => Di)
   async getDiById(@Args('_id') _id: string) {
-    console.log('🌰[_id]:', _id);
     try {
       return await this.diService.getDiById(_id);
     } catch (error) {
@@ -130,6 +129,7 @@ export class DiResolver {
     @Args('_id') _id: string,
     @Args('diag') diag: DiagUpdate,
   ) {
+    console.log('🍏[diag]:', diag);
     const isDiag = this.diService.tech_startDiagnostic(_id, diag);
     if (isDiag) {
       return true;

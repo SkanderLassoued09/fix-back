@@ -504,6 +504,7 @@ export class DiService {
 
   //Tech finsih diagnostic
   async tech_startDiagnostic(_idDI: string, diag: DiagUpdate) {
+    console.log('🍤[diag]:', diag);
     const result = await this.diModel.updateOne(
       { _id: _idDI },
       {
@@ -512,21 +513,14 @@ export class DiService {
           contain_pdr: diag.contain_pdr,
           remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
           array_composants: diag.array_composants,
+          di_category_id: diag.di_category_id,
         },
       },
     );
     if (result.matchedCount === 0) {
       throw new InternalServerErrorException('unable to find');
     }
-    //! Rabi ihdik skander
-    /*if (diag.contain_pdr) {
-      await this.statsService.updateStatus(
-        _idDI,
-        STATUS_DI.MagasinEstimation.status,
-      );
-    } else {
-      await this.statsService.updateStatus(_idDI, STATUS_DI.Pending2.status);
-    }*/
+
     return result;
   }
 
