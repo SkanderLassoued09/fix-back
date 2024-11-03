@@ -274,6 +274,14 @@ export class CategoryDi {
   @Field()
   category_Di: string;
 }
+
+@ObjectType()
+export class StatusCount {
+  @Field()
+  status: string;
+  @Field()
+  count: number;
+}
 @ObjectType()
 export class DiTable {
   @Field({ nullable: true })

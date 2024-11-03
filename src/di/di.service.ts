@@ -293,7 +293,7 @@ export class DiService {
         };
       }),
     );
-    console.log('🍉[di]:', di);
+
     return { di, totalDiCount };
   }
 
@@ -522,6 +522,31 @@ export class DiService {
     }
 
     return result;
+  }
+
+  async getStatusCount() {
+    const results = await this.diModel.aggregate([
+      {
+        $match: {
+          isDeleted: false,
+        },
+      },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          status: '$_id',
+          count: 1,
+        },
+      },
+    ]);
+    console.log('🥥result', results);
+    return results;
   }
 
   async markAsSeen(_id: string) {
@@ -1267,16 +1292,18 @@ export class DiService {
   }
 
   async changeStateInReparationPause(_id: string) {
+    console.log('🍉[_id]:', _id);
     const diStatus = await this.diModel.findOneAndUpdate(
       { _id },
       { $set: { status: STATUS_DI.ReparationInPause.status } },
       { new: true },
     );
 
-    await this.statsService.updateStatus(
+    const statsfind = await this.statsService.updateStatus(
       _id,
-      STATUS_DI.DiagnosticInPause.status,
+      STATUS_DI.ReparationInPause.status,
     );
+    console.log('🍚statsfind', statsfind);
 
     const di = this.getDiById(_id);
 

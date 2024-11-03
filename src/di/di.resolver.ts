@@ -1,6 +1,6 @@
 import { Resolver, Mutation, Args, Query, Subscription } from '@nestjs/graphql';
 import { DiService } from './di.service';
-import { Di, DiTableData, UpdateNego } from './entities/di.entity';
+import { Di, DiTableData, StatusCount, UpdateNego } from './entities/di.entity';
 import {
   CreateDiInput,
   DiagUpdate,
@@ -141,6 +141,11 @@ export class DiResolver {
   @Mutation(() => Di)
   async markAsSeen(@Args('_id') _id: string) {
     return this.diService.markAsSeen(_id);
+  }
+
+  @Query(() => [StatusCount])
+  async getStatusCount() {
+    return await this.diService.getStatusCount();
   }
 
   @Mutation(() => Boolean)
@@ -355,7 +360,7 @@ export class DiResolver {
     const diRepairPause = await this.diService.changeStateInReparationPause(
       _idDI,
     );
-    console.log('🥥[diRepairPause]:', diRepairPause);
+
     if (diRepairPause) {
       return diRepairPause;
     } else {
