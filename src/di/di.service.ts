@@ -1185,6 +1185,7 @@ export class DiService {
   }
 
   async changeStatusInRepair(_id: string) {
+    console.log('🍎[_id]:', _id);
     const result = await this.diModel.updateOne(
       { _id },
       {
@@ -1303,7 +1304,6 @@ export class DiService {
       _id,
       STATUS_DI.ReparationInPause.status,
     );
-    console.log('🍚statsfind', statsfind);
 
     const di = this.getDiById(_id);
 

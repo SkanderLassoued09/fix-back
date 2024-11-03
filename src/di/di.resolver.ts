@@ -356,7 +356,6 @@ export class DiResolver {
   //Repair in Pause
   @Mutation(() => Di)
   async changeToReparationInPause(@Args('_idDI') _idDI: string) {
-    console.log('🍷[_idDI]:', _idDI);
     const diRepairPause = await this.diService.changeStateInReparationPause(
       _idDI,
     );

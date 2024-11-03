@@ -241,6 +241,7 @@ export class StatService {
 
   // update status
   async updateStatus(_id: string, status: string) {
+    console.log('🥞[_id]:', _id);
     const result = await this.StatModel.updateOne(
       { _idDi: _id },
       {

@@ -89,6 +89,8 @@ export class StatResolver {
     @Args('_id') _id: string,
     @Args('repTime') repTime: string,
   ) {
+    console.log('_id', _id);
+    console.log('repTime', repTime);
     const isUpdated = this.statService.lapTimeForReaparation(_id, repTime);
     if (isUpdated) {
       return true;
@@ -117,24 +119,6 @@ export class StatResolver {
   getLastPauseTimeforreaparation(@Args('_id') _id: string) {
     return this.statService.getLastPauseTimeForReparation(_id);
   }
-
-  /**
-   * 
-  this function will get last time pause to continue counting later for reparation
-   */
-  // @Mutation(() => Boolean)
-
-  // lapTimeForPauseAndGetBackForreaparation(
-  //   @Args('_id') _id: string,
-  //   @Args('diagTime') diagTime: string,
-  // ) {
-  //   const isUpdated = this.statService.lapTime(_id, diagTime);
-  //   if (isUpdated) {
-  //     return true;
-  //   } else {
-  //     false;
-  //   }
-  // }
 
   @Query(() => StatsTableData)
   @UseGuards(JwtAuthGuard)
