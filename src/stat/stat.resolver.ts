@@ -123,7 +123,7 @@ export class StatResolver {
   @Query(() => StatsTableData)
   @UseGuards(JwtAuthGuard)
   getDiForTech(
-    @CurrentUser() tech: Profile,
+    @CurrentUser() profile: Profile,
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
     @Args('startDate', { nullable: true }) startDate?: string,
     @Args('endDate', { nullable: true }) endDate?: string,
@@ -134,7 +134,8 @@ export class StatResolver {
 
     return this.statService.getDiForTech(
       paginationConfig,
-      tech._id,
+      profile._id,
+      profile.role,
       start,
       end,
     );

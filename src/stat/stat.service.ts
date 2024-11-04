@@ -157,12 +157,12 @@ export class StatService {
   async getDiForTech(
     paginationConfig: PaginationConfigDi,
     _idtech: string,
+    role: string,
     startDate?: Date,
     endDate?: Date,
   ) {
-    const statTech = await this.StatModel.findOne({ _id: 'STAT14' });
-
     const { first, rows } = paginationConfig;
+
     // Building the date filter if both startDate and endDate are provided
     const dateFilter =
       startDate && endDate
@@ -174,22 +174,30 @@ export class StatService {
           }
         : {};
 
-    const totalTechDataCount = await this.StatModel.countDocuments({
-      $and: [
-        { $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }] },
-        dateFilter, // Applying the date filter if provided
-      ],
-    });
+    // Check if user has admin roles
+    const isAdmin = ['ADMIN_MANAGER', 'ADMIN_TECH'].includes(role);
 
-    // Querying with the date filter and technician IDs
-    const stat = await this.StatModel.find({
+    // Build the technician filter based on role
+    const techFilter = isAdmin
+      ? {} // Empty filter to get all records for admin roles
+      : {
+          $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }],
+        };
+
+    // Combine filters
+    const finalFilter = {
       $and: [
-        { $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }] },
+        techFilter,
         dateFilter, // Applying the date filter if provided
-      ],
-    })
-      .limit(rows)
-      .skip(first);
+      ].filter((filter) => Object.keys(filter).length > 0), // Remove empty filters
+    };
+
+    // If there are no filters, remove the $and operator
+    const queryFilter = finalFilter.$and.length > 0 ? finalFilter : {};
+
+    const totalTechDataCount = await this.StatModel.countDocuments(queryFilter);
+
+    const stat = await this.StatModel.find(queryFilter).limit(rows).skip(first);
 
     return { stat, totalTechDataCount };
   }
