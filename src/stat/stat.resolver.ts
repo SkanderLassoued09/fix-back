@@ -14,7 +14,6 @@ import {
   StatsTableData,
 } from './entities/stat.entity';
 import { CreateStatInput } from './dto/create-stat.input';
-import { UpdateStatInput } from './dto/update-stat.input';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
 import { Profile } from 'src/profile/entities/profile.entity';
 import { UseGuards } from '@nestjs/common';

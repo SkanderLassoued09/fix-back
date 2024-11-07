@@ -525,6 +525,10 @@ export class DiService {
   }
 
   async getStatusCount() {
+    // Get all statuses from the STATUS_DI object
+    const allStatuses = Object.values(STATUS_DI).map((status) => status.status);
+
+    // Perform aggregation
     const results = await this.diModel.aggregate([
       {
         $match: {
@@ -545,8 +549,18 @@ export class DiService {
         },
       },
     ]);
-    console.log('🥥result', results);
-    return results;
+
+    // Map results to a dictionary for easier lookup
+    const resultMap = new Map(results.map((r) => [r.status, r.count]));
+
+    // Build the final result, ensuring all statuses are included
+    const finalResults = allStatuses.map((status) => ({
+      status,
+      count: resultMap.get(status) || 0,
+    }));
+
+    console.log('🥥 Final Results:', finalResults);
+    return finalResults;
   }
 
   async markAsSeen(_id: string) {
@@ -905,8 +919,9 @@ export class DiService {
   async getDiForMagasin(paginationConfig: PaginationConfigDi) {
     const queryCoordinator = {
       contain_pdr: true,
-      status: { $in: ['MagasinEstimation', 'INMAGASIN'] },
     };
+
+    //   status: { $in: ['MagasinEstimation', 'INMAGASIN'] },
     const { first, rows } = paginationConfig;
     const totalDiCount = await this.diModel.countDocuments(queryCoordinator);
     const di = await this.diModel
