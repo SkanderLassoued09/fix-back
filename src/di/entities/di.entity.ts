@@ -6,6 +6,7 @@ import { Company } from 'src/company/entities/company.entity';
 import { DiCategory } from 'src/di_category/entities/di_category.entity';
 import { Location } from 'src/location/entities/location.entity';
 import { Profile } from 'src/profile/entities/profile.entity';
+import { Stat } from 'src/stat/entities/stat.entity';
 
 @Schema({ timestamps: true })
 export class DiDocument extends Document {
@@ -363,3 +364,4 @@ export class UpdateNego {
   @Field()
   final_price: number;
 }
+

@@ -11,7 +11,7 @@ import { User as CurrentUser } from 'src/auth/profile.decorator';
 import { Profile } from 'src/profile/entities/profile.entity';
 import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
-import { error } from 'console';
+import { error, log } from 'console';
 import { StatService } from 'src/stat/stat.service';
 import { PubSub } from 'graphql-subscriptions';
 import { Stat } from 'src/stat/entities/stat.entity';
@@ -410,30 +410,69 @@ export class DiResolver {
 // function that return the "Ecart Type" 
   @Query(() => Number)
   async getTechStatisticsMoyenneReperation(@Args('techRep_id') techRep_id: string) {
-  
     const data =  await this.diService.getTechStatisticsMoyenneReperation(techRep_id);
     const countNumberReperation = data.filter(element => element.rep_time).length;
     const totalRepTimeInSeconds = data
     .map(element => this.timeStringToSeconds(element.rep_time))
     .reduce((acc, curr) => acc + curr, 0);
     let moyRep = totalRepTimeInSeconds / countNumberReperation
-   
-    
-    
+      
    const sumDureeMinusDureeMoyenne = data
     .map(element => Math.pow(this.timeStringToSeconds(element.rep_time) - moyRep,2)) 
     .reduce((acc, curr) => acc + curr, 0);
       console.log(sumDureeMinusDureeMoyenne,"sumDureeMinusDureeMoyenne")
 
-
     const ecartType = Math.sqrt(sumDureeMinusDureeMoyenne/countNumberReperation) 
       
     return ecartType
   }
+  //EcartType Diagnostique
+  @Query(() => Number)
+  async getTechStatisticsMoyenneDiagnostique(@Args('techDiag_id') techDiag_id: string) {
+    const data =  await this.diService.getTechStatisticsMoyenneDiagnostique(techDiag_id);
+    const countNumberDiagnostique = data.filter(element => element.diag_time).length;
+    const totalDiagTimeInSeconds = data
+    .map(element => this.timeStringToSeconds(element.diag_time))
+    .reduce((acc, curr) => acc + curr, 0);
+    let moyDiag = totalDiagTimeInSeconds / countNumberDiagnostique
+      
+   const sumDureeMinusDureeMoyenne = data
+    .map(element => Math.pow(this.timeStringToSeconds(element.diag_time) - moyDiag,2)) 
+    .reduce((acc, curr) => acc + curr, 0);
+      console.log(sumDureeMinusDureeMoyenne,"sumDureeMinusDureeMoyenne")
 
+    const ecartType = Math.sqrt(sumDureeMinusDureeMoyenne/countNumberDiagnostique) 
+      
+    return ecartType
+  }
+//2. Taux de reperation reussie for each tech
+// function that give % of success reperation and retour reperation
+@Query(()=>Number)
+async getTauxRepReussiteByTech(@Args('techRep_id') techRep_id: string)
+{
+  const data =  await this.diService.getTauxRepReussiteByTech(techRep_id);
+  let repSuccess = 0
+  let allcounter = data.length
+  data.map(el=>el.status==='FINISHED'? repSuccess=repSuccess+1:repSuccess);
  
+  const percentageReussite = (repSuccess/allcounter)*100
+  return percentageReussite
+}
+//2. Taux de reperation qui reflete le nombre de carte traite
+@Query(()=>Number)
+async getTauxReperationByTech(@Args('techRep_id') techRep_id: string)
+{
+  const data =  await this.diService.getTauxReperationByTech(techRep_id);
+  let repFinie = 0
+  let allcounter = data.length
+  data.map(el=>el.status==='FINISHED'? repFinie=repFinie+1:repFinie);
+  console.log("allcounter",allcounter)
+  const percentageTraiter = (repFinie/allcounter)*100
+  return percentageTraiter
+}
 
 
-  
+
+
 
 }
