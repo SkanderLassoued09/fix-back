@@ -49,6 +49,7 @@ import { AuditModule } from './audit/audit.module';
     StatModule,
     CronModule,
     AuditModule,
+    
   ],
   controllers: [],
   providers: [],

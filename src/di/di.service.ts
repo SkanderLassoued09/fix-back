@@ -915,6 +915,28 @@ export class DiService {
         return err;
       });
   }
+//! Query for statistics Here
+//1.Duree Moyenne Reparation
+async getTechStatisticsMoyenneReperation (techRep_id: string) {
+  return await this.statModel
+    .find({
+      id_tech_rep: techRep_id,
+      status: {
+        $in: [
+          STATUS_DI.Finished.status,
+          STATUS_DI.Retour1.status,
+          STATUS_DI.Retour2.status,
+          STATUS_DI.Retour3.status,
+        ],
+      },
+    })
+    .then((res) => {
+      return res;
+    })
+    .catch((err) => {
+      return err;
+    });
+}
 
   async getDiForMagasin(paginationConfig: PaginationConfigDi) {
     const queryCoordinator = {

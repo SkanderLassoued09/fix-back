@@ -14,14 +14,38 @@ import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 import { error } from 'console';
 import { StatService } from 'src/stat/stat.service';
 import { PubSub } from 'graphql-subscriptions';
-import { STATUS_DI } from './di.status';
+import { Stat } from 'src/stat/entities/stat.entity';
+import { rootCertificates } from 'tls';
+
 @Resolver(() => Di)
 export class DiResolver {
+   // used to convert from string to number
+    timeStringToSeconds(timeString) 
+   {
+   const [hours, minutes, seconds] = timeString.trim().split(':').map(Number);
+   return hours * 3600 + minutes * 60 + seconds;
+ }
+ 
+ // Function to convert seconds to "hh:mm:ss"
+  secondsToTimeString(totalSeconds) {
+   const hours = Math.floor(totalSeconds / 3600);
+   const minutes = Math.floor((totalSeconds % 3600) / 60);
+   const seconds = totalSeconds % 60;
+   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+ }
+
+
+
   constructor(
     private readonly diService: DiService,
     private readonly statService: StatService,
     private readonly pubsub: PubSub,
-  ) {}
+    
+  ) 
+  {
+   
+  
+}
 
   @Mutation(() => Di)
   @UseGuards(JwtAuthGuard)
@@ -373,4 +397,37 @@ export class DiResolver {
   countIgnore(@Args('_idDI') _idDI: string) {
     return this.diService.countIgnore(_idDI);
   }
+
+
+ 
+//1.Duree Moyenne Reparation 
+// function that return the "Ecart Type" 
+  @Query(() => Number)
+  async getTechStatisticsMoyenneReperation(@Args('techRep_id') techRep_id: string) {
+  
+    const data =  await this.diService.getTechStatisticsMoyenneReperation(techRep_id);
+    const countNumberReperation = data.filter(element => element.rep_time).length;
+    const totalRepTimeInSeconds = data
+    .map(element => this.timeStringToSeconds(element.rep_time))
+    .reduce((acc, curr) => acc + curr, 0);
+    let moyRep = totalRepTimeInSeconds / countNumberReperation
+   
+    
+    
+   const sumDureeMinusDureeMoyenne = data
+    .map(element => Math.pow(this.timeStringToSeconds(element.rep_time) - moyRep,2)) 
+    .reduce((acc, curr) => acc + curr, 0);
+      console.log(sumDureeMinusDureeMoyenne,"sumDureeMinusDureeMoyenne")
+
+
+    const ecartType = Math.sqrt(sumDureeMinusDureeMoyenne/countNumberReperation) 
+      
+    return ecartType
+  }
+
+ 
+
+
+  
+
 }
