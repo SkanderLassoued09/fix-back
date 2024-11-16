@@ -504,6 +504,7 @@ export class DiService {
 
   //Tech finsih diagnostic
   async tech_startDiagnostic(_idDI: string, diag: DiagUpdate) {
+    console.log('🍤[diag]:', diag);
     const result = await this.diModel.updateOne(
       { _id: _idDI },
       {
@@ -558,6 +559,7 @@ export class DiService {
       count: resultMap.get(status) || 0,
     }));
 
+    console.log('🥥 Final Results:', finalResults);
     return finalResults;
   }
 
@@ -913,35 +915,34 @@ export class DiService {
         return err;
       });
   }
-//! Query for statistics Here
-//1.Duree Moyenne Reparation
-async getTechStatisticsMoyenneReperation (techRep_id: string) {
-  return await this.statModel
-    .find({
-      id_tech_rep: techRep_id,
-      status: {
-        $in: [
-          STATUS_DI.Finished.status,
-          STATUS_DI.Retour1.status,
-          STATUS_DI.Retour2.status,
-          STATUS_DI.Retour3.status,
-        ],
-      },
-    })
-    .then((res) => {
-      return res;
-    })
-    .catch((err) => {
-      return err;
-    });
-}
+  //! Query for statistics Here
+  //1.Duree Moyenne Reparation
+  async getTechStatisticsMoyenneReperation(techRep_id: string) {
+    return await this.statModel
+      .find({
+        id_tech_rep: techRep_id,
+        status: {
+          $in: [
+            STATUS_DI.Finished.status,
+            STATUS_DI.Retour1.status,
+            STATUS_DI.Retour2.status,
+            STATUS_DI.Retour3.status,
+          ],
+        },
+      })
+      .then((res) => {
+        return res;
+      })
+      .catch((err) => {
+        return err;
+      });
+  }
 
   async getDiForMagasin(paginationConfig: PaginationConfigDi) {
     const queryCoordinator = {
       contain_pdr: true,
     };
 
-    //   status: { $in: ['MagasinEstimation', 'INMAGASIN'] },
     const { first, rows } = paginationConfig;
     const totalDiCount = await this.diModel.countDocuments(queryCoordinator);
     const di = await this.diModel
