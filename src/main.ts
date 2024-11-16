@@ -8,8 +8,8 @@ async function bootstrap() {
   app.use(bodyParser.json({ limit: '5gb' }));
   app.use(bodyParser.urlencoded({ limit: '5gb', extended: true }));
 
-  await app.listen(3000, '192.168.100.9', () => {
-    console.log('🍆 Running on http://192.168.100.9:3000');
+  await app.listen(3000, () => {
+    console.log('🍆 Running..');
   });
 }
 bootstrap();

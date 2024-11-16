@@ -252,6 +252,7 @@ export class DiService {
       .populate('createdBy', 'firstName lastName')
       .populate('location_id', '_id location_name')
       .populate('di_category_id', '_id category')
+      .sort({ createdAt: -1 })
       .limit(rows)
       .skip(first)
       .exec();
@@ -865,6 +866,7 @@ export class DiService {
       .populate('createdBy', 'firstName lastName')
       .populate('location_id', '_id location_name')
       .populate('company_id', 'name ')
+      .sort({ createdAt: -1 })
       .limit(rows)
       .skip(first);
 
@@ -950,6 +952,7 @@ export class DiService {
     const totalDiCount = await this.diModel.countDocuments(queryCoordinator);
     const di = await this.diModel
       .find(queryCoordinator)
+      .sort({ createdAt: -1 })
       .limit(rows)
       .skip(first);
 
