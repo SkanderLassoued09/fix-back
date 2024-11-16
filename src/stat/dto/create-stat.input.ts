@@ -31,3 +31,22 @@ export class CreateStatInput {
   @Field({ defaultValue: false })
   reperationfinishedFLAG: boolean;
 }
+
+@InputType()
+export class PauseLogInput {
+  // @Field({ nullable: true })
+  // _id: string;
+  @Field()
+  pauseType: 'diag' | 'rep';
+
+  @Field()
+  pauseStart: string;
+  @Field({ nullable: true })
+  pauseEnd?: string;
+}
+
+@InputType()
+export class UpdatedPauseTime {
+  @Field({ nullable: true })
+  pauseEnd?: string;
+}

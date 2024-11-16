@@ -136,6 +136,15 @@ export class DiResolver {
   }
 
   @Mutation(() => Di)
+  async setSelectedComponentAsDone(
+    @Args('_id') _id: string,
+    @Args('nameComposant') nameComposant: string,
+  ) {
+    console.log('🌽', _id, nameComposant);
+    return await this.diService.setSelectedComponentAsDone(_id, nameComposant);
+  }
+
+  @Mutation(() => Di)
   manager_Pending1(@Args('_id') _id: string) {
     return this.diService.manager_Pending1(_id);
   }
@@ -153,7 +162,6 @@ export class DiResolver {
     @Args('_id') _id: string,
     @Args('diag') diag: DiagUpdate,
   ) {
-    console.log('🍏[diag]:', diag);
     const isDiag = this.diService.tech_startDiagnostic(_id, diag);
     if (isDiag) {
       return true;
@@ -372,8 +380,6 @@ export class DiResolver {
   //Diagnostique in Pause
   @Mutation(() => Di)
   changeToDiagnosticInPause(@Args('_idDI') _idDI: string) {
-    console.log('🍒 diag en pause fired');
-
     return this.diService.changeToDiagnosticInPause(_idDI);
   }
 

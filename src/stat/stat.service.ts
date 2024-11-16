@@ -3,7 +3,7 @@ import {
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
-import { CreateStatInput } from './dto/create-stat.input';
+import { CreateStatInput, PauseLogInput } from './dto/create-stat.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Stat } from './entities/stat.entity';
 import { Model } from 'mongoose';
@@ -39,7 +39,6 @@ export class StatService {
   }
 
   async createStat(createStatInput: CreateStatInput): Promise<Stat> {
-    console.log('🌶 fired');
     const index = await this.generateStatId();
 
     createStatInput._id = `STAT${index}`;
@@ -242,6 +241,18 @@ export class StatService {
     }
   }
 
+  async getStatInfoForTechReparation(_idDi: string) {
+    const diData = await this.diModel.findOne({ _id: _idDi });
+    const StatData = await this.StatModel.findOne({ _idDi });
+
+    const techDiag = await this.profileService.getTech(StatData.id_tech_diag);
+    const techrep = await this.profileService.getTech(StatData.id_tech_rep);
+    StatData.id_tech_diag = techDiag;
+    StatData.id_tech_rep = techrep;
+
+    return { diData, StatData };
+  }
+
   //get by ID_DI
   async getInfoStatByIdDi(_idDi: string) {
     return await this.StatModel.findOne({ _idDi }).exec();
@@ -249,7 +260,6 @@ export class StatService {
 
   // update status
   async updateStatus(_id: string, status: string) {
-    console.log('🥞[_id]:', _id);
     const result = await this.StatModel.updateOne(
       { _idDi: _id },
       {
@@ -274,5 +284,80 @@ export class StatService {
     }
 
     return stat;
+  }
+
+  getStatById(_id: string) {
+    return this.StatModel.findOne({ _id });
+  }
+
+  async getStatByIdlogs(_id: string) {
+    const stat = await this.StatModel.findOne({ _idDi: _id });
+    if (!stat) {
+      throw new Error('Stat not found');
+    }
+    if (stat.pauseLogs.length === 0) {
+      throw new Error('No logs found');
+    }
+    if (stat.id_tech_diag) {
+      const techdiag = await this.profileService.getTech(stat.id_tech_diag);
+      stat.id_tech_diag = techdiag;
+    }
+
+    if (stat.id_tech_rep) {
+      const techrep = await this.profileService.getTech(stat.id_tech_rep);
+      stat.id_tech_rep = techrep;
+    }
+
+    return stat;
+  }
+
+  async addPauseLog(statId: string, pauseLog: PauseLogInput): Promise<any> {
+    const stat = await this.getStatById(statId);
+    if (!stat) {
+      throw new Error('Stat not found');
+    }
+
+    if (!stat.pauseLogs) {
+      stat.pauseLogs = [];
+    }
+
+    stat.pauseLogs.push(pauseLog);
+    return stat.save();
+  }
+
+  async updatePauseTime(
+    statId: string,
+    pauseLogId: string,
+    updatedPauseTime: Partial<PauseLogInput>,
+  ): Promise<any> {
+    const stat = await this.getStatById(statId);
+
+    if (!stat) {
+      throw new Error('Stat not found');
+    }
+
+    if (!stat.pauseLogs || stat.pauseLogs.length === 0) {
+      throw new Error('No pause logs found for the specified Stat');
+    }
+
+    // Find the pause log by ID
+    const pauseLog = stat.pauseLogs.find((log) => {
+      console.log('log', log);
+      console.log('log', log._id.toString());
+      console.log('🍡[pauseLogId]:', pauseLogId);
+
+      return log._id.toString() === pauseLogId;
+    });
+
+    console.log('🍹[pauseLog]:', pauseLog);
+    if (!pauseLog) {
+      throw new Error('Pause log not found');
+    }
+
+    // Update the pause log with the new data
+    Object.assign(pauseLog, updatedPauseTime);
+
+    // Save the updated Stat
+    return stat.save();
   }
 }

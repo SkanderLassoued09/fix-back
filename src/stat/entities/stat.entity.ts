@@ -1,6 +1,7 @@
 import { ObjectType, Field, Int } from '@nestjs/graphql';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
+import { Di } from 'src/di/entities/di.entity';
 import { LocationDocument } from 'src/location/entities/location.entity';
 
 @Schema({ timestamps: true, autoIndex: false })
@@ -32,6 +33,22 @@ export class StatDocument extends Document {
   diagnostiquefinishedFLAG: boolean;
   @Prop({ defaultValue: false })
   reperationfinishedFLAG: boolean;
+
+  // Embedded array of pause logs for diagnostics
+  @Prop({
+    type: [
+      {
+        pauseType: { type: String, enum: ['diag', 'rep'], required: true },
+        pauseStart: { type: String, required: false },
+        pauseEnd: { type: String, required: false, default: null },
+      },
+    ],
+  })
+  pauseLogs: Array<{
+    pauseType: 'diag' | 'rep';
+    pauseStart: Date;
+    pauseEnd: Date;
+  }>;
 }
 export const StatSchema = SchemaFactory.createForClass(StatDocument);
 
@@ -42,6 +59,21 @@ export class StatsCount {
   @Field()
   count: number;
 }
+
+@ObjectType()
+export class PauseLog {
+  @Field()
+  _id?: string;
+  @Field()
+  pauseType: 'diag' | 'rep';
+
+  @Field({ nullable: true })
+  pauseStart?: string;
+
+  @Field({ nullable: true, defaultValue: null })
+  pauseEnd?: string;
+}
+
 @ObjectType()
 export class Stat {
   @Field()
@@ -70,6 +102,9 @@ export class Stat {
   diagnostiquefinishedFLAG: boolean;
   @Field({ defaultValue: false })
   reperationfinishedFLAG: boolean;
+  // Embedded array for pause logs
+  @Field(() => [PauseLog], { nullable: true })
+  pauseLogs?: PauseLog[];
 }
 
 @ObjectType()
@@ -88,4 +123,12 @@ export class CreateStatNotificationReturn {
   messageNotification: string;
   @Field({ nullable: true })
   id_tech_diag: string;
+}
+
+@ObjectType()
+export class DiReparationInfo {
+  @Field()
+  StatData: Stat;
+  @Field()
+  diData: Di;
 }

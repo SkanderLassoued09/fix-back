@@ -9,11 +9,16 @@ import {
 import { StatService } from './stat.service';
 import {
   CreateStatNotificationReturn,
+  DiReparationInfo,
   Stat,
   StatsCount,
   StatsTableData,
 } from './entities/stat.entity';
-import { CreateStatInput } from './dto/create-stat.input';
+import {
+  CreateStatInput,
+  PauseLogInput,
+  UpdatedPauseTime,
+} from './dto/create-stat.input';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
 import { Profile } from 'src/profile/entities/profile.entity';
 import { UseGuards } from '@nestjs/common';
@@ -159,8 +164,41 @@ export class StatResolver {
     return await this.statService.getDIByStat(_idSTAT);
   }
 
+  @Query(() => DiReparationInfo)
+  async getStatInfoForTechReparation(@Args('_idDi') _idDi: string) {
+    const value = await this.statService.getStatInfoForTechReparation(_idDi);
+    console.log('🥕[value]:', value);
+    return value;
+  }
+
   @Query(() => Stat)
   getInfoStatByIdDi(@Args('_idDi') _idDi: string) {
     return this.statService.getInfoStatByIdDi(_idDi);
+  }
+
+  @Query(() => Stat)
+  getStatByIdlogs(@Args('_idDi') _idDi: string) {
+    return this.statService.getStatByIdlogs(_idDi);
+  }
+
+  @Mutation(() => Stat)
+  async addPauseLog(
+    @Args('statId') statId: string,
+    @Args('pauseLog') pauseLog: PauseLogInput,
+  ): Promise<Stat> {
+    return this.statService.addPauseLog(statId, pauseLog);
+  }
+
+  @Mutation(() => Stat)
+  async updatePauseLog(
+    @Args('statId') statId: string,
+    @Args('pauseLogId') pauseLogId: string,
+    @Args('updatedPauseTime') updatedPauseTime: UpdatedPauseTime,
+  ): Promise<Stat> {
+    return this.statService.updatePauseTime(
+      statId,
+      pauseLogId,
+      updatedPauseTime,
+    );
   }
 }

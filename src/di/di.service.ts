@@ -504,7 +504,6 @@ export class DiService {
 
   //Tech finsih diagnostic
   async tech_startDiagnostic(_idDI: string, diag: DiagUpdate) {
-    console.log('🍤[diag]:', diag);
     const result = await this.diModel.updateOne(
       { _id: _idDI },
       {
@@ -559,7 +558,6 @@ export class DiService {
       count: resultMap.get(status) || 0,
     }));
 
-    console.log('🥥 Final Results:', finalResults);
     return finalResults;
   }
 
@@ -952,6 +950,24 @@ async getTechStatisticsMoyenneReperation (techRep_id: string) {
       .skip(first);
 
     return { di, totalDiCount };
+  }
+
+  async setSelectedComponentAsDone(
+    _id: string,
+    nameComponent: string,
+  ): Promise<any> {
+    // Find the document with the specific component
+    const updatedDocument = await this.diModel.findOneAndUpdate(
+      { _id, 'array_composants.nameComposant': nameComponent },
+      { $set: { 'array_composants.$.isUpdated': true } }, // Update only the matched component
+      { new: true }, // Return the updated document
+    );
+
+    if (!updatedDocument) {
+      throw new NotFoundException(`Document or component not found.`);
+    }
+
+    return updatedDocument;
   }
 
   async affectinitialPrice(_id: string, price: number) {

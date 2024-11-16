@@ -90,9 +90,9 @@ export class CreateDiInput {
 @InputType()
 export class PaginationConfigDi {
   @Field()
-  rows: number; // number of element displayed in table
+  rows: number;
   @Field()
-  first: number; // index of current pages
+  first: number;
 }
 @InputType()
 export class ComposantStructureInput {
@@ -101,6 +101,8 @@ export class ComposantStructureInput {
 
   @Field()
   quantity: number;
+  @Field({ nullable: true, defaultValue: false })
+  isUpdated: boolean;
 }
 
 @InputType()

@@ -216,11 +216,13 @@ export class Di {
 
 @ObjectType()
 export class ComposantStructure {
-  @Field()
+  @Field({ nullable: true })
   nameComposant: string;
 
-  @Field()
+  @Field({ nullable: true })
   quantity: number;
+  @Field({ nullable: true, defaultValue: false })
+  isUpdated: boolean;
 }
 @ObjectType()
 export class RemarqueDi {
