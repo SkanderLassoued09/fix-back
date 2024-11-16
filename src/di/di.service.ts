@@ -36,6 +36,7 @@ import { getFileExtension } from './shared.files';
 import { AuditService } from 'src/audit/audit.service';
 import { AuditInput } from 'src/audit/dto/create-audit.input';
 import { Stat } from 'src/stat/entities/stat.entity';
+import * as moment from 'moment';
 
 @Injectable()
 export class DiService {
@@ -255,6 +256,7 @@ export class DiService {
       .skip(first)
       .exec();
 
+    console.log('🍐[diRecords]:', diRecords);
     // Fetch linked stats for each DI
     const di = await Promise.all(
       diRecords.map(async (di) => {
@@ -277,6 +279,7 @@ export class DiService {
           di_category_id: di.di_category_id?.category,
           location_id: di.location_id?.location_name ?? 'N/A',
           status: di.status,
+          createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
           image: di?.image?.length > 0 ? di.image : '-',
           client_id: di.client_id?.first_name ?? '-',
           company_id: di.company_id?.name ?? '-',
