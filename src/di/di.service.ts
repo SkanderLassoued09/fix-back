@@ -20,7 +20,7 @@ import {
   Composant,
   ComposantDocument,
 } from 'src/composant/entities/composant.entity';
-import { error } from 'console';
+import { error, log } from 'console';
 import {
   Remarque,
   RemarqueDocument,
@@ -1455,6 +1455,25 @@ async getTauxReperationByTech(techRep_id: string) {
     });
 }
 
+
+//3. Duree moyenne de reperation par type de panne
+async getDureeByCategoryDi(techRep_id: string) {
+  const statsByTech = await this.statModel
+    .find({
+      id_tech_rep: techRep_id})
+  console.log("statsByTech",statsByTech)
+
+  const dilist = await Promise.all(
+    statsByTech.map(async (el) => await this.getDiById(el._idDi))
+  );
+
+log(dilist,"dilistdilist")
+const combined = statsByTech.map((stat, index) => ({
+  rep_time: stat.rep_time,
+  di_category_id: dilist[index]?.di_category_id, 
+}));
+
+}
 
 
 
