@@ -196,7 +196,10 @@ export class StatService {
 
     const totalTechDataCount = await this.StatModel.countDocuments(queryFilter);
 
-    const stat = await this.StatModel.find(queryFilter).limit(rows).skip(first);
+    const stat = await this.StatModel.find(queryFilter)
+      .sort({ createdAt: -1 })
+      .limit(rows)
+      .skip(first);
 
     return { stat, totalTechDataCount };
   }

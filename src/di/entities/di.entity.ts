@@ -111,6 +111,8 @@ export class DiDocument extends Document {
   remarque_coordinator: string;
   @Prop({ nullable: true })
   confirmationComposant: string;
+  createdAt: Date;
+  updatedAt: Date;
 }
 export const DiSchema = SchemaFactory.createForClass(DiDocument);
 
