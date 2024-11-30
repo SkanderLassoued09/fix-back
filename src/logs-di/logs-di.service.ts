@@ -4,23 +4,26 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { DiLogsDocument, LogsDi } from './entities/logs-di.entity';
 import { DiagUpdateLogs } from './dto/create-logs-di.input';
-
+import { getFileExtension } from 'src/di/shared.files';
+import * as randomstring from 'randomstring';
+import { join } from 'path';
+import * as fs from 'fs';
 @Injectable()
 export class LogsDiService {
   constructor(
     @InjectModel(LogsDi.name)
     private readonly logsDiModel: Model<DiLogsDocument>,
   ) {}
-  async create(_id: number) {
-    return await new this.logsDiModel({ _id }).save();
+  async create(_id: number, _idDi: string) {
+    return await new this.logsDiModel({ _id, _idDi }).save();
   }
 
-  async getLigsById(_id: number) {
+  async getLogsById(_idLog: number, _idDi: string) {
     try {
-      const logsDi = await this.logsDiModel.findOne({ _id });
-      if (!logsDi) {
-        throw new Error(`logsDi not found for id ${_id}`);
-      }
+      const logsDi = await this.logsDiModel.findOne({ _id: _idLog, _idDi });
+      // if (!logsDi) {
+      //   throw new Error(`logsDi not found for id ${_idLog}`);
+      // }
 
       return logsDi;
     } catch (error) {
@@ -33,10 +36,10 @@ export class LogsDiService {
   // }
 
   //Tech finsih diagnostic
-  async tech_startDiagnostic(_idDI: number, diag: DiagUpdateLogs) {
+  async tech_startDiagnostic(_id: number, _idDi: string, diag: DiagUpdateLogs) {
     console.log('fired in logs');
     const result = await this.logsDiModel.findOneAndUpdate(
-      { _id: _idDI },
+      { _id, _idDi },
       {
         $set: {
           can_be_repaired: diag.can_be_repaired,
@@ -53,20 +56,38 @@ export class LogsDiService {
 
     return result;
   }
-  async savePricing(_id: number, price: number, final_price?: number) {
+  async savePricing(
+    _id: number,
+    _idDi: string,
+    price: number,
+    final_price?: number,
+  ) {
     if (!final_price) {
       console.log('update price in logs');
       return await this.logsDiModel.findOneAndUpdate(
-        { _id },
+        { _id, _idDi },
         { $set: { price, final_price } },
       );
     } else {
       console.log('update price in logs');
       return await this.logsDiModel.findOneAndUpdate(
-        { _id },
+        { _id, _idDi },
         { $set: { price } },
       );
     }
+  }
+
+  async addDevisPDFLogs(_id: number, _idDi: string, pdf: string) {
+    return await this.logsDiModel.updateOne(
+      { _id, _idDi },
+      { $set: { devis: pdf } },
+    );
+  }
+  async addBCPDFLogs(_id: number, _idDi: string, pdf: string) {
+    return await this.logsDiModel.updateOne(
+      { _id, _idDi },
+      { $set: { bon_de_commande: pdf } },
+    );
   }
 
   async setSelectedComponentAsDoneLogs(_id: number, nameComponent: string) {

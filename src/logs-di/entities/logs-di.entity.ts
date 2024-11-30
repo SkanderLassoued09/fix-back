@@ -6,7 +6,8 @@ import { Document } from 'mongoose';
 export class DiLogsDocument extends Document {
   @Prop()
   _id: number;
-
+  @Prop()
+  _idDi: string;
   @Prop()
   // repair or not
   can_be_repaired: boolean;
@@ -96,7 +97,8 @@ export const DiLogsSchema = SchemaFactory.createForClass(DiLogsDocument);
 export class LogsDi {
   @Field(() => Number, { nullable: true })
   _id?: number;
-
+  @Field(() => String, { nullable: true })
+  _idDi?: string;
   @Field(() => Boolean, { nullable: true })
   can_be_repaired?: boolean;
 

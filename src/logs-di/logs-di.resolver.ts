@@ -10,16 +10,17 @@ export class LogsDiResolver {
   constructor(private readonly logsDiService: LogsDiService) {}
 
   @Mutation(() => LogsDi)
-  createLogsDi(@Args('_id') _id: number) {
-    return this.logsDiService.create(_id);
+  createLogsDi(@Args('_id') _id: number, @Args('_idDi') _idDi: string) {
+    return this.logsDiService.create(_id, _idDi);
   }
 
   @Mutation(() => LogsDi)
   async tech_startDiagnosticLogs(
     @Args('_id') _id: number,
+    @Args('_idDi') _idDi: string,
     @Args('diag') diag: DiagUpdateLogs,
   ) {
-    return await this.logsDiService.tech_startDiagnostic(_id, diag);
+    return await this.logsDiService.tech_startDiagnostic(_id, _idDi, diag);
   }
 
   @Query(() => [LogsDi], { name: 'logsDi' })
@@ -28,8 +29,11 @@ export class LogsDiResolver {
   }
 
   @Query(() => LogsDi)
-  getLigsById(@Args('id', { type: () => Int }) id: number) {
-    return this.logsDiService.getLigsById(id);
+  getLigsById(
+    @Args('id', { type: () => Int }) id: number,
+    @Args('_idDi') _idDi: string,
+  ) {
+    return this.logsDiService.getLogsById(id, _idDi);
   }
 
   @Mutation(() => LogsDi)

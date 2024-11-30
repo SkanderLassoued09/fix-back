@@ -8,10 +8,13 @@ import { NotificationsGateway } from 'src/notification.gateway';
 import { ProfileService } from 'src/profile/profile.service';
 import { Profile, ProfileSchema } from 'src/profile/entities/profile.entity';
 import { Di } from 'src/di/entities/di.entity';
+import { LogsDiService } from 'src/logs-di/logs-di.service';
+import { LogsDiModule } from 'src/logs-di/logs-di.module';
 
 @Module({
   providers: [StatResolver, StatService, NotificationsGateway, ProfileService],
   imports: [
+    LogsDiModule,
     PubSubModule,
     MongooseModule.forFeature([
       {

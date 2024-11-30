@@ -121,7 +121,7 @@ export class DiService {
         throw new Error(`Demande d'intervention with ID '${_id}' not found.`);
       }
       if (di && di.ignoreCount && di.ignoreCount > 0) {
-        return await this.logsDiService.getLigsById(di.ignoreCount);
+        return await this.logsDiService.getLogsById(di.ignoreCount, di._id);
       } else {
         return di;
       }
@@ -167,10 +167,19 @@ export class DiService {
       join(__dirname, `../../docs/${randompdfFile}.${extension}`),
       buffer,
     );
-    return await this.diModel.updateOne(
-      { _id },
-      { $set: { devis: `${randompdfFile}.${extension}` } },
-    );
+    const di = await this.diModel.findOne({ _id });
+    if (di && di.ignoreCount && di.ignoreCount > 0) {
+      return await this.logsDiService.addDevisPDFLogs(
+        di.ignoreCount,
+        di._id,
+        `${randompdfFile}.${extension}`,
+      );
+    } else {
+      return await this.diModel.updateOne(
+        { _id },
+        { $set: { devis: `${randompdfFile}.${extension}` } },
+      );
+    }
   }
   async addBCPDF(_id: string, pdf: string) {
     const extension = getFileExtension(pdf);
@@ -184,10 +193,20 @@ export class DiService {
       join(__dirname, `../../docs/${randompdfFile}.${extension}`),
       buffer,
     );
-    return await this.diModel.updateOne(
-      { _id },
-      { $set: { bon_de_commande: `${randompdfFile}.${extension}` } },
-    );
+
+    const di = await this.diModel.findOne({ _id });
+    if (di && di.ignoreCount && di.ignoreCount > 0) {
+      return await this.logsDiService.addBCPDFLogs(
+        di.ignoreCount,
+        di._id,
+        `${randompdfFile}.${extension}`,
+      );
+    } else {
+      return await this.diModel.updateOne(
+        { _id },
+        { $set: { bon_de_commande: `${randompdfFile}.${extension}` } },
+      );
+    }
   }
 
   // async getDiById(_id:string){
@@ -438,6 +457,7 @@ export class DiService {
       console.log('logs');
       return this.logsDiService.savePricing(
         pricingNeg.ignoreCount,
+        _idDi,
         price,
         final_price,
       );
@@ -534,6 +554,7 @@ export class DiService {
     if (didata && didata.ignoreCount && didata.ignoreCount > 0) {
       return await this.logsDiService.tech_startDiagnostic(
         didata.ignoreCount,
+        didata._id,
         diag,
       );
     } else {
@@ -1044,7 +1065,11 @@ export class DiService {
     }
 
     if (pricing && pricing.ignoreCount && pricing.ignoreCount > 0) {
-      return await this.logsDiService.savePricing(pricing.ignoreCount, price);
+      return await this.logsDiService.savePricing(
+        pricing.ignoreCount,
+        pricing._id,
+        price,
+      );
     } else {
       return pricing;
     }

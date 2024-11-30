@@ -12,6 +12,7 @@ import { ProfileService } from 'src/profile/profile.service';
 import { STATUS_DI } from 'src/di/di.status';
 import { PaginationConfigDi } from 'src/di/dto/create-di.input';
 import { Di } from 'src/di/entities/di.entity';
+import { LogsDiService } from 'src/logs-di/logs-di.service';
 @Injectable()
 export class StatService {
   constructor(
@@ -19,6 +20,7 @@ export class StatService {
     @InjectModel('Di') private diModel: Model<Di>,
     private readonly notificationGateway: NotificationsGateway,
     private readonly profileService: ProfileService,
+    private readonly logsDiService: LogsDiService,
   ) {}
 
   async generateStatId(): Promise<number> {
@@ -45,6 +47,7 @@ export class StatService {
     const di = await this.diModel.findOne({ _id: createStatInput._idDi });
     if (di.ignoreCount > 0) {
       createStatInput.ignoreCount = di.ignoreCount;
+      await this.logsDiService.create(di.ignoreCount, createStatInput._idDi);
     }
     const result = await new this.StatModel(createStatInput).save();
 
@@ -97,14 +100,30 @@ export class StatService {
 
   async affectForRep(_idDi: string, _idTech: string) {
     console.log('🌯[affectForRep');
-    return await this.StatModel.updateOne(
-      { _idDi },
-      {
-        $set: {
-          id_tech_rep: _idTech,
+    const di = await this.diModel.findOne({ _id: _idDi });
+    if (!di) {
+      throw new Error('Issue in finding di in send di to reparation');
+    }
+
+    if (di && di.ignoreCount && di.ignoreCount > 0) {
+      return await this.StatModel.updateOne(
+        { _idDi, ignoreCount: di.ignoreCount },
+        {
+          $set: {
+            id_tech_rep: _idTech,
+          },
         },
-      },
-    );
+      );
+    } else {
+      return await this.StatModel.updateOne(
+        { _idDi },
+        {
+          $set: {
+            id_tech_rep: _idTech,
+          },
+        },
+      );
+    }
   }
 
   // Fiter tech data
