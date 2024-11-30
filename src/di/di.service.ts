@@ -37,6 +37,7 @@ import { AuditService } from 'src/audit/audit.service';
 import { AuditInput } from 'src/audit/dto/create-audit.input';
 import { Stat } from 'src/stat/entities/stat.entity';
 import * as moment from 'moment';
+import { LogsDiService } from 'src/logs-di/logs-di.service';
 
 @Injectable()
 export class DiService {
@@ -53,6 +54,7 @@ export class DiService {
     private readonly profileService: ProfileService,
     private readonly notificationGateway: NotificationsGateway,
     private readonly auditService: AuditService,
+    private readonly logsDiService: LogsDiService,
   ) {}
 
   async generateDiId(): Promise<number> {
@@ -114,13 +116,15 @@ export class DiService {
    */
   async getDiById(_id: string) {
     try {
-      const di = await this.diModel.findById(_id);
-
-      // if (!di) {
-      //   throw new Error(`Demande d'intervention with ID '${_id}' not found.`);
-      // }
-
-      return di;
+      const di = await this.diModel.findOne({ _id });
+      if (!di) {
+        throw new Error(`Demande d'intervention with ID '${_id}' not found.`);
+      }
+      if (di && di.ignoreCount && di.ignoreCount > 0) {
+        return await this.logsDiService.getLigsById(di.ignoreCount);
+      } else {
+        return di;
+      }
     } catch (error) {
       throw error;
     }
@@ -257,7 +261,6 @@ export class DiService {
       .skip(first)
       .exec();
 
-    console.log('🍐[diRecords]:', diRecords);
     // Fetch linked stats for each DI
     const di = await Promise.all(
       diRecords.map(async (di) => {
@@ -430,8 +433,17 @@ export class DiService {
     price: number,
     final_price: number,
   ): Promise<UpdateNego> {
-    return await this.diModel
-      .updateOne(
+    const pricingNeg = await this.diModel.findOne({ id: _idDi });
+    if (pricingNeg && pricingNeg.ignoreCount && pricingNeg.ignoreCount > 0) {
+      console.log('logs');
+      return this.logsDiService.savePricing(
+        pricingNeg.ignoreCount,
+        price,
+        final_price,
+      );
+    } else {
+      console.log('original');
+      return await this.diModel.findOneAndUpdate(
         { _id: _idDi },
         {
           $set: {
@@ -439,25 +451,14 @@ export class DiService {
             final_price,
           },
         },
-      )
-      .then((res) => {
-        if (res.modifiedCount > 0 && res.acknowledged) {
-          return {
-            price,
-            final_price,
-          };
-        } else {
-          throw new HttpException('Error', HttpStatus.INTERNAL_SERVER_ERROR);
-        }
-      })
-      .catch((Error) => {
-        throw new HttpException(Error, HttpStatus.INTERNAL_SERVER_ERROR);
-      });
+      );
+    }
   }
 
   //coordinator sending to tech for  diagnostic
   async coordinator_ToDiag(_idDI: string) {
-    const result = await this.diModel.updateOne(
+    console.log('🥖[_idDI]:', _idDI);
+    const diagnostic = await this.diModel.findOneAndUpdate(
       { _id: _idDI },
       {
         $set: {
@@ -466,17 +467,28 @@ export class DiService {
           isOpenedOnce: true,
         },
       },
+      { new: true },
     );
 
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('unable to find');
+    if (!diagnostic) {
+      throw new Error('error in changing status to diagnostic ');
     }
-    await this.statsService.updateStatus(_idDI, STATUS_DI.Diagnostic.status);
-    return result;
+
+    if (diagnostic.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _idDI,
+        STATUS_DI.Diagnostic.status,
+        diagnostic.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(_idDI, STATUS_DI.Diagnostic.status);
+    }
+
+    return diagnostic;
   }
   //coordinator sending to tech for list of di to reperation
   async coordinator_ToRep(_idDI: string, tech_id: string) {
-    const result = await this.diModel.updateOne(
+    const reparation = await this.diModel.findOneAndUpdate(
       { _id: _idDI },
       {
         $set: {
@@ -487,11 +499,20 @@ export class DiService {
       },
     );
 
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('unable to find');
+    if (!reparation) {
+      throw new Error('Issue in changing status to rep');
     }
+
+    if (reparation.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _idDI,
+        STATUS_DI.Reparation.status,
+        reparation.ignoreCount,
+      );
+    }
+
     await this.statsService.updateStatus(_idDI, STATUS_DI.Reparation.status);
-    return result;
+    return reparation;
   }
 
   async setDiInPause(_id: string) {
@@ -508,24 +529,27 @@ export class DiService {
 
   //Tech finsih diagnostic
   async tech_startDiagnostic(_idDI: string, diag: DiagUpdate) {
-    console.log('🍤[diag]:', diag);
-    const result = await this.diModel.updateOne(
-      { _id: _idDI },
-      {
-        $set: {
-          can_be_repaired: diag.can_be_repaired,
-          contain_pdr: diag.contain_pdr,
-          remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
-          array_composants: diag.array_composants,
-          di_category_id: diag.di_category_id,
+    console.log('tech fiish logs');
+    const didata = await this.diModel.findOne({ _id: _idDI });
+    if (didata && didata.ignoreCount && didata.ignoreCount > 0) {
+      return await this.logsDiService.tech_startDiagnostic(
+        didata.ignoreCount,
+        diag,
+      );
+    } else {
+      return await this.diModel.findOneAndUpdate(
+        { _id: _idDI },
+        {
+          $set: {
+            can_be_repaired: diag.can_be_repaired,
+            contain_pdr: diag.contain_pdr,
+            remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
+            array_composants: diag.array_composants,
+            di_category_id: diag.di_category_id,
+          },
         },
-      },
-    );
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('unable to find');
+      );
     }
-
-    return result;
   }
 
   async getStatusCount() {
@@ -563,7 +587,6 @@ export class DiService {
       count: resultMap.get(status) || 0,
     }));
 
-    console.log('🥥 Final Results:', finalResults);
     return finalResults;
   }
 
@@ -581,7 +604,7 @@ export class DiService {
 
   //Tech closing diagnostic
   async tech_stopDiagnostic(_idDI: string) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id: _idDI },
       {
         $set: {
@@ -589,16 +612,25 @@ export class DiService {
           status: STATUS_DI.Diagnostic.status,
         },
       },
+      { new: true },
     );
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('unable to find');
+    if (!result) {
+      throw new Error('Issue in changing state tech_stopDiagnostic');
+    }
+
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _idDI,
+        STATUS_DI.Diagnostic.status,
+        result.ignoreCount,
+      );
     }
     await this.statsService.updateStatus(_idDI, STATUS_DI.Diagnostic.status);
     return result;
   }
   //Tech finsih diagnostic
   async tech_finishDiagnostic(_idDI: string, contain_pdr: boolean) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id: _idDI },
       {
         $set: {
@@ -613,15 +645,22 @@ export class DiService {
         },
       },
     );
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('unable to find');
+    if (!result) {
+      throw new Error('Issue in changing state tech_finishDiagnostic');
     }
-    await this.statsService.updateStatus(_idDI, STATUS_DI.Diagnostic.status); // TODO nezih
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _idDI,
+        STATUS_DI.Diagnostic.status,
+        result.ignoreCount,
+      );
+    }
+    await this.statsService.updateStatus(_idDI, STATUS_DI.Diagnostic.status);
     return result;
   }
   //Tech starting Reperation
   async tech_startReperation(_idDI: string) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id: _idDI },
       {
         $set: {
@@ -630,8 +669,16 @@ export class DiService {
         },
       },
     );
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('unable to find');
+    if (!result) {
+      throw new Error('Issue in changing state tech_startReperation');
+    }
+
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _idDI,
+        STATUS_DI.InReparation.status,
+        result.ignoreCount,
+      );
     }
     await this.statsService.updateStatus(_idDI, STATUS_DI.InReparation.status);
     return result;
@@ -639,7 +686,7 @@ export class DiService {
 
   //Tech closing reperation
   async tech_stopReperation(_idDI: string) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id: _idDI },
       {
         $set: {
@@ -647,9 +694,18 @@ export class DiService {
           status: STATUS_DI.Reparation.status,
         },
       },
+      { new: true },
     );
-    if (result.matchedCount === 0) {
-      throw new InternalServerErrorException('unable to find');
+    if (!result) {
+      throw new Error('Issue in changing state tech_stopReperation');
+    }
+
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _idDI,
+        STATUS_DI.Reparation.status,
+        result.ignoreCount,
+      );
     }
     await this.statsService.updateStatus(_idDI, STATUS_DI.Reparation.status);
     return result;
@@ -674,74 +730,87 @@ export class DiService {
       { new: true },
     );
 
-    if (result) {
-      this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
+    if (!result) {
+      throw new Error('Issue in changing state changeStatusTofinsh');
     }
+
+    if (result.ignoreCount > 0) {
+      this.statsService.updateStatus(
+        _id,
+        STATUS_DI.Finished.status,
+        result.ignoreCount,
+      );
+    }
+
+    await this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
 
     return result;
   }
   //Coordiantor sending to the Admins for affecting price
   // PENDING2 => Pricing
   async coordinator_ToPricing(_idDI: string) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: [Role.ADMIN_MANAGER, Role.ADMIN_TECH],
-            status: STATUS_DI.Pricing.status,
-          },
+    const result = await this.diModel.findOneAndUpdate(
+      { _id: _idDI },
+      {
+        $set: {
+          current_roles: [Role.ADMIN_MANAGER, Role.ADMIN_TECH],
+          status: STATUS_DI.Pricing.status,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+    );
+
+    if (!result) {
+      throw new Error('Issue in changing state coordinator_ToPricing');
+    }
+
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _idDI,
+        STATUS_DI.Pricing.status,
+        result.ignoreCount,
+      );
+    }
   }
 
   //from admins to manager to give the first price
   // Pricing => Negotiation1
   async admins_Pricing(_idDI: string, price: number) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: Role.MANAGER,
-            status: STATUS_DI.Negotiation1.status,
-            price: price,
-          },
+    const result = await this.diModel.updateOne(
+      { _id: _idDI },
+      {
+        $set: {
+          current_roles: Role.MANAGER,
+          status: STATUS_DI.Negotiation1.status,
+          price: price,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+    );
+
+    if (!result) {
+      throw new Error('Issue in admins_Pricing ');
+    }
+
+    return result;
   }
 
   //from manager or AdminsManager to annuler DI
   // Negotiation1 or Negotiation2 => Annuler
   async annulerDi(_idDI: string) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: [Role.ADMIN_MANAGER, Role.ADMIN_TECH, Role.MANAGER],
-            status: STATUS_DI.Annuler.status,
-          },
+    const result = await this.diModel.updateOne(
+      { _id: _idDI },
+      {
+        $set: {
+          current_roles: [Role.ADMIN_MANAGER, Role.ADMIN_TECH, Role.MANAGER],
+          status: STATUS_DI.Annuler.status,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+    );
+
+    if (!result) {
+      throw new Error('Issue in annulerDi ');
+    }
+
+    return result;
   }
   //if DI confirmer we sent to coordiantor
   // Negotiation1  => Pending3
@@ -750,100 +819,93 @@ export class DiService {
     discount_value: number,
     final_price: number,
   ) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: Role.COORDINATOR,
-            discount_value: discount_value,
-            final_price: final_price,
-            status: STATUS_DI.Pending3.status,
-          },
+    const result = await this.diModel.findOneAndUpdate(
+      { _id: _idDI },
+      {
+        $set: {
+          current_roles: Role.COORDINATOR,
+          discount_value: discount_value,
+          final_price: final_price,
+          status: STATUS_DI.Pending3.status,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+    );
+
+    if (!result) {
+      throw new Error('Issue in manager_Negotation_Pendin3 ');
+    }
   }
   //if DI NOT confirmer we sent to Admin Manager
   // Negotiation1  => Negotiation2
   async manager_Negotation1_Negotation2(_idDI: string) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: Role.ADMIN_MANAGER,
-            status: STATUS_DI.Negotiation2.status,
-          },
+    const result = await this.diModel.findOneAndUpdate(
+      { _id: _idDI },
+      {
+        $set: {
+          current_roles: Role.ADMIN_MANAGER,
+          status: STATUS_DI.Negotiation2.status,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+    );
+
+    if (!result) {
+      throw new Error('Issue in manager_Negotation1_Negotation2 ');
+    }
+
+    return result;
   }
   //Retour DI from finished to RETOUR 1
   //send by manager to coordinator so he can chose who gonna repair it
   async di_Retour1(_idDI: string) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: Role.COORDINATOR,
-            status: STATUS_DI.Retour1.status,
-          },
+    const result = await this.diModel.findOneAndUpdate(
+      { _id: _idDI },
+      {
+        $set: {
+          current_roles: Role.COORDINATOR,
+          status: STATUS_DI.Retour1.status,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+      { new: true },
+    );
+
+    if (!result) {
+      throw new Error('Issue in di_Retour1');
+    }
+
+    return result;
   }
   async di_Retour2(_idDI: string) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: Role.COORDINATOR,
-            status: STATUS_DI.Retour2.status,
-          },
+    const result = await this.diModel.findOneAndUpdate(
+      { _id: _idDI },
+      {
+        $set: {
+          current_roles: Role.COORDINATOR,
+          status: STATUS_DI.Retour2.status,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+      { new: true },
+    );
+    if (!result) {
+      throw new Error('Issue di_Retour2');
+    }
+
+    return result;
   }
   async di_Retour3(_idDI: string) {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: Role.COORDINATOR,
-            status: STATUS_DI.Retour3.status,
-          },
+    const result = await this.diModel.updateOne(
+      { _id: _idDI },
+      {
+        $set: {
+          current_roles: Role.COORDINATOR,
+          status: STATUS_DI.Retour3.status,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      },
+    );
+    if (!result) {
+      throw new Error('Issue in di_Retour3 ');
+    }
+
+    return result;
   }
 
   // *Query For Coordinator
@@ -920,8 +982,6 @@ export class DiService {
         return err;
       });
   }
-  
-
 
   async getDiForMagasin(paginationConfig: PaginationConfigDi) {
     const queryCoordinator = {
@@ -943,29 +1003,51 @@ export class DiService {
     _id: string,
     nameComponent: string,
   ): Promise<any> {
-    // Find the document with the specific component
-    const updatedDocument = await this.diModel.findOneAndUpdate(
-      { _id, 'array_composants.nameComposant': nameComponent },
-      { $set: { 'array_composants.$.isUpdated': true } }, // Update only the matched component
-      { new: true }, // Return the updated document
-    );
+    const di = await this.diModel.findOne({ _id });
 
-    if (!updatedDocument) {
-      throw new NotFoundException(`Document or component not found.`);
+    if (di && di.ignoreCount && di.ignoreCount > 0) {
+      console.log('ignore count logs', di.ignoreCount);
+      return await this.logsDiService.setSelectedComponentAsDoneLogs(
+        di.ignoreCount,
+        nameComponent,
+      );
+    } else {
+      console.log('original');
+      console.log('🍝[nameComponent]:', nameComponent);
+      // Find the document with the specific component
+      const updatedDocument = await this.diModel.findOneAndUpdate(
+        { _id, 'array_composants.nameComposant': nameComponent },
+        { $set: { 'array_composants.$.isUpdated': true } }, // Update only the matched component
+        { new: true }, // Return the updated document
+      );
+
+      if (!updatedDocument) {
+        throw new NotFoundException(`Document or component not found.`);
+      }
+
+      return updatedDocument;
     }
-
-    return updatedDocument;
   }
 
   async affectinitialPrice(_id: string, price: number) {
-    return await this.diModel.updateOne(
+    const pricing = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
           price,
         },
       },
+      { new: true },
     );
+    if (!price) {
+      throw new Error('Issue happend affectinitialPrice ');
+    }
+
+    if (pricing && pricing.ignoreCount && pricing.ignoreCount > 0) {
+      return await this.logsDiService.savePricing(pricing.ignoreCount, price);
+    } else {
+      return pricing;
+    }
   }
 
   async countIgnore(_id: string) {
@@ -1021,76 +1103,109 @@ export class DiService {
   }
 
   async changeStatusInDiagnostic(_id: string) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
           status: STATUS_DI.InDiagnostic.status,
         },
       },
+      { new: true },
     );
 
-    await this.statsService.updateStatus(_id, STATUS_DI.InDiagnostic.status);
+    if (!result) {
+      throw new Error('Error in update state in changeStatusInDiagnostic ');
+    }
 
-    const di = this.getDiById(_id);
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.InDiagnostic.status,
+        result.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(_id, STATUS_DI.InDiagnostic.status);
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { result, states: result },
       target: {},
     });
     return result;
   }
 
   async changeStatusInMagasin(_id: string) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
           status: STATUS_DI.InMagasin.status,
         },
       },
+      { new: true },
     );
 
-    await this.statsService.updateStatus(_id, STATUS_DI.InMagasin.status);
+    if (!result) {
+      throw new Error('Issue in changeStatusInMagasin ');
+    }
 
-    const di = this.getDiById(_id);
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.InMagasin.status,
+        result.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(_id, STATUS_DI.InMagasin.status);
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { result, states: result },
       target: {},
     });
     return result;
   }
 
   async changeStatusMagasinEstimation(_id: string) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
           status: STATUS_DI.MagasinEstimation.status,
         },
       },
+      { new: true },
     );
 
-    await this.statsService.updateStatus(
-      _id,
-      STATUS_DI.MagasinEstimation.status,
-    );
+    if (!result) {
+      throw new Error('Issue in changeStatusMagasinEstimation ');
+    }
 
-    const di = this.getDiById(_id);
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.MagasinEstimation.status,
+        result.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.MagasinEstimation.status,
+      );
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { result, states: result },
       target: {},
     });
     return result;
   }
 
   async changeStatusPending2(_id: string) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
@@ -1099,156 +1214,232 @@ export class DiService {
       },
     );
 
-    await this.statsService.updateStatus(_id, STATUS_DI.Pending2.status);
+    if (!result) {
+      throw new Error('Issue in changeStatusPending2');
+    }
 
-    const di = this.getDiById(_id);
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.Pending2.status,
+        result.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(_id, STATUS_DI.Pending2.status);
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { result, states: result },
       target: {},
     });
     return result;
   }
 
   async changeStatusPricing(_id: string) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
           status: STATUS_DI.Pricing.status,
         },
       },
+      { new: true },
     );
 
-    await this.statsService.updateStatus(_id, STATUS_DI.Pricing.status);
+    if (!result) {
+      throw new Error('Issue in changeStatusPricing');
+    }
+
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.Pricing.status,
+        result.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(_id, STATUS_DI.Pricing.status);
+    }
+
     this.notificationGateway.sendNotifcationToAdmins(
       'Veuillez affecter le prix de ce DI',
     );
 
-    const di = this.getDiById(_id);
-
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { result, states: result },
       target: {},
     });
     return result;
   }
 
   async changeStatusNegociate1(_id: string) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
           status: STATUS_DI.Negotiation1.status,
         },
       },
+      { new: true },
     );
 
-    await this.statsService.updateStatus(_id, STATUS_DI.Negotiation1.status);
+    if (!result) {
+      throw new Error('Issue in changeStatusNegociate1');
+    }
 
-    const di = this.getDiById(_id);
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.Negotiation1.status,
+        result.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(_id, STATUS_DI.Negotiation1.status);
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { result, states: result },
       target: {},
     });
     return result;
   }
 
   async changeStatusNegociate2(_id: string) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
           status: STATUS_DI.Negotiation2.status,
         },
       },
+      { new: true },
     );
 
-    await this.statsService.updateStatus(_id, STATUS_DI.Negotiation2.status);
+    if (!result) {
+      throw new Error('Issue in changeStatusNegociate2');
+    }
 
-    const di = this.getDiById(_id);
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.Negotiation2.status,
+        result.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(_id, STATUS_DI.Negotiation2.status);
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { result, states: result },
       target: {},
     });
     return result;
   }
 
   async changeStatusPending3(_id: string) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
           status: STATUS_DI.Pending3.status,
         },
       },
+      { new: true },
     );
 
-    await this.statsService.updateStatus(_id, STATUS_DI.Pending3.status);
+    if (!result) {
+      throw new Error('Issue in changeStatusPending3 ');
+    }
 
-    const di = this.getDiById(_id);
-
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.Pending3.status,
+        result.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(_id, STATUS_DI.Pending3.status);
+    }
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { result, states: result },
       target: {},
     });
+
     return result;
   }
 
   async changeStatusRepaire(_id: string) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
           status: STATUS_DI.Reparation.status,
         },
       },
+      { new: true },
     );
 
-    await this.statsService.updateStatus(_id, STATUS_DI.Reparation.status);
+    if (!result) {
+      throw new Error('Issue in changeStatusRepaire');
+    }
 
-    const di = this.getDiById(_id);
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.Reparation.status,
+        result.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(_id, STATUS_DI.Reparation.status);
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { result, states: result },
       target: {},
     });
     return result;
   }
 
   async changeStatusInRepair(_id: string) {
-    console.log('🍎[_id]:', _id);
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
           status: STATUS_DI.InReparation.status,
         },
       },
+      { new: true },
     );
 
-    await this.statsService.updateStatus(_id, STATUS_DI.InReparation.status);
+    if (!result) {
+      throw new Error('Issue in changeStatusInRepair');
+    }
 
-    const di = this.getDiById(_id);
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.InReparation.status,
+        result.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(_id, STATUS_DI.InReparation.status);
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { result, states: result },
       target: {},
     });
     return result;
   }
 
   async changeStatusFinished(_id: string) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
@@ -1257,7 +1448,19 @@ export class DiService {
       },
     );
 
-    await this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
+    if (!result) {
+      throw new Error('Issue in changeStatusFinished');
+    }
+
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.Finished.status,
+        result.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
+    }
 
     const di = this.getDiById(_id);
 
@@ -1269,10 +1472,11 @@ export class DiService {
     return result;
   }
 
-  async changeDiRetour(_id: string) {
+  async changeDiRetour1(_id: string) {
+    console.log('retour 1');
     const retour = await this.diModel.updateOne(
       { _id },
-      { $set: { status: STATUS_DI.Pending3.status } },
+      { $set: { status: STATUS_DI.Retour1.status } },
     );
 
     const di = this.getDiById(_id);
@@ -1285,7 +1489,40 @@ export class DiService {
 
     return retour;
   }
+  async changeDiRetour2(_id: string) {
+    console.log('retour 2');
+    const retour = await this.diModel.updateOne(
+      { _id },
+      { $set: { status: STATUS_DI.Retour2.status } },
+    );
 
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
+
+    return retour;
+  }
+  async changeDiRetour3(_id: string) {
+    console.log('retour 3');
+    const retour = await this.diModel.updateOne(
+      { _id },
+      { $set: { status: STATUS_DI.Retour3.status } },
+    );
+
+    const di = this.getDiById(_id);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { di, states: di },
+      target: {},
+    });
+
+    return retour;
+  }
   async changeToPending1(_id: string) {
     const pending1 = await this.diModel.updateOne(
       { _id },
@@ -1304,17 +1541,17 @@ export class DiService {
   }
 
   async changeToDiagnosticInPause(_id: string) {
-    const stat = await this.statsService.changeStatToDiagnosticInPause(_id);
+    // const stat = await this.statsService.changeStatToDiagnosticInPause(_id);
 
-    if (!stat) {
-      throw new InternalServerErrorException(
-        'error while changing status stat',
-      );
-    }
-    await this.statsService.updateStatus(
-      _id,
-      STATUS_DI.DiagnosticInPause.status,
-    );
+    // if (!stat) {
+    //   throw new InternalServerErrorException(
+    //     'error while changing status stat',
+    //   );
+    // }
+    // await this.statsService.updateStatus(
+    //   _id,
+    //   STATUS_DI.DiagnosticInPause.status,
+    // );
 
     const diStatus = await this.diModel.findOneAndUpdate(
       { _id },
@@ -1322,34 +1559,52 @@ export class DiService {
       { new: true },
     );
 
-    const di = this.getDiById(_id);
+    if (!diStatus) {
+      throw new Error('Issue in DiagnosticInPause');
+    }
+
+    if (diStatus.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.Diagnostic.status,
+        diStatus.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(_id, STATUS_DI.Diagnostic.status);
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { diStatus, states: diStatus },
       target: {},
     });
     return diStatus;
   }
 
   async changeStateInReparationPause(_id: string) {
-    console.log('🍉[_id]:', _id);
     const diStatus = await this.diModel.findOneAndUpdate(
       { _id },
       { $set: { status: STATUS_DI.ReparationInPause.status } },
       { new: true },
     );
 
-    const statsfind = await this.statsService.updateStatus(
-      _id,
-      STATUS_DI.ReparationInPause.status,
-    );
+    if (!diStatus) {
+      throw new Error('Issue in ReparationInPause');
+    }
 
-    const di = this.getDiById(_id);
+    if (diStatus.ignoreCount > 0) {
+      this.statsService.updateStatus(
+        _id,
+        STATUS_DI.ReparationInPause.status,
+        diStatus.ignoreCount,
+      );
+    } else {
+      this.statsService.updateStatus(_id, STATUS_DI.ReparationInPause.status);
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { diStatus, states: diStatus },
       target: {},
     });
 
@@ -1357,25 +1612,36 @@ export class DiService {
   }
 
   async changeToReparationInPause(_id: string) {
-    const repInPause = await this.diModel.updateOne(
+    const repInPause = await this.diModel.findOneAndUpdate(
       { _id },
       { $set: { status: STATUS_DI.ReparationInPause.status } },
     );
 
-    const di = this.getDiById(_id);
+    if (!repInPause) {
+      throw new Error('Issue in ReparationInPause');
+    }
+
+    if (repInPause.ignoreCount > 0) {
+      this.statsService.updateStatus(
+        _id,
+        STATUS_DI.ReparationInPause.status,
+        repInPause.ignoreCount,
+      );
+    } else {
+      this.statsService.updateStatus(_id, STATUS_DI.ReparationInPause.status);
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { repInPause, states: repInPause },
       target: {},
     });
 
-    console.log('🍱[repInPause]:', repInPause);
     return repInPause;
   }
 
-//! Query for statistics Here
-  //1.Duree Moyenne Reparation 
+  //! Query for statistics Here
+  //1.Duree Moyenne Reparation
   async getTechStatisticsMoyenneReperation(techRep_id: string) {
     return await this.statModel
       .find({
@@ -1396,91 +1662,123 @@ export class DiService {
         return err;
       });
   }
-//1.Duree Moyenne Diagnostique
-async getTechStatisticsMoyenneDiagnostique(techDiag_id: string) {
-  return await this.statModel
-    .find({
-      id_tech_diag: techDiag_id,
-      status: {
-        $in: [
-          STATUS_DI.Pending1.status,
-          STATUS_DI.Pending2.status,
-          STATUS_DI.Pending3.status,
-          STATUS_DI.Pricing.status,
-          STATUS_DI.Negotiation1.status,
-          STATUS_DI.Negotiation2.status,
-          STATUS_DI.InMagasin.status,
-          STATUS_DI.MagasinEstimation.status,
-        ],
-      },
-    })
-    .then((res) => {
-      return res;
-    })
-    .catch((err) => {
-      return err;
-    });
-}
-//2. Taux de reperation reussie for Tech
-async getTauxRepReussiteByTech(techRep_id: string) {
-  return await this.statModel
-    .find({
-      id_tech_rep: techRep_id,
-      status: {
-        $in: [
-          STATUS_DI.Finished.status,
-          STATUS_DI.Retour1.status,
-          STATUS_DI.Retour2.status,
-          STATUS_DI.Retour3.status,
-        ],
-      },
-    })
-    .then((res) => {
-      return res;
-    })
-    .catch((err) => {
-      return err;
-    });
-}
-//2. Taux de reperation for Tech
-async getTauxReperationByTech(techRep_id: string) {
-  return await this.statModel
-    .find({
-      id_tech_rep: techRep_id})
-    .then((res) => {
-      return res;
-    })
-    .catch((err) => {
-      return err;
-    });
-}
+  //1.Duree Moyenne Diagnostique
+  async getTechStatisticsMoyenneDiagnostique(techDiag_id: string) {
+    return await this.statModel
+      .find({
+        id_tech_diag: techDiag_id,
+        status: {
+          $in: [
+            STATUS_DI.Pending1.status,
+            STATUS_DI.Pending2.status,
+            STATUS_DI.Pending3.status,
+            STATUS_DI.Pricing.status,
+            STATUS_DI.Negotiation1.status,
+            STATUS_DI.Negotiation2.status,
+            STATUS_DI.InMagasin.status,
+            STATUS_DI.MagasinEstimation.status,
+          ],
+        },
+      })
+      .then((res) => {
+        return res;
+      })
+      .catch((err) => {
+        return err;
+      });
+  }
+  //2. Taux de reperation reussie for Tech
+  async getTauxRepReussiteByTech(techRep_id: string) {
+    return await this.statModel
+      .find({
+        id_tech_rep: techRep_id,
+        status: {
+          $in: [
+            STATUS_DI.Finished.status,
+            STATUS_DI.Retour1.status,
+            STATUS_DI.Retour2.status,
+            STATUS_DI.Retour3.status,
+          ],
+        },
+      })
+      .then((res) => {
+        return res;
+      })
+      .catch((err) => {
+        return err;
+      });
+  }
+  //2. Taux de reperation for Tech
+  async getTauxReperationByTech(techRep_id: string) {
+    return await this.statModel
+      .find({
+        id_tech_rep: techRep_id,
+      })
+      .then((res) => {
+        return res;
+      })
+      .catch((err) => {
+        return err;
+      });
+  }
 
+  //3. Duree moyenne de reperation par type de panne
+  async getDureeByCategoryDi(techRep_id: string) {
+    // const statsByTech = await this.statModel.find({
+    //   id_tech_rep: techRep_id,
+    // });
+    // const dilist = await Promise.all(
+    //   statsByTech.map(async (el) => await this.getDiById(el._idDi)),
+    // );
+    // log(dilist, 'dilistdilist');
+    // const combined = statsByTech.map((stat, index) => ({
+    //   rep_time: stat.rep_time,
+    //   di_category_id: dilist[index]?.di_category_id,
+    // }));
+  }
 
-//3. Duree moyenne de reperation par type de panne
-async getDureeByCategoryDi(techRep_id: string) {
-  const statsByTech = await this.statModel
-    .find({
-      id_tech_rep: techRep_id})
-  console.log("statsByTech",statsByTech)
+  async sendComponentToConMagasinForConfirmation(_id: string) {
+    const isSentToCoordinator = await this.diModel.findOneAndUpdate(
+      { _id },
+      { $set: { isSentToCoordinator: true } },
+      { new: true },
+    );
 
-  const dilist = await Promise.all(
-    statsByTech.map(async (el) => await this.getDiById(el._idDi))
-  );
+    if (isSentToCoordinator) {
+      const dataToSend = {
+        _id: isSentToCoordinator._id,
+        array_composants: isSentToCoordinator.array_composants,
+        isSentToCoordinator: isSentToCoordinator.isSentToCoordinator,
+      };
+      this.notificationGateway.sendComponenttoCoordinatorFromMagasin(
+        dataToSend,
+      );
+    }
 
-log(dilist,"dilistdilist")
-const combined = statsByTech.map((stat, index) => ({
-  rep_time: stat.rep_time,
-  di_category_id: dilist[index]?.di_category_id, 
-}));
+    return isSentToCoordinator;
+  }
 
-}
+  async componentConfirmedFromCoordinator(_id) {
+    const isConfirmedComponentFromCoordinator =
+      await this.diModel.findOneAndUpdate(
+        { _id },
+        {
+          $set: {
+            isConfirmedComponentFromCoordinator: true,
+          },
+        },
+      );
 
-
-
-
-
-
-
-
-
+    if (isConfirmedComponentFromCoordinator) {
+      const dataToSend = {
+        _id: isConfirmedComponentFromCoordinator._id,
+        array_composants: isConfirmedComponentFromCoordinator.array_composants,
+        isConfirmedComponentFromCoordinator:
+          isConfirmedComponentFromCoordinator.isConfirmedComponentFromCoordinator,
+      };
+      this.notificationGateway.sendComponenttoCoordinatorFromMagasin(
+        dataToSend,
+      );
+    }
+  }
 }

@@ -20,6 +20,7 @@ import { ProfileService } from 'src/profile/profile.service';
 import { Profile, ProfileSchema } from 'src/profile/entities/profile.entity';
 import { PubSubModule } from 'src/pubsub/pubsub.module';
 import { AuditModule } from 'src/audit/audit.module';
+import { LogsDiModule } from 'src/logs-di/logs-di.module';
 
 @Module({
   providers: [
@@ -32,6 +33,7 @@ import { AuditModule } from 'src/audit/audit.module';
   imports: [
     PubSubModule,
     AuditModule,
+    LogsDiModule,
     MongooseModule.forFeature([
       {
         name: Di.name,

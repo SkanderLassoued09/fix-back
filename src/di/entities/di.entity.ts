@@ -6,7 +6,6 @@ import { Company } from 'src/company/entities/company.entity';
 import { DiCategory } from 'src/di_category/entities/di_category.entity';
 import { Location } from 'src/location/entities/location.entity';
 import { Profile } from 'src/profile/entities/profile.entity';
-import { Stat } from 'src/stat/entities/stat.entity';
 
 @Schema({ timestamps: true })
 export class DiDocument extends Document {
@@ -91,6 +90,11 @@ export class DiDocument extends Document {
   isOpenedOnce: boolean;
   @Prop({ defaultValue: false })
   gotComposantFromMagasin: string;
+  // confirmation component for magasin and coordinator section
+  @Prop({ default: false })
+  isConfirmedComponentFromCoordinator: boolean;
+  @Prop({ default: false })
+  isSentToCoordinator: boolean;
 
   @Prop()
   comment: string;
@@ -198,6 +202,10 @@ export class Di {
   isOpenedOnce: boolean;
   // Magasin sending composants to coordinatrice
   @Field({ defaultValue: false })
+  isConfirmedComponentFromCoordinator: boolean;
+  @Field({ defaultValue: false })
+  isSentToCoordinator: boolean;
+  @Field({ defaultValue: false })
   gotComposantFromMagasin: string;
   @Field({ nullable: true })
   status: string;
@@ -221,7 +229,6 @@ export class Di {
 export class ComposantStructure {
   @Field({ nullable: true })
   nameComposant: string;
-
   @Field({ nullable: true })
   quantity: number;
   @Field({ nullable: true, defaultValue: false })
@@ -332,6 +339,10 @@ export class DiTable {
   @Field({ nullable: true })
   location_id: string;
   @Field({ nullable: true })
+  isSentToCoordinator: boolean;
+  @Field({ nullable: true, defaultValue: false })
+  isConfirmedComponentFromCoordinator: boolean;
+  @Field({ nullable: true, defaultValue: false })
   di_category_id: string;
   @Field(() => [ComposantStructure], { nullable: true })
   array_composants: ComposantStructure[];
@@ -366,4 +377,3 @@ export class UpdateNego {
   @Field()
   final_price: number;
 }
-

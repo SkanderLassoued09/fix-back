@@ -41,6 +41,10 @@ export class NotificationsGateway
     this.server.emit('confirmAllComposant', message);
   }
 
+  sendComponenttoCoordinatorFromMagasin(data) {
+    this.server.emit('sendComponentToCoordinatorFromMagasin', { ...data });
+  }
+
   /**
    *
    * @param ticket
@@ -48,6 +52,7 @@ export class NotificationsGateway
    * target == profile
    */
   updateTicket(message: { action: string; content: any; target?: any }) {
+    console.log('🍋');
     this.server.emit('updateTicket', message);
   }
 }

@@ -19,6 +19,7 @@ import { CronModule } from './cron/cron.module';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { AuditModule } from './audit/audit.module';
+import { LogsDiModule } from './logs-di/logs-di.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { AuditModule } from './audit/audit.module';
     StatModule,
     CronModule,
     AuditModule,
+    LogsDiModule,
     
   ],
   controllers: [],

@@ -33,6 +33,8 @@ export class StatDocument extends Document {
   diagnostiquefinishedFLAG: boolean;
   @Prop({ defaultValue: false })
   reperationfinishedFLAG: boolean;
+  @Prop({ default: 0 })
+  ignoreCount: number;
 
   // Embedded array of pause logs for diagnostics
   @Prop({
@@ -102,6 +104,8 @@ export class Stat {
   diagnostiquefinishedFLAG: boolean;
   @Field({ defaultValue: false })
   reperationfinishedFLAG: boolean;
+  @Field({ defaultValue: 0 })
+  ignoreCount: number;
   // Embedded array for pause logs
   @Field(() => [PauseLog], { nullable: true })
   pauseLogs?: PauseLog[];

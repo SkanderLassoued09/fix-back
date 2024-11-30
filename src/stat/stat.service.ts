@@ -40,16 +40,17 @@ export class StatService {
 
   async createStat(createStatInput: CreateStatInput): Promise<Stat> {
     const index = await this.generateStatId();
-
+    // Fetch the di entity
     createStatInput._id = `STAT${index}`;
+    const di = await this.diModel.findOne({ _id: createStatInput._idDi });
+    if (di.ignoreCount > 0) {
+      createStatInput.ignoreCount = di.ignoreCount;
+    }
     const result = await new this.StatModel(createStatInput).save();
 
     if (!result) {
       throw new InternalServerErrorException('Unable to create');
     }
-
-    // Fetch the di entity
-    const di = await this.diModel.findOne({ _id: result._idDi });
 
     // Fetch the statTech entity (statistic)
     const statTech = await this.StatModel.findOne({ _id: result._id });
@@ -95,6 +96,7 @@ export class StatService {
   }
 
   async affectForRep(_idDi: string, _idTech: string) {
+    console.log('🌯[affectForRep');
     return await this.StatModel.updateOne(
       { _idDi },
       {
@@ -204,6 +206,22 @@ export class StatService {
     return { stat, totalTechDataCount };
   }
   async lapTime(_id: string, diag_time: string) {
+    const stat = await this.StatModel.findOne({ _id });
+
+    if (!stat) {
+      throw new Error('Issue in lapTime');
+    }
+    if (stat.ignoreCount > 0) {
+      return await this.StatModel.updateOne(
+        { _id, ignoreCount: stat.ignoreCount },
+        {
+          $set: {
+            diag_time,
+          },
+        },
+      );
+    }
+
     return await this.StatModel.updateOne(
       { _id },
       {
@@ -215,6 +233,21 @@ export class StatService {
   }
 
   async lapTimeForReaparation(_id: string, rep_time: string) {
+    const stat = await this.StatModel.findOne({ _id });
+    if (!stat) {
+      throw new Error('Issue in lapTimeForReaparation');
+    }
+
+    if (stat.ignoreCount > 0) {
+      return await this.StatModel.updateOne(
+        { _id, ignoreCount: stat.ignoreCount },
+        {
+          $set: {
+            rep_time,
+          },
+        },
+      );
+    }
     return await this.StatModel.updateOne(
       { _id },
       {
@@ -262,17 +295,29 @@ export class StatService {
   }
 
   // update status
-  async updateStatus(_id: string, status: string) {
-    const result = await this.StatModel.updateOne(
-      { _idDi: _id },
+  async updateStatus(_idDi: string, status: string, ignoreCount?: number) {
+    // Dynamically construct the query object
+    const query: Record<string, any> = { _idDi };
+
+    if (ignoreCount !== undefined) {
+      query.ignoreCount = ignoreCount;
+    }
+    console.log('🥫[query]:', query);
+    // Add condition to ensure the current status is not equal to the provided status
+
+    const result = await this.StatModel.findOneAndUpdate(
+      query,
       {
-        $set: {
-          status,
-        },
+        $set: { status },
       },
+      { new: true }, // Return the updated document
     );
 
-    return this.getInfoStatByIdDi(_id);
+    if (!result) {
+      throw new Error('Issue in changing stats stattus');
+    }
+
+    return result;
   }
 
   async changeStatToDiagnosticInPause(_idDi: string) {
@@ -283,7 +328,7 @@ export class StatService {
     );
 
     if (!stat) {
-      throw new InternalServerErrorException('Error in update state in pause ');
+      throw new Error('Error in update state in pause ');
     }
 
     return stat;

@@ -30,6 +30,8 @@ export class CreateStatInput {
   diagnostiquefinishedFLAG: boolean;
   @Field({ defaultValue: false })
   reperationfinishedFLAG: boolean;
+  @Field({ defaultValue: 0 })
+  ignoreCount: number;
 }
 
 @InputType()

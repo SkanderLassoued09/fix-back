@@ -19,33 +19,28 @@ import { rootCertificates } from 'tls';
 
 @Resolver(() => Di)
 export class DiResolver {
-   // used to convert from string to number
-    timeStringToSeconds(timeString) 
-   {
-   const [hours, minutes, seconds] = timeString.trim().split(':').map(Number);
-   return hours * 3600 + minutes * 60 + seconds;
- }
- 
- // Function to convert seconds to "hh:mm:ss"
+  // used to convert from string to number
+  timeStringToSeconds(timeString) {
+    const [hours, minutes, seconds] = timeString.trim().split(':').map(Number);
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+
+  // Function to convert seconds to "hh:mm:ss"
   secondsToTimeString(totalSeconds) {
-   const hours = Math.floor(totalSeconds / 3600);
-   const minutes = Math.floor((totalSeconds % 3600) / 60);
-   const seconds = totalSeconds % 60;
-   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
- }
-
-
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(
+      2,
+      '0',
+    )}:${String(seconds).padStart(2, '0')}`;
+  }
 
   constructor(
     private readonly diService: DiService,
     private readonly statService: StatService,
     private readonly pubsub: PubSub,
-    
-  ) 
-  {
-   
-  
-}
+  ) {}
 
   @Mutation(() => Di)
   @UseGuards(JwtAuthGuard)
@@ -82,6 +77,16 @@ export class DiResolver {
       console.log('🥓[error]:', error);
       throw new Error(error);
     }
+  }
+
+  @Mutation(() => Di)
+  async sendComponentToConMagasinForConfirmation(@Args('_id') _id: string) {
+    return await this.diService.sendComponentToConMagasinForConfirmation(_id);
+  }
+
+  @Mutation(() => Di)
+  async componentConfirmedFromCoordinator(@Args('_id') _id: string) {
+    return await this.diService.componentConfirmedFromCoordinator(_id);
   }
 
   @Mutation(() => Di)
@@ -349,8 +354,29 @@ export class DiResolver {
     }
   }
   @Mutation(() => Boolean)
-  changeStatusRetour(@Args('_id') _id: string) {
-    const pending3 = this.diService.changeDiRetour(_id);
+  changeStatusRetour1(@Args('_id') _id: string) {
+    console.log('🥟[_id]:', _id);
+    const pending3 = this.diService.changeDiRetour1(_id);
+    if (pending3) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  @Mutation(() => Boolean)
+  changeStatusRetour2(@Args('_id') _id: string) {
+    console.log('🍸[_id]:', _id);
+    const pending3 = this.diService.changeDiRetour2(_id);
+    if (pending3) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  @Mutation(() => Boolean)
+  changeStatusRetour3(@Args('_id') _id: string) {
+    console.log('🍤[_id]:', _id);
+    const pending3 = this.diService.changeDiRetour3(_id);
     if (pending3) {
       return true;
     } else {
@@ -369,13 +395,8 @@ export class DiResolver {
   }
   //coordinator_ToDiag
   @Mutation(() => Di)
-  coordinatorSendingDiDiag(@Args('_idDI') _idDI: string) {
-    const diDiagnostic = this.diService.coordinator_ToDiag(_idDI);
-    if (diDiagnostic) {
-      return diDiagnostic;
-    } else {
-      return error;
-    }
+  async coordinatorSendingDiDiag(@Args('_idDI') _idDI: string) {
+    return await this.diService.coordinator_ToDiag(_idDI);
   }
   //Diagnostique in Pause
   @Mutation(() => Di)
@@ -404,75 +425,90 @@ export class DiResolver {
     return this.diService.countIgnore(_idDI);
   }
 
-
- 
-//1.Duree Moyenne Reparation 
-// function that return the "Ecart Type" 
+  //1.Duree Moyenne Reparation
+  // function that return the "Ecart Type"
   @Query(() => Number)
-  async getTechStatisticsMoyenneReperation(@Args('techRep_id') techRep_id: string) {
-    const data =  await this.diService.getTechStatisticsMoyenneReperation(techRep_id);
-    const countNumberReperation = data.filter(element => element.rep_time).length;
+  async getTechStatisticsMoyenneReperation(
+    @Args('techRep_id') techRep_id: string,
+  ) {
+    const data = await this.diService.getTechStatisticsMoyenneReperation(
+      techRep_id,
+    );
+    const countNumberReperation = data.filter(
+      (element) => element.rep_time,
+    ).length;
     const totalRepTimeInSeconds = data
-    .map(element => this.timeStringToSeconds(element.rep_time))
-    .reduce((acc, curr) => acc + curr, 0);
-    let moyRep = totalRepTimeInSeconds / countNumberReperation
-      
-   const sumDureeMinusDureeMoyenne = data
-    .map(element => Math.pow(this.timeStringToSeconds(element.rep_time) - moyRep,2)) 
-    .reduce((acc, curr) => acc + curr, 0);
-      console.log(sumDureeMinusDureeMoyenne,"sumDureeMinusDureeMoyenne")
+      .map((element) => this.timeStringToSeconds(element.rep_time))
+      .reduce((acc, curr) => acc + curr, 0);
+    let moyRep = totalRepTimeInSeconds / countNumberReperation;
 
-    const ecartType = Math.sqrt(sumDureeMinusDureeMoyenne/countNumberReperation) 
-      
-    return ecartType
+    const sumDureeMinusDureeMoyenne = data
+      .map((element) =>
+        Math.pow(this.timeStringToSeconds(element.rep_time) - moyRep, 2),
+      )
+      .reduce((acc, curr) => acc + curr, 0);
+    console.log(sumDureeMinusDureeMoyenne, 'sumDureeMinusDureeMoyenne');
+
+    const ecartType = Math.sqrt(
+      sumDureeMinusDureeMoyenne / countNumberReperation,
+    );
+
+    return ecartType;
   }
   //EcartType Diagnostique
   @Query(() => Number)
-  async getTechStatisticsMoyenneDiagnostique(@Args('techDiag_id') techDiag_id: string) {
-    const data =  await this.diService.getTechStatisticsMoyenneDiagnostique(techDiag_id);
-    const countNumberDiagnostique = data.filter(element => element.diag_time).length;
+  async getTechStatisticsMoyenneDiagnostique(
+    @Args('techDiag_id') techDiag_id: string,
+  ) {
+    const data = await this.diService.getTechStatisticsMoyenneDiagnostique(
+      techDiag_id,
+    );
+    const countNumberDiagnostique = data.filter(
+      (element) => element.diag_time,
+    ).length;
     const totalDiagTimeInSeconds = data
-    .map(element => this.timeStringToSeconds(element.diag_time))
-    .reduce((acc, curr) => acc + curr, 0);
-    let moyDiag = totalDiagTimeInSeconds / countNumberDiagnostique
-      
-   const sumDureeMinusDureeMoyenne = data
-    .map(element => Math.pow(this.timeStringToSeconds(element.diag_time) - moyDiag,2)) 
-    .reduce((acc, curr) => acc + curr, 0);
-      console.log(sumDureeMinusDureeMoyenne,"sumDureeMinusDureeMoyenne")
+      .map((element) => this.timeStringToSeconds(element.diag_time))
+      .reduce((acc, curr) => acc + curr, 0);
+    let moyDiag = totalDiagTimeInSeconds / countNumberDiagnostique;
 
-    const ecartType = Math.sqrt(sumDureeMinusDureeMoyenne/countNumberDiagnostique) 
-      
-    return ecartType
+    const sumDureeMinusDureeMoyenne = data
+      .map((element) =>
+        Math.pow(this.timeStringToSeconds(element.diag_time) - moyDiag, 2),
+      )
+      .reduce((acc, curr) => acc + curr, 0);
+    console.log(sumDureeMinusDureeMoyenne, 'sumDureeMinusDureeMoyenne');
+
+    const ecartType = Math.sqrt(
+      sumDureeMinusDureeMoyenne / countNumberDiagnostique,
+    );
+
+    return ecartType;
   }
-//2. Taux de reperation reussie for each tech
-// function that give % of success reperation and retour reperation
-@Query(()=>Number)
-async getTauxRepReussiteByTech(@Args('techRep_id') techRep_id: string)
-{
-  const data =  await this.diService.getTauxRepReussiteByTech(techRep_id);
-  let repSuccess = 0
-  let allcounter = data.length
-  data.map(el=>el.status==='FINISHED'? repSuccess=repSuccess+1:repSuccess);
- 
-  const percentageReussite = (repSuccess/allcounter)*100
-  return percentageReussite
-}
-//2. Taux de reperation qui reflete le nombre de carte traite
-@Query(()=>Number)
-async getTauxReperationByTech(@Args('techRep_id') techRep_id: string)
-{
-  const data =  await this.diService.getTauxReperationByTech(techRep_id);
-  let repFinie = 0
-  let allcounter = data.length
-  data.map(el=>el.status==='FINISHED'? repFinie=repFinie+1:repFinie);
-  console.log("allcounter",allcounter)
-  const percentageTraiter = (repFinie/allcounter)*100
-  return percentageTraiter
-}
+  //2. Taux de reperation reussie for each tech
+  // function that give % of success reperation and retour reperation
+  @Query(() => Number)
+  async getTauxRepReussiteByTech(@Args('techRep_id') techRep_id: string) {
+    const data = await this.diService.getTauxRepReussiteByTech(techRep_id);
+    let repSuccess = 0;
+    let allcounter = data.length;
+    data.map((el) =>
+      el.status === 'FINISHED' ? (repSuccess = repSuccess + 1) : repSuccess,
+    );
 
-
-
-
-
+    const percentageReussite = (repSuccess / allcounter) * 100;
+    return percentageReussite;
+  }
+  //2. Taux de reperation qui reflete le nombre de carte traite
+  @Query(() => Number)
+  async getTauxReperationByTech(@Args('techRep_id') techRep_id: string) {
+    const data = await this.diService.getTauxReperationByTech(techRep_id);
+    let repFinie = 0;
+    let allcounter = data.length;
+    data.map((el) =>
+      el.status === 'FINISHED' ? (repFinie = repFinie + 1) : repFinie,
+    );
+    console.log('allcounter', allcounter);
+    const percentageTraiter = (repFinie / allcounter) * 100;
+    return percentageTraiter;
+  }
 }

@@ -98,7 +98,6 @@ export class PaginationConfigDi {
 export class ComposantStructureInput {
   @Field()
   nameComposant: string;
-
   @Field()
   quantity: number;
   @Field({ nullable: true, defaultValue: false })
