@@ -90,6 +90,24 @@ export class LogsDiService {
     );
   }
 
+  async isSentToCoordinator(_id: number, _idDi: string) {
+    console.log('retour send to confirm');
+    return await this.logsDiModel.findOneAndUpdate(
+      { _id, _idDi },
+      { $set: { isSentToCoordinator: true } },
+      { new: true },
+    );
+  }
+  async componentConfirmedFromCoordinator(_id: number, _idDi: string) {
+    return await this.logsDiModel.findOneAndUpdate(
+      { _id, _idDi },
+      {
+        $set: {
+          isConfirmedComponentFromCoordinator: true,
+        },
+      },
+    );
+  }
   async setSelectedComponentAsDoneLogs(_id: number, nameComponent: string) {
     console.log('🌰[nameComponent]:', nameComponent);
 

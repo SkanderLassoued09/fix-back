@@ -309,8 +309,15 @@ export class StatService {
   }
 
   //get by ID_DI
-  async getInfoStatByIdDi(_idDi: string) {
-    return await this.StatModel.findOne({ _idDi }).exec();
+  async getInfoStatByIdDi(_idDi: string, _idLog: number) {
+    if (_idLog) {
+      return await this.StatModel.findOne({
+        _idDi,
+        ignoreCount: _idLog,
+      }).exec();
+    } else {
+      return await this.StatModel.findOne({ _idDi }).exec();
+    }
   }
 
   // update status

@@ -969,6 +969,9 @@ export class DiService {
         location_id: di.location_id?.location_name ?? 'N/A',
         status: di.status,
         image: di.image,
+        isSentToCoordinator: di.isSentToCoordinator,
+        isConfirmedComponentFromCoordinator:
+          di.isConfirmedComponentFromCoordinator,
         company_id: di.company_id?.name ?? '-', // Provide default values if necessary
         client_id: di.client_id?.first_name ?? 'Unknown', // Provide default values if necessary
         createdBy: `${di.createdBy?.firstName ?? 'Unknown'} ${
@@ -1763,11 +1766,22 @@ export class DiService {
   }
 
   async sendComponentToConMagasinForConfirmation(_id: string) {
-    const isSentToCoordinator = await this.diModel.findOneAndUpdate(
-      { _id },
-      { $set: { isSentToCoordinator: true } },
-      { new: true },
-    );
+    console.log('🥦[sendComponentToConMagasinForConfirmation]:');
+    let isSentToCoordinator: any;
+    const di = await this.diModel.findOne({ _id });
+    if (di && di.ignoreCount && di.ignoreCount > 0) {
+      isSentToCoordinator = await this.logsDiService.isSentToCoordinator(
+        di.ignoreCount,
+        _id,
+      );
+    } else {
+      console.log('original send to confirm');
+      isSentToCoordinator = await this.diModel.findOneAndUpdate(
+        { _id },
+        { $set: { isSentToCoordinator: true } },
+        { new: true },
+      );
+    }
 
     if (isSentToCoordinator) {
       const dataToSend = {
@@ -1783,9 +1797,17 @@ export class DiService {
     return isSentToCoordinator;
   }
 
-  async componentConfirmedFromCoordinator(_id) {
-    const isConfirmedComponentFromCoordinator =
-      await this.diModel.findOneAndUpdate(
+  async componentConfirmedFromCoordinator(_id: string) {
+    let isConfirmedComponentFromCoordinator;
+    const di = await this.diModel.findOne({ _id });
+    if (di && di.ignoreCount && di.ignoreCount > 0) {
+      isConfirmedComponentFromCoordinator =
+        await this.logsDiService.componentConfirmedFromCoordinator(
+          di.ignoreCount,
+          _id,
+        );
+    } else {
+      isConfirmedComponentFromCoordinator = await this.diModel.findOneAndUpdate(
         { _id },
         {
           $set: {
@@ -1793,6 +1815,7 @@ export class DiService {
           },
         },
       );
+    }
 
     if (isConfirmedComponentFromCoordinator) {
       const dataToSend = {
@@ -1805,5 +1828,7 @@ export class DiService {
         dataToSend,
       );
     }
+
+    return isConfirmedComponentFromCoordinator;
   }
 }

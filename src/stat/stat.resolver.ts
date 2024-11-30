@@ -172,8 +172,11 @@ export class StatResolver {
   }
 
   @Query(() => Stat)
-  getInfoStatByIdDi(@Args('_idDi') _idDi: string) {
-    return this.statService.getInfoStatByIdDi(_idDi);
+  getInfoStatByIdDi(
+    @Args('_idDi') _idDi: string,
+    @Args('_idLogs', { nullable: true }) _idLogs: number,
+  ) {
+    return this.statService.getInfoStatByIdDi(_idDi, _idLogs);
   }
 
   @Query(() => Stat)
