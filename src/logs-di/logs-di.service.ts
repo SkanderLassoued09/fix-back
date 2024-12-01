@@ -8,11 +8,17 @@ import { getFileExtension } from 'src/di/shared.files';
 import * as randomstring from 'randomstring';
 import { join } from 'path';
 import * as fs from 'fs';
+import {
+  Composant,
+  ComposantDocument,
+} from 'src/composant/entities/composant.entity';
 @Injectable()
 export class LogsDiService {
   constructor(
     @InjectModel(LogsDi.name)
     private readonly logsDiModel: Model<DiLogsDocument>,
+    @InjectModel(Composant.name)
+    private composantModel: Model<ComposantDocument>,
   ) {}
   async create(_id: number, _idDi: string) {
     return await new this.logsDiModel({ _id, _idDi }).save();
@@ -78,16 +84,35 @@ export class LogsDiService {
   }
 
   async addDevisPDFLogs(_id: number, _idDi: string, pdf: string) {
-    return await this.logsDiModel.updateOne(
+    return await this.logsDiModel.findOneAndUpdate(
       { _id, _idDi },
       { $set: { devis: pdf } },
+      { new: true },
     );
   }
   async addBCPDFLogs(_id: number, _idDi: string, pdf: string) {
-    return await this.logsDiModel.updateOne(
+    return await this.logsDiModel.findOneAndUpdate(
       { _id, _idDi },
       { $set: { bon_de_commande: pdf } },
+      { new: true },
     );
+  }
+
+  async calculateticketComposantPriceLogs(_id: number, _idDi: string) {
+    console.log('calculateticketComposantPriceLogs');
+    const ticket = await this.logsDiModel.findOne({ _id, _idDi });
+
+    const totalPrice = await Promise.all(
+      ticket.array_composants.map(async (item) => {
+        const composant = await this.composantModel.findOne({
+          name: item.nameComposant,
+        });
+        return composant ? composant.prix_vente * item.quantity : 0;
+      }),
+    );
+    // TODO substruct the quantity needed from compsant in stock
+    console.log('🍇[totalPrice in logs]:', totalPrice);
+    return totalPrice.reduce((acc, curr) => acc + curr, 0);
   }
 
   async isSentToCoordinator(_id: number, _idDi: string) {
@@ -123,6 +148,20 @@ export class LogsDiService {
     }
 
     return updatedDocument;
+  }
+
+  // NEZIH ya m9a7eb
+  async getAllLogsByDi(_id: string) {
+    try {
+      const logs = await this.logsDiModel.find({ _id });
+      if (logs.length === 0) {
+        throw new Error('No logs for this DI');
+      } else {
+        return logs;
+      }
+    } catch (error) {
+      throw error;
+    }
   }
 
   findAll() {

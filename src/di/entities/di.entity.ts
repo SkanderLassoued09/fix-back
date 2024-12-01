@@ -317,6 +317,8 @@ export class DiTable {
   @Field({ nullable: true })
   bon_de_livraison: string;
   @Field({ nullable: true })
+  devis: string;
+  @Field({ nullable: true })
   contain_pdr: boolean;
   @Field({ nullable: true })
   status: string;

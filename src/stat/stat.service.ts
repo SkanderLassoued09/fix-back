@@ -310,14 +310,17 @@ export class StatService {
 
   //get by ID_DI
   async getInfoStatByIdDi(_idDi: string, _idLog: number) {
+    let stat;
     if (_idLog) {
-      return await this.StatModel.findOne({
+      stat = await this.StatModel.findOne({
         _idDi,
         ignoreCount: _idLog,
-      }).exec();
+      });
     } else {
-      return await this.StatModel.findOne({ _idDi }).exec();
+      stat = await this.StatModel.findOne({ _idDi });
     }
+
+    return stat;
   }
 
   // update status
@@ -328,7 +331,7 @@ export class StatService {
     if (ignoreCount !== undefined) {
       query.ignoreCount = ignoreCount;
     }
-    console.log('🥫[query]:', query);
+
     // Add condition to ensure the current status is not equal to the provided status
 
     const result = await this.StatModel.findOneAndUpdate(
