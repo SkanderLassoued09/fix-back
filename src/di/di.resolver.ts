@@ -510,5 +510,5 @@ export class DiResolver {
     console.log('allcounter', allcounter);
     const percentageTraiter = (repFinie / allcounter) * 100;
     return percentageTraiter;
-  }
+  }z
 }

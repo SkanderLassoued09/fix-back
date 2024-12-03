@@ -121,6 +121,7 @@ export class DiService {
         throw new Error(`Demande d'intervention with ID '${_id}' not found.`);
       }
       if (di && di.ignoreCount && di.ignoreCount > 0) {
+        const diInfo = di
         return await this.logsDiService.getLogsById(di.ignoreCount, di._id);
       } else {
         return di;
@@ -175,10 +176,9 @@ export class DiService {
         `${randompdfFile}.${extension}`,
       );
     } else {
-      return await this.diModel.findOneAndUpdate(
+      return await this.diModel.updateOne(
         { _id },
         { $set: { devis: `${randompdfFile}.${extension}` } },
-        { new: true },
       );
     }
   }
@@ -203,10 +203,9 @@ export class DiService {
         `${randompdfFile}.${extension}`,
       );
     } else {
-      return await this.diModel.findOneAndUpdate(
+      return await this.diModel.updateOne(
         { _id },
         { $set: { bon_de_commande: `${randompdfFile}.${extension}` } },
-        { new: true },
       );
     }
   }
@@ -295,7 +294,6 @@ export class DiService {
           description: di.description,
           ignoreCount: di.ignoreCount,
           can_be_repaired: di.can_be_repaired,
-          devis: di.devis,
           bon_de_commande: di.bon_de_commande,
           bon_de_livraison: di.bon_de_livraison,
           facture: di.facture,
@@ -323,7 +321,6 @@ export class DiService {
       }),
     );
 
-    console.log('🎂[di]:', di);
     return { di, totalDiCount };
   }
 
@@ -370,33 +367,25 @@ export class DiService {
   }
 
   async calculateTicketComposantPrice(ticketId: string) {
-    let totalPrice;
     const ticket = await this.diModel.findById(ticketId);
-    if (ticket && ticket.ignoreCount && ticket.ignoreCount > 0) {
-      console.log('calulate logs');
-      totalPrice = await this.logsDiService.calculateticketComposantPriceLogs(
-        ticket.ignoreCount,
-        ticketId,
-      );
-      console.log('totalPrice');
-
-      return totalPrice;
-    } else {
-      console.log('original calculate');
-      totalPrice = await Promise.all(
-        ticket.array_composants.map(async (item) => {
-          const composant = await this.composantModel.findOne({
-            name: item.nameComposant,
-          });
-          return composant ? composant.prix_vente * item.quantity : 0;
-        }),
-      );
-      // TODO substruct the quantity needed from compsant in stock
-      console.log('in main', totalPrice);
-      return totalPrice.reduce((acc, curr) => acc + curr, 0);
+    if (!ticket) {
+      throw new Error('Ticket not found');
     }
+
+    const totalPrice = await Promise.all(
+      ticket.array_composants.map(async (item) => {
+        const composant = await this.composantModel.findOne({
+          name: item.nameComposant,
+        });
+        return composant ? composant.prix_vente * item.quantity : 0;
+      }),
+    );
+    // TODO substruct the quantity needed from compsant in stock
+    return totalPrice.reduce((acc, curr) => acc + curr, 0);
   }
 
+  // from Created ==> PENDING1
+  // from Manager => coordinator
   async manager_Pending1(_idDI: string): Promise<Di> {
     return this.diModel
       .updateOne(
@@ -1581,8 +1570,6 @@ export class DiService {
   }
 
   async changeToDiagnosticInPause(_id: string) {
-    let diStatus;
-    console.log('diag pause');
     // const stat = await this.statsService.changeStatToDiagnosticInPause(_id);
 
     // if (!stat) {
@@ -1595,32 +1582,24 @@ export class DiService {
     //   STATUS_DI.DiagnosticInPause.status,
     // );
 
-    const di = await this.diModel.findOne({ _id });
+    const diStatus = await this.diModel.findOneAndUpdate(
+      { _id },
+      { $set: { status: STATUS_DI.DiagnosticInPause.status } },
+      { new: true },
+    );
 
-    if (di && di.ignoreCount && di.ignoreCount > 0) {
-      console.log('in cond');
-      diStatus = await this.diModel.findOneAndUpdate(
-        { _id },
-        { $set: { status: STATUS_DI.DiagnosticInPause.status } },
-        { new: true },
-      );
+    if (!diStatus) {
+      throw new Error('Issue in DiagnosticInPause');
+    }
+
+    if (diStatus.ignoreCount > 0) {
       await this.statsService.updateStatus(
         _id,
-        STATUS_DI.DiagnosticInPause.status,
-        di.ignoreCount,
+        STATUS_DI.Diagnostic.status,
+        diStatus.ignoreCount,
       );
     } else {
-      console.log('in erlse');
-      diStatus = await this.diModel.findOneAndUpdate(
-        { _id },
-        { $set: { status: STATUS_DI.DiagnosticInPause.status } },
-        { new: true },
-      );
-
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.DiagnosticInPause.status,
-      );
+      await this.statsService.updateStatus(_id, STATUS_DI.Diagnostic.status);
     }
 
     this.notificationGateway.updateTicket({
@@ -1786,7 +1765,7 @@ export class DiService {
     //   di_category_id: dilist[index]?.di_category_id,
     // }));
   }
-
+//function that send confirmation composant from magasin to coordinatoor
   async sendComponentToConMagasinForConfirmation(_id: string) {
     console.log('🥦[sendComponentToConMagasinForConfirmation]:');
     let isSentToCoordinator: any;
@@ -1853,4 +1832,11 @@ export class DiService {
 
     return isConfirmedComponentFromCoordinator;
   }
+
+
+
+
+
+
+  
 }
