@@ -120,7 +120,7 @@ export class DiService {
       if (!di) {
         throw new Error(`Demande d'intervention with ID '${_id}' not found.`);
       }
-      if (di && di.ignoreCount && di.ignoreCount > 0) {
+      if (di && di.ignoreCount && di.ignoreCount > 1) {
         const diInfo = di
         return await this.logsDiService.getLogsById(di.ignoreCount, di._id);
       } else {
@@ -182,6 +182,66 @@ export class DiService {
       );
     }
   }
+
+
+  async addBlPDF(_id: string, pdf: string) {
+    const extension = getFileExtension(pdf);
+    const buffer = Buffer.from(pdf.split(',')[1], 'base64');
+
+    const randompdfFile = randomstring.generate({
+      length: 12,
+      charset: 'alphabetic',
+    });
+    fs.writeFileSync(
+      join(__dirname, `../../docs/${randompdfFile}.${extension}`),
+      buffer,
+    );
+    const di = await this.diModel.findOne({ _id });
+    if (di && di.ignoreCount && di.ignoreCount > 0) {
+      return await this.logsDiService.addBLPDFLogs(
+        di.ignoreCount,
+        di._id,
+        `${randompdfFile}.${extension}`,
+      );
+    } else {
+      return await this.diModel.updateOne(
+        { _id },
+        { $set: { bon_de_livraison: `${randompdfFile}.${extension}` } },
+      );
+    }
+  }
+
+
+  async addFacturePDF(_id: string, pdf: string) {
+    const extension = getFileExtension(pdf);
+    const buffer = Buffer.from(pdf.split(',')[1], 'base64');
+
+    const randompdfFile = randomstring.generate({
+      length: 12,
+      charset: 'alphabetic',
+    });
+    fs.writeFileSync(
+      join(__dirname, `../../docs/${randompdfFile}.${extension}`),
+      buffer,
+    );
+    const di = await this.diModel.findOne({ _id });
+    if (di && di.ignoreCount && di.ignoreCount > 0) {
+      return await this.logsDiService.addFacturePDFLogs(
+        di.ignoreCount,
+        di._id,
+        `${randompdfFile}.${extension}`,
+      );
+    } else {
+      return await this.diModel.updateOne(
+        { _id },
+        { $set: { facture: `${randompdfFile}.${extension}` } },
+      );
+    }
+  }
+
+
+
+
   async addBCPDF(_id: string, pdf: string) {
     const extension = getFileExtension(pdf);
     const buffer = Buffer.from(pdf.split(',')[1], 'base64');

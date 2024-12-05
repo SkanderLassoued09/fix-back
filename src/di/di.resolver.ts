@@ -58,6 +58,14 @@ export class DiResolver {
   }
 
   @Mutation(() => Di)
+  addBl(@Args('_id') _id: string, @Args('pdf') pdf: string) {
+    return this.diService.addBlPDF(_id, pdf);
+  }
+  @Mutation(() => Di)
+  addFacture(@Args('_id') _id: string, @Args('pdf') pdf: string) {
+    return this.diService.addFacturePDF(_id, pdf);
+  }
+  @Mutation(() => Di)
   addBC(@Args('_id') _id: string, @Args('pdf') pdf: string) {
     return this.diService.addBCPDF(_id, pdf);
   }

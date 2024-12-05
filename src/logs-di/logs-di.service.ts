@@ -97,6 +97,21 @@ export class LogsDiService {
       { new: true },
     );
   }
+  //Bon de livraison
+  async addBLPDFLogs(_id: number, _idDi: string, pdf: string){
+    return await this.logsDiModel.findOneAndUpdate(
+      { _id, _idDi },
+      { $set: { bon_de_livraison: pdf } },
+      { new: true },
+    );
+  }
+  async addFacturePDFLogs(_id: number, _idDi: string, pdf: string){
+    return await this.logsDiModel.findOneAndUpdate(
+      { _id, _idDi },
+      { $set: { facture: pdf } },
+      { new: true },
+    );
+  }
 
   async calculateticketComposantPriceLogs(_id: number, _idDi: string) {
     console.log('calculateticketComposantPriceLogs');
