@@ -1,6 +1,12 @@
 import { Resolver, Mutation, Args, Query, Subscription } from '@nestjs/graphql';
 import { DiService } from './di.service';
-import { Di, DiTableData, StatusCount, UpdateNego } from './entities/di.entity';
+import {
+  Di,
+  DiTableData,
+  LogsDiData,
+  StatusCount,
+  UpdateNego,
+} from './entities/di.entity';
 import {
   CreateDiInput,
   DiagUpdate,
@@ -77,12 +83,12 @@ export class DiResolver {
     return await this.diService.getAllDi(paginationConfig);
   }
 
-  @Query(() => Di)
+  @Query(() => LogsDiData)
   async getDiById(@Args('_id') _id: string) {
     try {
-      return await this.diService.getDiById(_id);
+      const diData = await this.diService.getDiById(_id);
+      return diData;
     } catch (error) {
-      console.log('🥓[error]:', error);
       throw new Error(error);
     }
   }
@@ -518,5 +524,6 @@ export class DiResolver {
     console.log('allcounter', allcounter);
     const percentageTraiter = (repFinie / allcounter) * 100;
     return percentageTraiter;
-  }z
+  }
+  z;
 }

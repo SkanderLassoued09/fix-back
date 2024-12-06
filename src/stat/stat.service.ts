@@ -203,12 +203,16 @@ export class StatService {
       : {
           $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }],
         };
-
+    // Filter for excluding 'FINISHED' status
+    const statusFilter = {
+      status: { $ne: STATUS_DI.Finished.status },
+    };
     // Combine filters
     const finalFilter = {
       $and: [
         techFilter,
         dateFilter, // Applying the date filter if provided
+        statusFilter,
       ].filter((filter) => Object.keys(filter).length > 0), // Remove empty filters
     };
 
@@ -223,6 +227,37 @@ export class StatService {
       .skip(first);
 
     return { stat, totalTechDataCount };
+  }
+  // to get techrep and tech daig and their times
+  async getRetourDataStats(_id: string) {
+    console.log('🍱[_id]:', _id);
+
+    // Fetch stats from the database
+    const statsRetour = await this.StatModel.find({ _idDi: _id });
+
+    if (statsRetour.length === 0) {
+      throw new Error('No retour data found for stats');
+    }
+
+    // Map over the stats and replace tech IDs with the results of getTech()
+    const modifiedStatsRetour = await Promise.all(
+      statsRetour.map(async (el) => {
+        const techDiag = el.id_tech_diag
+          ? await this.profileService.getTech(el.id_tech_diag)
+          : null;
+        const techRep = el.id_tech_rep
+          ? await this.profileService.getTech(el.id_tech_rep)
+          : null;
+
+        return {
+          ...el.toObject(), // Convert the Mongoose document to a plain object
+          id_tech_diag: techDiag, // Replace id_tech_diag with getTech() result
+          id_tech_rep: techRep, // Replace id_tech_rep with getTech() result
+        };
+      }),
+    );
+
+    return modifiedStatsRetour;
   }
   async lapTime(_id: string, diag_time: string) {
     const stat = await this.StatModel.findOne({ _id });

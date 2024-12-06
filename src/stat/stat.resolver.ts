@@ -183,6 +183,11 @@ export class StatResolver {
   getStatByIdlogs(@Args('_idDi') _idDi: string) {
     return this.statService.getStatByIdlogs(_idDi);
   }
+  @Query(() => [Stat])
+  async getRetourDataStats(@Args('_idDi') _idDi: string) {
+    console.log('🍭[_idDi]:', _idDi);
+    return await this.statService.getRetourDataStats(_idDi);
+  }
 
   @Mutation(() => Stat)
   async addPauseLog(

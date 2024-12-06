@@ -116,16 +116,25 @@ export class DiService {
    */
   async getDiById(_id: string) {
     try {
+      // Fetch the Demande d'intervention (di) by ID
       const di = await this.diModel.findOne({ _id });
       if (!di) {
         throw new Error(`Demande d'intervention with ID '${_id}' not found.`);
       }
-      if (di && di.ignoreCount && di.ignoreCount > 1) {
-        const diInfo = di
-        return await this.logsDiService.getLogsById(di.ignoreCount, di._id);
-      } else {
-        return di;
+
+      // Initialize logsDi to null and only fetch if needed
+      let logsDi = null;
+      if (di.ignoreCount > 0) {
+        logsDi = [];
+        for (let index = 1; index <= di.ignoreCount; index++) {
+          // Push each logDi to the logsDi array
+          const log = await this.logsDiService.getLogsById(index, di._id);
+          logsDi.push(log);
+        }
       }
+
+      // Return the result
+      return { logsDi, di };
     } catch (error) {
       throw error;
     }
@@ -183,7 +192,6 @@ export class DiService {
     }
   }
 
-
   async addBlPDF(_id: string, pdf: string) {
     const extension = getFileExtension(pdf);
     const buffer = Buffer.from(pdf.split(',')[1], 'base64');
@@ -211,7 +219,6 @@ export class DiService {
     }
   }
 
-
   async addFacturePDF(_id: string, pdf: string) {
     const extension = getFileExtension(pdf);
     const buffer = Buffer.from(pdf.split(',')[1], 'base64');
@@ -238,9 +245,6 @@ export class DiService {
       );
     }
   }
-
-
-
 
   async addBCPDF(_id: string, pdf: string) {
     const extension = getFileExtension(pdf);
@@ -1115,27 +1119,26 @@ export class DiService {
   }
 
   async affectinitialPrice(_id: string, price: number) {
-    const pricing = await this.diModel.findOneAndUpdate(
-      { _id },
-      {
-        $set: {
-          price,
-        },
-      },
-      { new: true },
-    );
-    if (!price) {
-      throw new Error('Issue happend affectinitialPrice ');
-    }
+    const pricing = await this.diModel.findOne({ _id });
 
     if (pricing && pricing.ignoreCount && pricing.ignoreCount > 0) {
+      console.log('retour');
       return await this.logsDiService.savePricing(
         pricing.ignoreCount,
         pricing._id,
         price,
       );
     } else {
-      return pricing;
+      console.log('original');
+      return await this.diModel.findOneAndUpdate(
+        { _id },
+        {
+          $set: {
+            price,
+          },
+        },
+        { new: true },
+      );
     }
   }
 
@@ -1630,18 +1633,6 @@ export class DiService {
   }
 
   async changeToDiagnosticInPause(_id: string) {
-    // const stat = await this.statsService.changeStatToDiagnosticInPause(_id);
-
-    // if (!stat) {
-    //   throw new InternalServerErrorException(
-    //     'error while changing status stat',
-    //   );
-    // }
-    // await this.statsService.updateStatus(
-    //   _id,
-    //   STATUS_DI.DiagnosticInPause.status,
-    // );
-
     const diStatus = await this.diModel.findOneAndUpdate(
       { _id },
       { $set: { status: STATUS_DI.DiagnosticInPause.status } },
@@ -1652,14 +1643,17 @@ export class DiService {
       throw new Error('Issue in DiagnosticInPause');
     }
 
-    if (diStatus.ignoreCount > 0) {
+    if (diStatus && diStatus.ignoreCount && diStatus.ignoreCount > 0) {
       await this.statsService.updateStatus(
         _id,
-        STATUS_DI.Diagnostic.status,
+        STATUS_DI.DiagnosticInPause.status,
         diStatus.ignoreCount,
       );
     } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.Diagnostic.status);
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.DiagnosticInPause.status,
+      );
     }
 
     this.notificationGateway.updateTicket({
@@ -1825,7 +1819,7 @@ export class DiService {
     //   di_category_id: dilist[index]?.di_category_id,
     // }));
   }
-//function that send confirmation composant from magasin to coordinatoor
+  //function that send confirmation composant from magasin to coordinatoor
   async sendComponentToConMagasinForConfirmation(_id: string) {
     console.log('🥦[sendComponentToConMagasinForConfirmation]:');
     let isSentToCoordinator: any;
@@ -1892,11 +1886,4 @@ export class DiService {
 
     return isConfirmedComponentFromCoordinator;
   }
-
-
-
-
-
-
-  
 }

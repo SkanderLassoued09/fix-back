@@ -5,6 +5,7 @@ import { Client } from 'src/clients/entities/client.entity';
 import { Company } from 'src/company/entities/company.entity';
 import { DiCategory } from 'src/di_category/entities/di_category.entity';
 import { Location } from 'src/location/entities/location.entity';
+import { LogsDi } from 'src/logs-di/entities/logs-di.entity';
 import { Profile } from 'src/profile/entities/profile.entity';
 
 @Schema({ timestamps: true })
@@ -376,4 +377,12 @@ export class UpdateNego {
   price: number;
   @Field()
   final_price: number;
+}
+
+@ObjectType()
+export class LogsDiData {
+  @Field(() => [LogsDi], { nullable: true })
+  logsDi?: LogsDi[];
+  @Field()
+  di: Di;
 }

@@ -43,24 +43,29 @@ export class LogsDiService {
 
   //Tech finsih diagnostic
   async tech_startDiagnostic(_id: number, _idDi: string, diag: DiagUpdateLogs) {
-    console.log('fired in logs');
-    const result = await this.logsDiModel.findOneAndUpdate(
-      { _id, _idDi },
-      {
-        $set: {
-          can_be_repaired: diag.can_be_repaired,
-          contain_pdr: diag.contain_pdr,
-          remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
-          array_composants: diag.array_composants,
-          di_category_id: diag.di_category_id,
+    try {
+      console.log('fired in logs', diag);
+      const result = await this.logsDiModel.findOneAndUpdate(
+        { _id, _idDi },
+        {
+          $set: {
+            can_be_repaired: diag.can_be_repaired,
+            contain_pdr: diag.contain_pdr,
+            remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
+            array_composants: diag.array_composants,
+            di_category_id: diag.di_category_id,
+          },
         },
-      },
-    );
-    if (!result) {
-      throw new Error('Issue when saving data when tech save logs');
-    }
+      );
+      if (!result) {
+        throw new Error('Issue when saving data when tech save logs');
+      }
 
-    return result;
+      return result;
+    } catch (error) {
+      console.log('🥜[error]:', error);
+      throw error;
+    }
   }
   async savePricing(
     _id: number,
@@ -98,14 +103,14 @@ export class LogsDiService {
     );
   }
   //Bon de livraison
-  async addBLPDFLogs(_id: number, _idDi: string, pdf: string){
+  async addBLPDFLogs(_id: number, _idDi: string, pdf: string) {
     return await this.logsDiModel.findOneAndUpdate(
       { _id, _idDi },
       { $set: { bon_de_livraison: pdf } },
       { new: true },
     );
   }
-  async addFacturePDFLogs(_id: number, _idDi: string, pdf: string){
+  async addFacturePDFLogs(_id: number, _idDi: string, pdf: string) {
     return await this.logsDiModel.findOneAndUpdate(
       { _id, _idDi },
       { $set: { facture: pdf } },
