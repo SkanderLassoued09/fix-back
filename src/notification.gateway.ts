@@ -52,7 +52,6 @@ export class NotificationsGateway
    * target == profile
    */
   updateTicket(message: { action: string; content: any; target?: any }) {
-    console.log('🍋');
     this.server.emit('updateTicket', message);
   }
 }

@@ -124,7 +124,7 @@ export class DiService {
 
       // Initialize logsDi to null and only fetch if needed
       let logsDi = null;
-      if (di.ignoreCount > 0) {
+      if (di && di.ignoreCount && di.ignoreCount > 0) {
         logsDi = [];
         for (let index = 1; index <= di.ignoreCount; index++) {
           // Push each logDi to the logsDi array
@@ -180,8 +180,8 @@ export class DiService {
     const di = await this.diModel.findOne({ _id });
     if (di && di.ignoreCount && di.ignoreCount > 0) {
       return await this.logsDiService.addDevisPDFLogs(
-        di.ignoreCount,
         di._id,
+        di.ignoreCount,
         `${randompdfFile}.${extension}`,
       );
     } else {
@@ -207,8 +207,8 @@ export class DiService {
     const di = await this.diModel.findOne({ _id });
     if (di && di.ignoreCount && di.ignoreCount > 0) {
       return await this.logsDiService.addBLPDFLogs(
-        di.ignoreCount,
         di._id,
+        di.ignoreCount,
         `${randompdfFile}.${extension}`,
       );
     } else {
@@ -234,8 +234,8 @@ export class DiService {
     const di = await this.diModel.findOne({ _id });
     if (di && di.ignoreCount && di.ignoreCount > 0) {
       return await this.logsDiService.addFacturePDFLogs(
-        di.ignoreCount,
         di._id,
+        di.ignoreCount,
         `${randompdfFile}.${extension}`,
       );
     } else {
@@ -262,8 +262,8 @@ export class DiService {
     const di = await this.diModel.findOne({ _id });
     if (di && di.ignoreCount && di.ignoreCount > 0) {
       return await this.logsDiService.addBCPDFLogs(
-        di.ignoreCount,
         di._id,
+        di.ignoreCount,
         `${randompdfFile}.${extension}`,
       );
     } else {
@@ -441,11 +441,14 @@ export class DiService {
         const composant = await this.composantModel.findOne({
           name: item.nameComposant,
         });
+
         return composant ? composant.prix_vente * item.quantity : 0;
       }),
     );
-    // TODO substruct the quantity needed from compsant in stock
-    return totalPrice.reduce((acc, curr) => acc + curr, 0);
+    // TODO substruct the quantity needed from compsant in stock.
+    const totlalComposant = totalPrice.reduce((acc, curr) => acc + curr, 0);
+
+    return totlalComposant;
   }
 
   // from Created ==> PENDING1
@@ -521,8 +524,8 @@ export class DiService {
     if (pricingNeg && pricingNeg.ignoreCount && pricingNeg.ignoreCount > 0) {
       console.log('logs');
       return this.logsDiService.savePricing(
-        pricingNeg.ignoreCount,
         _idDi,
+        pricingNeg.ignoreCount,
         price,
         final_price,
       );
@@ -614,12 +617,11 @@ export class DiService {
 
   //Tech finsih diagnostic
   async tech_startDiagnostic(_idDI: string, diag: DiagUpdate) {
-    console.log('tech fiish logs');
     const didata = await this.diModel.findOne({ _id: _idDI });
     if (didata && didata.ignoreCount && didata.ignoreCount > 0) {
       return await this.logsDiService.tech_startDiagnostic(
-        didata.ignoreCount,
         didata._id,
+        didata.ignoreCount,
         diag,
       );
     } else {
@@ -632,6 +634,7 @@ export class DiService {
             remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
             array_composants: diag.array_composants,
             di_category_id: diag.di_category_id,
+            isErrorFromFixtronix: diag.isErrorFromFixtronix ?? null,
           },
         },
       );
@@ -1097,6 +1100,7 @@ export class DiService {
     if (di && di.ignoreCount && di.ignoreCount > 0) {
       console.log('ignore count logs', di.ignoreCount);
       return await this.logsDiService.setSelectedComponentAsDoneLogs(
+        di._id,
         di.ignoreCount,
         nameComponent,
       );
@@ -1124,8 +1128,8 @@ export class DiService {
     if (pricing && pricing.ignoreCount && pricing.ignoreCount > 0) {
       console.log('retour');
       return await this.logsDiService.savePricing(
-        pricing.ignoreCount,
         pricing._id,
+        pricing.ignoreCount,
         price,
       );
     } else {
@@ -1826,8 +1830,8 @@ export class DiService {
     const di = await this.diModel.findOne({ _id });
     if (di && di.ignoreCount && di.ignoreCount > 0) {
       isSentToCoordinator = await this.logsDiService.isSentToCoordinator(
-        di.ignoreCount,
         _id,
+        di.ignoreCount,
       );
     } else {
       console.log('original send to confirm');
@@ -1858,8 +1862,8 @@ export class DiService {
     if (di && di.ignoreCount && di.ignoreCount > 0) {
       isConfirmedComponentFromCoordinator =
         await this.logsDiService.componentConfirmedFromCoordinator(
-          di.ignoreCount,
           _id,
+          di.ignoreCount,
         );
     } else {
       isConfirmedComponentFromCoordinator = await this.diModel.findOneAndUpdate(

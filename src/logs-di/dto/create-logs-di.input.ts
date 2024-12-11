@@ -25,6 +25,8 @@ export class DiagUpdateLogs {
   @Field()
   di_category_id: string;
   @Field()
+  isErrorFromFixtronix: boolean;
+  @Field()
   can_be_repaired: boolean;
   @Field(() => [ComposantStructureLogsInput], { nullable: true })
   array_composants: ComposantStructureLogsInput[];

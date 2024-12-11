@@ -20,17 +20,37 @@ export class LogsDiService {
     @InjectModel(Composant.name)
     private composantModel: Model<ComposantDocument>,
   ) {}
-  async create(_id: number, _idDi: string) {
-    return await new this.logsDiModel({ _id, _idDi }).save();
+
+  async generateDiId(): Promise<number> {
+    let indexDIL = 0;
+    const lastDIL = await this.logsDiModel.findOne(
+      {},
+      {},
+      { sort: { createdAt: -1 } },
+    );
+
+    if (lastDIL) {
+      indexDIL = +lastDIL._id.substring(3);
+      return indexDIL + 1;
+    }
+    return indexDIL;
   }
 
-  async getLogsById(_idLog: number, _idDi: string) {
-    try {
-      const logsDi = await this.logsDiModel.findOne({ _id: _idLog, _idDi });
-      // if (!logsDi) {
-      //   throw new Error(`logsDi not found for id ${_idLog}`);
-      // }
+  async create(_idDi: string, idIgnore: number) {
+    const index = await this.generateDiId();
+    let _id = `DIL${index}`;
+    return await new this.logsDiModel({ _id, _idDi, idIgnore }).save();
+  }
 
+  async getLogsById(idIgnore: number, _idDi: string) {
+    try {
+      const logsDi = await this.logsDiModel.findOne({ _idDi, idIgnore });
+
+      // if (!logsDi) {
+      //   throw new Error(
+      //     `logsDi not found for id ${_idDi} and ignore count ${idIgnore}`,
+      //   );
+      // }
       return logsDi;
     } catch (error) {
       throw error;
@@ -42,16 +62,20 @@ export class LogsDiService {
   // }
 
   //Tech finsih diagnostic
-  async tech_startDiagnostic(_id: number, _idDi: string, diag: DiagUpdateLogs) {
+  async tech_startDiagnostic(
+    _idDi: string,
+    idIgnore: number,
+    diag: DiagUpdateLogs,
+  ) {
     try {
-      console.log('fired in logs', diag);
       const result = await this.logsDiModel.findOneAndUpdate(
-        { _id, _idDi },
+        { _idDi, idIgnore },
         {
           $set: {
             can_be_repaired: diag.can_be_repaired,
             contain_pdr: diag.contain_pdr,
             remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
+            isErrorFromFixtronix: diag.isErrorFromFixtronix ?? null,
             array_composants: diag.array_composants,
             di_category_id: diag.di_category_id,
           },
@@ -68,59 +92,72 @@ export class LogsDiService {
     }
   }
   async savePricing(
-    _id: number,
     _idDi: string,
+    idIgnore: number,
     price: number,
     final_price?: number,
   ) {
+    console.log('savePricing excecuted', _idDi, idIgnore, price, final_price);
     if (!final_price) {
-      console.log('update price in logs');
-      return await this.logsDiModel.findOneAndUpdate(
-        { _id, _idDi },
-        { $set: { price, final_price } },
-      );
+      console.log('!!!!final_price');
+      return await this.logsDiModel
+        .findOneAndUpdate({ _idDi, idIgnore }, { $set: { price, final_price } })
+        .then((res) => {
+          console.log('first', res);
+          return res;
+        })
+        .catch((err) => {
+          console.log('first err', err);
+          return err;
+        });
     } else {
-      console.log('update price in logs');
-      return await this.logsDiModel.findOneAndUpdate(
-        { _id, _idDi },
-        { $set: { price } },
-      );
+      console.log('final_price');
+      return await this.logsDiModel
+        .findOneAndUpdate({ _idDi, idIgnore }, { $set: { price } })
+        .then((res) => {
+          console.log('second', res);
+          return res;
+        })
+        .catch((err) => {
+          console.log('second err', err);
+          return err;
+        });
     }
   }
 
-  async addDevisPDFLogs(_id: number, _idDi: string, pdf: string) {
+  async addDevisPDFLogs(_id: string, idIgnore: number, pdf: string) {
     return await this.logsDiModel.findOneAndUpdate(
-      { _id, _idDi },
+      { _id, idIgnore },
       { $set: { devis: pdf } },
       { new: true },
     );
   }
-  async addBCPDFLogs(_id: number, _idDi: string, pdf: string) {
+  async addBCPDFLogs(_id: string, idIgnore: number, pdf: string) {
     return await this.logsDiModel.findOneAndUpdate(
-      { _id, _idDi },
+      { _id, idIgnore },
       { $set: { bon_de_commande: pdf } },
       { new: true },
     );
   }
   //Bon de livraison
-  async addBLPDFLogs(_id: number, _idDi: string, pdf: string) {
+  async addBLPDFLogs(_id: string, idIgnore: number, pdf: string) {
     return await this.logsDiModel.findOneAndUpdate(
-      { _id, _idDi },
+      { _id, idIgnore },
       { $set: { bon_de_livraison: pdf } },
       { new: true },
     );
   }
-  async addFacturePDFLogs(_id: number, _idDi: string, pdf: string) {
+  async addFacturePDFLogs(_id: string, idIgnore: number, pdf: string) {
     return await this.logsDiModel.findOneAndUpdate(
-      { _id, _idDi },
+      { _id, idIgnore },
       { $set: { facture: pdf } },
       { new: true },
     );
   }
 
-  async calculateticketComposantPriceLogs(_id: number, _idDi: string) {
+  async calculateticketComposantPriceLogs(_id: string, idIgnore: number) {
     console.log('calculateticketComposantPriceLogs');
-    const ticket = await this.logsDiModel.findOne({ _id, _idDi });
+    const ticket = await this.logsDiModel.findOne({ _id, idIgnore });
 
     const totalPrice = await Promise.all(
       ticket.array_composants.map(async (item) => {
@@ -135,17 +172,17 @@ export class LogsDiService {
     return totalPrice.reduce((acc, curr) => acc + curr, 0);
   }
 
-  async isSentToCoordinator(_id: number, _idDi: string) {
+  async isSentToCoordinator(_id: string, idIgnore: number) {
     console.log('retour send to confirm');
     return await this.logsDiModel.findOneAndUpdate(
-      { _id, _idDi },
+      { _id, idIgnore },
       { $set: { isSentToCoordinator: true } },
       { new: true },
     );
   }
-  async componentConfirmedFromCoordinator(_id: number, _idDi: string) {
+  async componentConfirmedFromCoordinator(_id: string, idIgnore: number) {
     return await this.logsDiModel.findOneAndUpdate(
-      { _id, _idDi },
+      { _id, idIgnore },
       {
         $set: {
           isConfirmedComponentFromCoordinator: true,
@@ -153,12 +190,21 @@ export class LogsDiService {
       },
     );
   }
-  async setSelectedComponentAsDoneLogs(_id: number, nameComponent: string) {
+
+  async setSelectedComponentAsDoneLogs(
+    _id: string,
+    diIgnore: number,
+    nameComponent: string,
+  ) {
     console.log('🌰[nameComponent]:', nameComponent);
 
     // Find the document with the specific component
     const updatedDocument = await this.logsDiModel.findOneAndUpdate(
-      { _id, 'array_composants.nameComposant': nameComponent },
+      {
+        _id,
+        diIgnore,
+        'array_composants.nameComposant': nameComponent,
+      },
       { $set: { 'array_composants.$.isUpdated': true } }, // Update only the matched component
       { new: true }, // Return the updated document
     );

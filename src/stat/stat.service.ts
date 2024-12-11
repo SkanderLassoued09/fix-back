@@ -47,7 +47,7 @@ export class StatService {
     const di = await this.diModel.findOne({ _id: createStatInput._idDi });
     if (di.ignoreCount > 0) {
       createStatInput.ignoreCount = di.ignoreCount;
-      await this.logsDiService.create(di.ignoreCount, createStatInput._idDi);
+      await this.logsDiService.create(createStatInput._idDi, di.ignoreCount);
     }
     const result = await new this.StatModel(createStatInput).save();
 

@@ -5,9 +5,11 @@ import { Document } from 'mongoose';
 @Schema({ timestamps: true })
 export class DiLogsDocument extends Document {
   @Prop()
-  _id: number;
+  _id: string;
   @Prop()
   _idDi: string;
+  @Prop()
+  idIgnore: number;
   @Prop()
   // repair or not
   can_be_repaired: boolean;
@@ -88,6 +90,9 @@ export class DiLogsDocument extends Document {
   remarque_coordinator: string;
   @Prop({ nullable: true })
   confirmationComposant: string;
+
+  @Prop({ nullable: true })
+  isErrorFromFixtronix: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -95,10 +100,12 @@ export const DiLogsSchema = SchemaFactory.createForClass(DiLogsDocument);
 
 @ObjectType()
 export class LogsDi {
-  @Field(() => Number, { nullable: true })
-  _id?: number;
+  @Field(() => String, { nullable: true })
+  _id: string;
   @Field(() => String, { nullable: true })
   _idDi?: string;
+  @Field(() => Number, { nullable: true })
+  idIgnore?: number;
   @Field(() => Boolean, { nullable: true })
   can_be_repaired?: boolean;
 

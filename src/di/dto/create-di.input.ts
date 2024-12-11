@@ -113,6 +113,8 @@ export class DiagUpdate {
   @Field()
   di_category_id: string;
   @Field()
+  isErrorFromFixtronix: boolean;
+  @Field()
   can_be_repaired: boolean;
   @Field(() => [ComposantStructureInput], { nullable: true })
   array_composants: ComposantStructureInput[];

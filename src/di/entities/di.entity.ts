@@ -113,6 +113,8 @@ export class DiDocument extends Document {
   @Prop({ nullable: true })
   remarque_magasin: string;
   @Prop({ nullable: true })
+  isErrorFromFixtronix: boolean;
+  @Prop({ nullable: true })
   remarque_coordinator: string;
   @Prop({ nullable: true })
   confirmationComposant: string;
