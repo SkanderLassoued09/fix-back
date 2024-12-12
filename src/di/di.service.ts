@@ -431,24 +431,30 @@ export class DiService {
   }
 
   async calculateTicketComposantPrice(ticketId: string) {
+    let totlalComposant;
     const ticket = await this.diModel.findById(ticketId);
     if (!ticket) {
       throw new Error('Ticket not found');
     }
 
-    const totalPrice = await Promise.all(
-      ticket.array_composants.map(async (item) => {
-        const composant = await this.composantModel.findOne({
-          name: item.nameComposant,
-        });
+    if (ticket.ignoreCount && ticket.ignoreCount > 0) {
+      return await this.logsDiService.calculateComposantTicketPrice(
+        ticket._id,
+        ticket.ignoreCount,
+      );
+    } else {
+      const totalPrice = await Promise.all(
+        ticket.array_composants.map(async (item) => {
+          const composant = await this.composantModel.findOne({
+            name: item.nameComposant,
+          });
 
-        return composant ? composant.prix_vente * item.quantity : 0;
-      }),
-    );
-    // TODO substruct the quantity needed from compsant in stock.
-    const totlalComposant = totalPrice.reduce((acc, curr) => acc + curr, 0);
-
-    return totlalComposant;
+          return composant ? composant.prix_vente * item.quantity : 0;
+        }),
+      );
+      // TODO substruct the quantity needed from compsant in stock.
+      return totalPrice.reduce((acc, curr) => acc + curr, 0);
+    }
   }
 
   // from Created ==> PENDING1

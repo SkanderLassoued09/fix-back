@@ -125,6 +125,21 @@ export class LogsDiService {
     }
   }
 
+  async calculateComposantTicketPrice(_idDi: string, idIgnore: number) {
+    const diLog = await this.logsDiModel.findOne({ _idDi, idIgnore });
+    const totalPrice = await Promise.all(
+      diLog.array_composants.map(async (item) => {
+        const composant = await this.composantModel.findOne({
+          name: item.nameComposant,
+        });
+
+        return composant ? composant.prix_vente * item.quantity : 0;
+      }),
+    );
+    // TODO substruct the quantity needed from compsant in stock.
+    return totalPrice.reduce((acc, curr) => acc + curr, 0);
+  }
+
   async addDevisPDFLogs(_id: string, idIgnore: number, pdf: string) {
     return await this.logsDiModel.findOneAndUpdate(
       { _id, idIgnore },
