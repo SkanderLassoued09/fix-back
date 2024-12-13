@@ -187,10 +187,12 @@ export class LogsDiService {
     return totalPrice.reduce((acc, curr) => acc + curr, 0);
   }
 
-  async isSentToCoordinator(_id: string, idIgnore: number) {
-    console.log('retour send to confirm');
+  async isSentToCoordinator(_idDi: string, idIgnore: number) {
+    console.log('🍗[idIgnore]:', idIgnore);
+    console.log('🥞[_id]:', _idDi);
+
     return await this.logsDiModel.findOneAndUpdate(
-      { _id, idIgnore },
+      { _idDi, idIgnore },
       { $set: { isSentToCoordinator: true } },
       { new: true },
     );

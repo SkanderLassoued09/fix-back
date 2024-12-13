@@ -95,6 +95,7 @@ export class DiResolver {
 
   @Mutation(() => Di)
   async sendComponentToConMagasinForConfirmation(@Args('_id') _id: string) {
+    console.log('🍭[_id]:', _id);
     return await this.diService.sendComponentToConMagasinForConfirmation(_id);
   }
 
