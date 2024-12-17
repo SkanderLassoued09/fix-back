@@ -1307,6 +1307,7 @@ export class DiService {
   }
 
   async changeStatusPending2(_id: string) {
+    console.log("***********CHANGE STATUS FUNCTION IS ACTIVATED*************")
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
