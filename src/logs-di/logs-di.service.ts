@@ -87,7 +87,6 @@ export class LogsDiService {
 
       return result;
     } catch (error) {
-      console.log('🥜[error]:', error);
       throw error;
     }
   }
@@ -97,29 +96,22 @@ export class LogsDiService {
     price: number,
     final_price?: number,
   ) {
-    console.log('savePricing excecuted', _idDi, idIgnore, price, final_price);
     if (!final_price) {
-      console.log('!!!!final_price');
       return await this.logsDiModel
         .findOneAndUpdate({ _idDi, idIgnore }, { $set: { price, final_price } })
         .then((res) => {
-          console.log('first', res);
           return res;
         })
         .catch((err) => {
-          console.log('first err', err);
           return err;
         });
     } else {
-      console.log('final_price');
       return await this.logsDiModel
         .findOneAndUpdate({ _idDi, idIgnore }, { $set: { price } })
         .then((res) => {
-          console.log('second', res);
           return res;
         })
         .catch((err) => {
-          console.log('second err', err);
           return err;
         });
     }
@@ -140,38 +132,37 @@ export class LogsDiService {
     return totalPrice.reduce((acc, curr) => acc + curr, 0);
   }
 
-  async addDevisPDFLogs(_id: string, idIgnore: number, pdf: string) {
+  async addDevisPDFLogs(_idDi: string, idIgnore: number, pdf: string) {
     return await this.logsDiModel.findOneAndUpdate(
-      { _id, idIgnore },
+      { _idDi, idIgnore },
       { $set: { devis: pdf } },
       { new: true },
     );
   }
-  async addBCPDFLogs(_id: string, idIgnore: number, pdf: string) {
+  async addBCPDFLogs(_idDi: string, idIgnore: number, pdf: string) {
     return await this.logsDiModel.findOneAndUpdate(
-      { _id, idIgnore },
+      { _idDi, idIgnore },
       { $set: { bon_de_commande: pdf } },
       { new: true },
     );
   }
   //Bon de livraison
-  async addBLPDFLogs(_id: string, idIgnore: number, pdf: string) {
+  async addBLPDFLogs(_idDi: string, idIgnore: number, pdf: string) {
     return await this.logsDiModel.findOneAndUpdate(
-      { _id, idIgnore },
+      { _idDi, idIgnore },
       { $set: { bon_de_livraison: pdf } },
       { new: true },
     );
   }
-  async addFacturePDFLogs(_id: string, idIgnore: number, pdf: string) {
+  async addFacturePDFLogs(_idDi: string, idIgnore: number, pdf: string) {
     return await this.logsDiModel.findOneAndUpdate(
-      { _id, idIgnore },
+      { _idDi, idIgnore },
       { $set: { facture: pdf } },
       { new: true },
     );
   }
 
   async calculateticketComposantPriceLogs(_id: string, idIgnore: number) {
-    console.log('calculateticketComposantPriceLogs');
     const ticket = await this.logsDiModel.findOne({ _id, idIgnore });
 
     const totalPrice = await Promise.all(
@@ -183,14 +174,11 @@ export class LogsDiService {
       }),
     );
     // TODO substruct the quantity needed from compsant in stock
-    console.log('🍇[totalPrice in logs]:', totalPrice);
+
     return totalPrice.reduce((acc, curr) => acc + curr, 0);
   }
 
   async isSentToCoordinator(_idDi: string, idIgnore: number) {
-    console.log('🍗[idIgnore]:', idIgnore);
-    console.log('🥞[_id]:', _idDi);
-
     return await this.logsDiModel.findOneAndUpdate(
       { _idDi, idIgnore },
       { $set: { isSentToCoordinator: true } },
@@ -213,8 +201,6 @@ export class LogsDiService {
     diIgnore: number,
     nameComponent: string,
   ) {
-    console.log('🌰[nameComponent]:', nameComponent);
-
     // Find the document with the specific component
     const updatedDocument = await this.logsDiModel.findOneAndUpdate(
       {
@@ -234,9 +220,9 @@ export class LogsDiService {
   }
 
   // NEZIH ya m9a7eb
-  async getAllLogsByDi(_id: string) {
+  async getAllLogsByDi(_idDi: string) {
     try {
-      const logs = await this.logsDiModel.find({ _id });
+      const logs = await this.logsDiModel.find({ _idDi });
       if (logs.length === 0) {
         throw new Error('No logs for this DI');
       } else {

@@ -136,3 +136,39 @@ export class DiReparationInfo {
   @Field()
   diData: Di;
 }
+
+/**
+ * @ObjectType()
+export class DiReparationInfo {
+  @Field()
+  StatData: Stat;
+  @Field(() => [Di])
+  diData: Di[];
+}
+
+  async getStatInfoForTechReparation(_idDi: string) {
+    const di = await this.diModel.findOne({ _id: _idDi });
+    if (di && di.ignoreCount && di.ignoreCount > 0) {
+      const logsDi = await this.logsDiService.getAllLogsByDi(_idDi);
+      const StatData = await this.StatModel.findOne({
+        _idDi,
+        ignoreCount: di.ignoreCount,
+      });
+      const techDiag = await this.profileService.getTech(StatData.id_tech_diag);
+      const techrep = await this.profileService.getTech(StatData.id_tech_rep);
+      StatData.id_tech_diag = techDiag;
+      StatData.id_tech_rep = techrep;
+
+      return { diData: logsDi, StatData };
+    } else {
+      const StatData = await this.StatModel.findOne({ _idDi });
+
+      const techDiag = await this.profileService.getTech(StatData.id_tech_diag);
+      const techrep = await this.profileService.getTech(StatData.id_tech_rep);
+      StatData.id_tech_diag = techDiag;
+      StatData.id_tech_rep = techrep;
+
+      return { diData: [di], StatData };
+    }
+  }
+ */

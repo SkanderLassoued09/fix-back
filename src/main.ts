@@ -9,7 +9,7 @@ async function bootstrap() {
   app.use(bodyParser.urlencoded({ limit: '5gb', extended: true }));
 
   await app.listen(3000, () => {
-    console.log('🍆 Running..');
+    console.log('running ..');
   });
 }
 bootstrap();

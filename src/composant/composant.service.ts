@@ -34,8 +34,6 @@ export class ComposantService {
   async createComposant(
     createComposantInput: CreateComposantInput,
   ): Promise<Composant> {
-    console.log('🍑[createComposantInput]:', createComposantInput);
-
     // Check if the PDF is a valid base64 string
     if (
       createComposantInput.pdf &&

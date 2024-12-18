@@ -93,8 +93,6 @@ export class StatResolver {
     @Args('_id') _id: string,
     @Args('repTime') repTime: string,
   ) {
-    console.log('_id', _id);
-    console.log('repTime', repTime);
     const isUpdated = this.statService.lapTimeForReaparation(_id, repTime);
     if (isUpdated) {
       return true;
@@ -167,7 +165,7 @@ export class StatResolver {
   @Query(() => DiReparationInfo)
   async getStatInfoForTechReparation(@Args('_idDi') _idDi: string) {
     const value = await this.statService.getStatInfoForTechReparation(_idDi);
-    console.log('🥕[value]:', value);
+
     return value;
   }
 
@@ -185,7 +183,6 @@ export class StatResolver {
   }
   @Query(() => [Stat])
   async getRetourDataStats(@Args('_idDi') _idDi: string) {
-    console.log('🍭[_idDi]:', _idDi);
     return await this.statService.getRetourDataStats(_idDi);
   }
 

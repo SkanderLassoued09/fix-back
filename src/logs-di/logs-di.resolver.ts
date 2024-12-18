@@ -33,9 +33,12 @@ export class LogsDiResolver {
     @Args('id') id: string,
     @Args('_idDi', { type: () => Int }) _idDi: number,
   ) {
-    console.log('🍱[id]:', id);
-    console.log('🥩[_idDi]:', _idDi);
     return this.logsDiService.getLogsById(_idDi, id);
+  }
+
+  @Query(() => [LogsDi])
+  getAllLogsByDi(@Args('_idDi') _idDi: string) {
+    return this.logsDiService.getAllLogsByDi(_idDi);
   }
 
   @Mutation(() => LogsDi)

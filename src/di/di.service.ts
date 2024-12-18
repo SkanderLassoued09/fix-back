@@ -528,7 +528,6 @@ export class DiService {
   ): Promise<UpdateNego> {
     const pricingNeg = await this.diModel.findOne({ id: _idDi });
     if (pricingNeg && pricingNeg.ignoreCount && pricingNeg.ignoreCount > 0) {
-      console.log('logs');
       return this.logsDiService.savePricing(
         _idDi,
         pricingNeg.ignoreCount,
@@ -536,7 +535,6 @@ export class DiService {
         final_price,
       );
     } else {
-      console.log('original');
       return await this.diModel.findOneAndUpdate(
         { _id: _idDi },
         {
@@ -551,7 +549,6 @@ export class DiService {
 
   //coordinator sending to tech for  diagnostic
   async coordinator_ToDiag(_idDI: string) {
-    console.log('🥖[_idDI]:', _idDI);
     const diagnostic = await this.diModel.findOneAndUpdate(
       { _id: _idDI },
       {
@@ -1104,15 +1101,12 @@ export class DiService {
     const di = await this.diModel.findOne({ _id });
 
     if (di && di.ignoreCount && di.ignoreCount > 0) {
-      console.log('ignore count logs', di.ignoreCount);
       return await this.logsDiService.setSelectedComponentAsDoneLogs(
         di._id,
         di.ignoreCount,
         nameComponent,
       );
     } else {
-      console.log('original');
-      console.log('🍝[nameComponent]:', nameComponent);
       // Find the document with the specific component
       const updatedDocument = await this.diModel.findOneAndUpdate(
         { _id, 'array_composants.nameComposant': nameComponent },
@@ -1132,14 +1126,12 @@ export class DiService {
     const pricing = await this.diModel.findOne({ _id });
 
     if (pricing && pricing.ignoreCount && pricing.ignoreCount > 0) {
-      console.log('retour');
       return await this.logsDiService.savePricing(
         pricing._id,
         pricing.ignoreCount,
         price,
       );
     } else {
-      console.log('original');
       return await this.diModel.findOneAndUpdate(
         { _id },
         {
@@ -1307,7 +1299,6 @@ export class DiService {
   }
 
   async changeStatusPending2(_id: string) {
-    console.log("***********CHANGE STATUS FUNCTION IS ACTIVATED*************")
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
@@ -1576,7 +1567,6 @@ export class DiService {
   }
 
   async changeDiRetour1(_id: string) {
-    console.log('retour 1');
     const retour = await this.diModel.updateOne(
       { _id },
       { $set: { status: STATUS_DI.Retour1.status } },
@@ -1593,7 +1583,6 @@ export class DiService {
     return retour;
   }
   async changeDiRetour2(_id: string) {
-    console.log('retour 2');
     const retour = await this.diModel.updateOne(
       { _id },
       { $set: { status: STATUS_DI.Retour2.status } },
@@ -1610,7 +1599,6 @@ export class DiService {
     return retour;
   }
   async changeDiRetour3(_id: string) {
-    console.log('retour 3');
     const retour = await this.diModel.updateOne(
       { _id },
       { $set: { status: STATUS_DI.Retour3.status } },
@@ -1832,7 +1820,6 @@ export class DiService {
   }
   //function that send confirmation composant from magasin to coordinatoor
   async sendComponentToConMagasinForConfirmation(_id: string) {
-    console.log('🥦[sendComponentToConMagasinForConfirmation]:');
     let isSentToCoordinator: any;
     const di = await this.diModel.findOne({ _id });
     if (di && di.ignoreCount && di.ignoreCount > 0) {
@@ -1841,7 +1828,6 @@ export class DiService {
         di.ignoreCount,
       );
     } else {
-      console.log('original send to confirm');
       isSentToCoordinator = await this.diModel.findOneAndUpdate(
         { _id },
         { $set: { isSentToCoordinator: true } },

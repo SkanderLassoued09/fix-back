@@ -95,7 +95,6 @@ export class DiResolver {
 
   @Mutation(() => Di)
   async sendComponentToConMagasinForConfirmation(@Args('_id') _id: string) {
-    console.log('🍭[_id]:', _id);
     return await this.diService.sendComponentToConMagasinForConfirmation(_id);
   }
 
@@ -160,7 +159,6 @@ export class DiResolver {
     @Args('_id') _id: string,
     @Args('nameComposant') nameComposant: string,
   ) {
-    console.log('🌽', _id, nameComposant);
     return await this.diService.setSelectedComponentAsDone(_id, nameComposant);
   }
 
@@ -370,7 +368,6 @@ export class DiResolver {
   }
   @Mutation(() => Boolean)
   changeStatusRetour1(@Args('_id') _id: string) {
-    console.log('🥟[_id]:', _id);
     const pending3 = this.diService.changeDiRetour1(_id);
     if (pending3) {
       return true;
@@ -380,7 +377,6 @@ export class DiResolver {
   }
   @Mutation(() => Boolean)
   changeStatusRetour2(@Args('_id') _id: string) {
-    console.log('🍸[_id]:', _id);
     const pending3 = this.diService.changeDiRetour2(_id);
     if (pending3) {
       return true;
@@ -390,7 +386,6 @@ export class DiResolver {
   }
   @Mutation(() => Boolean)
   changeStatusRetour3(@Args('_id') _id: string) {
-    console.log('🍤[_id]:', _id);
     const pending3 = this.diService.changeDiRetour3(_id);
     if (pending3) {
       return true;
@@ -462,7 +457,6 @@ export class DiResolver {
         Math.pow(this.timeStringToSeconds(element.rep_time) - moyRep, 2),
       )
       .reduce((acc, curr) => acc + curr, 0);
-    console.log(sumDureeMinusDureeMoyenne, 'sumDureeMinusDureeMoyenne');
 
     const ecartType = Math.sqrt(
       sumDureeMinusDureeMoyenne / countNumberReperation,
@@ -491,7 +485,6 @@ export class DiResolver {
         Math.pow(this.timeStringToSeconds(element.diag_time) - moyDiag, 2),
       )
       .reduce((acc, curr) => acc + curr, 0);
-    console.log(sumDureeMinusDureeMoyenne, 'sumDureeMinusDureeMoyenne');
 
     const ecartType = Math.sqrt(
       sumDureeMinusDureeMoyenne / countNumberDiagnostique,
@@ -522,7 +515,7 @@ export class DiResolver {
     data.map((el) =>
       el.status === 'FINISHED' ? (repFinie = repFinie + 1) : repFinie,
     );
-    console.log('allcounter', allcounter);
+
     const percentageTraiter = (repFinie / allcounter) * 100;
     return percentageTraiter;
   }

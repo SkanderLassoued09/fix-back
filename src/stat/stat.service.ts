@@ -99,7 +99,6 @@ export class StatService {
   }
 
   async affectForRep(_idDi: string, _idTech: string) {
-    console.log('🌯[affectForRep');
     const di = await this.diModel.findOne({ _id: _idDi });
     if (!di) {
       throw new Error('Issue in finding di in send di to reparation');
@@ -230,8 +229,6 @@ export class StatService {
   }
   // to get techrep and tech daig and their times
   async getRetourDataStats(_id: string) {
-    console.log('🍱[_id]:', _id);
-
     // Fetch stats from the database
     const statsRetour = await this.StatModel.find({ _idDi: _id });
 
@@ -454,14 +451,9 @@ export class StatService {
 
     // Find the pause log by ID
     const pauseLog = stat.pauseLogs.find((log) => {
-      console.log('log', log);
-      console.log('log', log._id.toString());
-      console.log('🍡[pauseLogId]:', pauseLogId);
-
       return log._id.toString() === pauseLogId;
     });
 
-    console.log('🍹[pauseLog]:', pauseLog);
     if (!pauseLog) {
       throw new Error('Pause log not found');
     }
