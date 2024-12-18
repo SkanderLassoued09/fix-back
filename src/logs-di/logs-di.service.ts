@@ -148,11 +148,16 @@ export class LogsDiService {
   }
   //Bon de livraison
   async addBLPDFLogs(_idDi: string, idIgnore: number, pdf: string) {
-    return await this.logsDiModel.findOneAndUpdate(
+    console.log('🍰[idIgnore]:', idIgnore);
+    console.log('🍶[_idDi]:', _idDi);
+    const bl = await this.logsDiModel.findOneAndUpdate(
       { _idDi, idIgnore },
       { $set: { bon_de_livraison: pdf } },
       { new: true },
     );
+
+    console.log('🍧bl', bl);
+    return bl;
   }
   async addFacturePDFLogs(_idDi: string, idIgnore: number, pdf: string) {
     return await this.logsDiModel.findOneAndUpdate(

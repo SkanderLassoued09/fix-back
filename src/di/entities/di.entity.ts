@@ -314,6 +314,8 @@ export class DiTable {
   @Field({ nullable: true })
   can_be_repaired: boolean;
   @Field({ nullable: true })
+  devis: string;
+  @Field({ nullable: true })
   facture: string;
   @Field({ nullable: true })
   bon_de_commande: string;

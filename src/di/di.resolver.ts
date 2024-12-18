@@ -65,6 +65,7 @@ export class DiResolver {
 
   @Mutation(() => Di)
   addBl(@Args('_id') _id: string, @Args('pdf') pdf: string) {
+    console.log('bl');
     return this.diService.addBlPDF(_id, pdf);
   }
   @Mutation(() => Di)

@@ -193,6 +193,7 @@ export class DiService {
   }
 
   async addBlPDF(_id: string, pdf: string) {
+    console.log('🥠');
     const extension = getFileExtension(pdf);
     const buffer = Buffer.from(pdf.split(',')[1], 'base64');
 
@@ -206,12 +207,14 @@ export class DiService {
     );
     const di = await this.diModel.findOne({ _id });
     if (di && di.ignoreCount && di.ignoreCount > 0) {
+      console.log('logs');
       return await this.logsDiService.addBLPDFLogs(
         di._id,
         di.ignoreCount,
         `${randompdfFile}.${extension}`,
       );
     } else {
+      console.log('🍢original');
       return await this.diModel.updateOne(
         { _id },
         { $set: { bon_de_livraison: `${randompdfFile}.${extension}` } },
@@ -361,6 +364,7 @@ export class DiService {
           bon_de_commande: di.bon_de_commande,
           bon_de_livraison: di.bon_de_livraison,
           facture: di.facture,
+          devis: di.devis,
           contain_pdr: di.contain_pdr,
           current_roles: di.current_roles,
           array_composants: di.array_composants,
