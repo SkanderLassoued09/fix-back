@@ -368,6 +368,7 @@ export class DiService {
           contain_pdr: di.contain_pdr,
           current_roles: di.current_roles,
           array_composants: di.array_composants,
+          isErrorFromFixtronix: di.isErrorFromFixtronix,
           di_category_id: di.di_category_id?.category,
           location_id: di.location_id?.location_name ?? 'N/A',
           status: di.status,

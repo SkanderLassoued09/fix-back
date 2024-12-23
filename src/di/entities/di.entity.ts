@@ -366,6 +366,8 @@ export class DiTable {
   remarque_magasin: string;
   @Field({ nullable: true })
   remarque_coordinator: string;
+  @Field({ nullable: true })
+  isErrorFromFixtronix: boolean;
 } //
 @ObjectType()
 export class DiTableData {
