@@ -329,7 +329,7 @@ export class DiService {
       },
     );
   }
-
+// workage
   async getAllDi(paginationConfig: PaginationConfigDi) {
     const { first, rows } = paginationConfig;
     const totalDiCount = await this.diModel
@@ -1082,7 +1082,7 @@ export class DiService {
         return err;
       });
   }
-
+//! working here
   async getDiForMagasin(paginationConfig: PaginationConfigDi) {
     const queryCoordinator = {
       contain_pdr: true,
@@ -1091,7 +1091,7 @@ export class DiService {
     const { first, rows } = paginationConfig;
     const totalDiCount = await this.diModel.countDocuments(queryCoordinator);
     const di = await this.diModel
-      .find(queryCoordinator)
+      .find({ isDeleted: false, ...queryCoordinator })
       .sort({ createdAt: -1 })
       .limit(rows)
       .skip(first);
