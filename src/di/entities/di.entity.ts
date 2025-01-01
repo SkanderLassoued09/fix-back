@@ -226,6 +226,8 @@ export class Di {
   remarque_magasin: string;
   @Field({ nullable: true })
   remarque_coordinator: string;
+  @Field({ nullable: true })
+  isErrorFromFixtronix: boolean;
 }
 
 @ObjectType()
