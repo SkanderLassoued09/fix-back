@@ -164,6 +164,8 @@ export class LogsDi {
   isDeleted?: boolean;
 
   @Field(() => Boolean, { nullable: true })
+  isErrorFromFixtronix: boolean;
+  @Field(() => Boolean, { nullable: true })
   isOpenedOnce?: boolean;
 
   @Field(() => Boolean, { nullable: true })
