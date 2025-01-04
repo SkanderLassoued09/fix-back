@@ -11,7 +11,7 @@ export class CreateDiInput {
   @Field({ nullable: true })
   location: string;
   @Field({ nullable: true })
-  designiation: string;
+  description: string;
   @Field({ nullable: true })
   remarqueTech: string;
   @Field({ nullable: true })

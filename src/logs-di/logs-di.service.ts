@@ -67,6 +67,7 @@ export class LogsDiService {
     idIgnore: number,
     diag: DiagUpdateLogs,
   ) {
+    console.log("data retour",diag)
     try {
       const result = await this.logsDiModel.findOneAndUpdate(
         { _idDi, idIgnore },

@@ -625,6 +625,7 @@ export class DiService {
 
   //Tech finsih diagnostic
   async tech_startDiagnostic(_idDI: string, diag: DiagUpdate) {
+    console.log( diag,"diag info")
     const didata = await this.diModel.findOne({ _id: _idDI });
     if (didata && didata.ignoreCount && didata.ignoreCount > 0) {
       return await this.logsDiService.tech_startDiagnostic(
@@ -632,6 +633,7 @@ export class DiService {
         didata.ignoreCount,
         diag,
       );
+     
     } else {
       return await this.diModel.findOneAndUpdate(
         { _id: _idDI },
@@ -642,7 +644,7 @@ export class DiService {
             remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
             array_composants: diag.array_composants,
             di_category_id: diag.di_category_id,
-            isErrorFromFixtronix: diag.isErrorFromFixtronix ?? null,
+            isErrorFromFixtronix: diag.isErrorFromFixtronix ?? false,
           },
         },
       );
