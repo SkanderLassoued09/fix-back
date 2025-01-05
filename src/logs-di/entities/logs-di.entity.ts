@@ -1,6 +1,5 @@
 import { ObjectType, Field, Int } from '@nestjs/graphql';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { ComposantStructure } from 'src/di/entities/di.entity';
 import { Document } from 'mongoose';
 @Schema({ timestamps: true })
 export class DiLogsDocument extends Document {
