@@ -357,6 +357,9 @@ export class DiService {
         // Construct the DI response object including some fields from the linked stat
         return {
           _id: di._id,
+          remarque_tech_diagnostic:di.remarque_tech_diagnostic,
+          remarque_manager:di.remarque_manager,
+          remarque_tech_repair:di.remarque_tech_repair,
           title: di.title,
           description: di.description,
           ignoreCount: di.ignoreCount,
