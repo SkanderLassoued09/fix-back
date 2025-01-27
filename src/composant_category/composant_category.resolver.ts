@@ -10,13 +10,15 @@ export class Composant_CategoryResolver {
   ) {}
 
   @Mutation(() => Composant_Category)
-  createComposant_Category(
+  async createComposant_Category(
     @Args('createComposant_CategoryInput')
     createComposant_CategoryInput: CreateComposant_CategoryInput,
   ) {
-    return this.composant_CategoryService.createComposant_Category(
+    const data = await this.composant_CategoryService.createComposant_Category(
       createComposant_CategoryInput,
     );
+
+    return data;
   }
 
   @Mutation(() => Boolean)

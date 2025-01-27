@@ -9,8 +9,8 @@ export class CreateComposantInput {
   @Field({ nullable: true })
   package: string;
   //the entity category composant
-  // @Field({ nullable: true })
-  // category_composant_id: string;
+  @Field({ nullable: true })
+  category_composant_id: string;
   @Field({ nullable: true })
   prix_achat: number;
   @Field({ nullable: true })
@@ -48,4 +48,6 @@ export class UpdateComposantResponse {
   pdf: string;
   @Field({ nullable: true })
   status_composant: string;
+  @Field({ nullable: true })
+  category_composant_id: string;
 }

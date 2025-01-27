@@ -6,12 +6,9 @@ import { Document } from 'mongoose';
 @Schema({ timestamps: true })
 export class ComposantCategoryDocumet extends Document {
   @Prop()
-  @Field()
   _id: string;
   @Prop()
-  @Field()
-  @IsString()
-  category_Di: string;
+  category_composant: string;
 }
 export const Composant_CategorySchema = SchemaFactory.createForClass(
   ComposantCategoryDocumet,
@@ -19,7 +16,7 @@ export const Composant_CategorySchema = SchemaFactory.createForClass(
 
 @ObjectType()
 export class Composant_Category {
-  @Field()
+  @Field({ nullable: true })
   _id: string;
   @Field()
   category_composant: string;

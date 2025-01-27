@@ -114,8 +114,35 @@ export class ComposantService {
     updateComposant: CreateComposantInput,
   ): Promise<UpdateComposantResponse> {
     try {
+      // Check if the PDF is a valid base64 string
+      if (
+        updateComposant.pdf &&
+        updateComposant.pdf !== 'null' &&
+        updateComposant.pdf.includes(',')
+      ) {
+        const extension = getFileExtension(updateComposant.pdf);
+        const buffer = Buffer.from(
+          updateComposant.pdf.split(',')[1], // Split base64 string to get the data
+          'base64',
+        );
+
+        const randompdfFile = randomstring.generate({
+          length: 12,
+          charset: 'alphabetic',
+        });
+
+        fs.writeFileSync(
+          join(__dirname, `../../docs/${randompdfFile}.${extension}`),
+          buffer,
+        );
+
+        updateComposant.pdf = `${randompdfFile}.${extension}`;
+      } else {
+        // If the PDF is not valid, set it to null
+        updateComposant.pdf = null;
+      }
       // Perform the update operation
-      return await this.ComposantModel.findOneAndUpdate(
+      const update = await this.ComposantModel.findOneAndUpdate(
         { name: updateComposant.name },
         {
           $set: {
@@ -127,10 +154,13 @@ export class ComposantService {
             quantity_stocked: updateComposant.quantity_stocked,
             pdf: updateComposant.pdf,
             status: updateComposant.status_composant,
+            category_composant_id: updateComposant.category_composant_id,
           },
         },
         { new: true },
       );
+      console.log('update', update);
+      return update;
     } catch (error) {
       throw new Error('Failed to update composant: ' + error.message);
     }

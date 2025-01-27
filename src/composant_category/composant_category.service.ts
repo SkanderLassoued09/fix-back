@@ -20,7 +20,7 @@ export class Composant_CategoryService {
     );
 
     if (lastComposant_Category) {
-      indexComposant_Category = +lastComposant_Category._id.substring(1);
+      indexComposant_Category = +lastComposant_Category._id.substring(11);
       return indexComposant_Category + 1;
     }
     return indexComposant_Category;
@@ -30,7 +30,7 @@ export class Composant_CategoryService {
     createComposant_CategoryInput: CreateComposant_CategoryInput,
   ): Promise<Composant_Category> {
     const index = await this.generateComposant_CategoryId();
-    createComposant_CategoryInput._id = `C_Composant ${index}`;
+    createComposant_CategoryInput._id = `C_Composant${index}`;
     return await new this.Composant_CategoryModel(createComposant_CategoryInput)
       .save()
       .then((res) => {
