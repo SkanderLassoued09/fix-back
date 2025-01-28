@@ -12,7 +12,7 @@ export class DiLogsDocument extends Document {
   @Prop()
   // repair or not
   can_be_repaired: boolean;
-  @Prop()
+  @Prop({ default: false })
   // pdr or not
   contain_pdr: boolean;
 
@@ -90,7 +90,7 @@ export class DiLogsDocument extends Document {
   @Prop({ nullable: true })
   confirmationComposant: string;
 
-  @Prop({ nullable: true })
+  @Prop({ nullable: true, default: false })
   isErrorFromFixtronix: boolean;
   createdAt: Date;
   updatedAt: Date;

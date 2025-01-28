@@ -1,7 +1,6 @@
 import { Resolver, Query, Mutation, Args, Int } from '@nestjs/graphql';
 import { ProfileService } from './profile.service';
 import {
-  ClientByRegionChart,
   GetTicketByProfile,
   Profile,
   ProfileTableData,
@@ -16,9 +15,6 @@ import { UpdateProfileInput } from './dto/update-profile.input';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 import { BadRequestException, UseGuards } from '@nestjs/common';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
-
-import { RolesGuard } from 'src/auth/role-guard';
-import { Roles, Role } from './role-decorator';
 
 @Resolver()
 export class ProfileResolver {
