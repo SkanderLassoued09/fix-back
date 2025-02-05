@@ -329,7 +329,7 @@ export class DiService {
       },
     );
   }
-// workage
+  // workage
   async getAllDi(paginationConfig: PaginationConfigDi) {
     const { first, rows } = paginationConfig;
     const totalDiCount = await this.diModel
@@ -357,9 +357,9 @@ export class DiService {
         // Construct the DI response object including some fields from the linked stat
         return {
           _id: di._id,
-          remarque_tech_diagnostic:di.remarque_tech_diagnostic,
-          remarque_manager:di.remarque_manager,
-          remarque_tech_repair:di.remarque_tech_repair,
+          remarque_tech_diagnostic: di.remarque_tech_diagnostic,
+          remarque_manager: di.remarque_manager,
+          remarque_tech_repair: di.remarque_tech_repair,
           title: di.title,
           description: di.description,
           ignoreCount: di.ignoreCount,
@@ -534,8 +534,10 @@ export class DiService {
     price: number,
     final_price: number,
   ): Promise<UpdateNego> {
-    const pricingNeg = await this.diModel.findOne({ id: _idDi });
+    const pricingNeg = await this.diModel.findOne({ _id: _idDi });
+    console.log('🍤[pricingNeg]:', pricingNeg);
     if (pricingNeg && pricingNeg.ignoreCount && pricingNeg.ignoreCount > 0) {
+      console.log('log');
       return this.logsDiService.savePricing(
         _idDi,
         pricingNeg.ignoreCount,
@@ -543,6 +545,7 @@ export class DiService {
         final_price,
       );
     } else {
+      console.log('org');
       return await this.diModel.findOneAndUpdate(
         { _id: _idDi },
         {
@@ -628,7 +631,7 @@ export class DiService {
 
   //Tech finsih diagnostic
   async tech_startDiagnostic(_idDI: string, diag: DiagUpdate) {
-    console.log( diag,"diag info")
+    console.log(diag, 'diag info');
     const didata = await this.diModel.findOne({ _id: _idDI });
     if (didata && didata.ignoreCount && didata.ignoreCount > 0) {
       return await this.logsDiService.tech_startDiagnostic(
@@ -636,7 +639,6 @@ export class DiService {
         didata.ignoreCount,
         diag,
       );
-     
     } else {
       return await this.diModel.findOneAndUpdate(
         { _id: _idDI },
@@ -1087,7 +1089,7 @@ export class DiService {
         return err;
       });
   }
-//! working here
+  //! working here
   async getDiForMagasin(paginationConfig: PaginationConfigDi) {
     const queryCoordinator = {
       contain_pdr: true,
@@ -1133,8 +1135,10 @@ export class DiService {
   }
 
   async affectinitialPrice(_id: string, price: number) {
+    console.log('🍆[_id]:', _id);
+    console.log('🍜[price]:', price);
     const pricing = await this.diModel.findOne({ _id });
-
+    console.log('🍠[pricing.ignoreCount]:', pricing.ignoreCount);
     if (pricing && pricing.ignoreCount && pricing.ignoreCount > 0) {
       return await this.logsDiService.savePricing(
         pricing._id,

@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 import { UpdateLogsDiInput } from './dto/update-logs-di.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -67,7 +71,7 @@ export class LogsDiService {
     idIgnore: number,
     diag: DiagUpdateLogs,
   ) {
-    console.log("data retour",diag)
+    console.log('data retour', diag);
     try {
       const result = await this.logsDiModel.findOneAndUpdate(
         { _idDi, idIgnore },
@@ -97,7 +101,8 @@ export class LogsDiService {
     price: number,
     final_price?: number,
   ) {
-    if (!final_price) {
+    console.log('🥐', { _idDi, idIgnore, price, final_price });
+    if (final_price) {
       return await this.logsDiModel
         .findOneAndUpdate({ _idDi, idIgnore }, { $set: { price, final_price } })
         .then((res) => {
@@ -203,26 +208,31 @@ export class LogsDiService {
   }
 
   async setSelectedComponentAsDoneLogs(
-    _id: string,
+    _idDi: string,
     diIgnore: number,
     nameComponent: string,
   ) {
-    // Find the document with the specific component
-    const updatedDocument = await this.logsDiModel.findOneAndUpdate(
-      {
-        _id,
-        diIgnore,
-        'array_composants.nameComposant': nameComponent,
-      },
-      { $set: { 'array_composants.$.isUpdated': true } }, // Update only the matched component
-      { new: true }, // Return the updated document
-    );
+    try {
+      // Find the document with the specific component
+      const updatedDocument = await this.logsDiModel.findOneAndUpdate(
+        {
+          _idDi: _idDi,
+          idIgnore: diIgnore,
+          'array_composants.nameComposant': nameComponent,
+        },
+        { $set: { 'array_composants.$.isUpdated': true } }, // Update only the matched component
+        { new: true }, // Return the updated document
+      );
 
-    if (!updatedDocument) {
-      throw new NotFoundException(`Document or component not found.`);
+      if (!updatedDocument) {
+        throw new NotFoundException(`Document or component not found.`);
+      }
+
+      return updatedDocument;
+    } catch (error) {
+      console.log('🍋[error]:', error);
+      throw new InternalServerErrorException(error);
     }
-
-    return updatedDocument;
   }
 
   // NEZIH ya m9a7eb
