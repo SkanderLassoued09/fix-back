@@ -1109,7 +1109,7 @@ export class DiService {
     nameComponent: string,
   ): Promise<any> {
     const di = await this.diModel.findOne({ _id });
-
+console.log("inside setSelectedComponentAsDone")
     if (di && di.ignoreCount && di.ignoreCount > 0) {
       return await this.logsDiService.setSelectedComponentAsDoneLogs(
         di._id,

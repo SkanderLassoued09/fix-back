@@ -208,6 +208,7 @@ export class LogsDiService {
     nameComponent: string,
   ) {
     // Find the document with the specific component
+    console.log("inside function LOGS COMPOSANT")
     const updatedDocument = await this.logsDiModel.findOneAndUpdate(
       {
         _id,
