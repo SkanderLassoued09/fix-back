@@ -13,6 +13,7 @@ import { STATUS_DI } from 'src/di/di.status';
 import { PaginationConfigDi } from 'src/di/dto/create-di.input';
 import { Di } from 'src/di/entities/di.entity';
 import { LogsDiService } from 'src/logs-di/logs-di.service';
+import { v4 as uuidv4 } from 'uuid';
 @Injectable()
 export class StatService {
   constructor(
@@ -43,7 +44,7 @@ export class StatService {
   async createStat(createStatInput: CreateStatInput): Promise<Stat> {
     const index = await this.generateStatId();
     // Fetch the di entity
-    createStatInput._id = `STAT${index}`;
+    createStatInput._id = uuidv4();
     const di = await this.diModel.findOne({ _id: createStatInput._idDi });
     if (di.ignoreCount > 0) {
       createStatInput.ignoreCount = di.ignoreCount;

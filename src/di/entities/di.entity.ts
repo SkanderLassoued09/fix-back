@@ -370,11 +370,14 @@ export class DiTable {
   remarque_coordinator: string;
   @Field({ nullable: true })
   isErrorFromFixtronix: boolean;
+  @Field(() => [LogsDi], { nullable: true })
+  logs: LogsDi[];
 } //
 @ObjectType()
 export class DiTableData {
   @Field(() => [DiTable])
   di: DiTable[];
+
   @Field()
   totalDiCount: number;
 }

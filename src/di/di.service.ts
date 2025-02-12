@@ -348,13 +348,15 @@ export class DiService {
       .skip(first)
       .exec();
 
-    // Fetch linked stats for each DI
+    // Fetch linked stats & logs for each DI
     const di = await Promise.all(
       diRecords.map(async (di) => {
         // Fetch the stat document based on the DI's _id
         const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
 
-        // Construct the DI response object including some fields from the linked stat
+        // Fetch logs related to this DI
+        const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
+
         return {
           _id: di._id,
           remarque_tech_diagnostic: di.remarque_tech_diagnostic,
@@ -389,6 +391,8 @@ export class DiService {
           techRep: stat?.id_tech_rep
             ? await this.profileService.getTech(stat?.id_tech_rep)
             : 'N/A',
+          // Include logs related to this DI
+          logs: logsDi.length > 0 ? logsDi : [],
         };
       }),
     );
@@ -1111,7 +1115,7 @@ export class DiService {
     nameComponent: string,
   ): Promise<any> {
     const di = await this.diModel.findOne({ _id });
-console.log("inside setSelectedComponentAsDone")
+    console.log('inside setSelectedComponentAsDone');
     if (di && di.ignoreCount && di.ignoreCount > 0) {
       return await this.logsDiService.setSelectedComponentAsDoneLogs(
         di._id,

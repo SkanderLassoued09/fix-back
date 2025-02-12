@@ -8,10 +8,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { DiLogsDocument, LogsDi } from './entities/logs-di.entity';
 import { DiagUpdateLogs } from './dto/create-logs-di.input';
-import { getFileExtension } from 'src/di/shared.files';
-import * as randomstring from 'randomstring';
-import { join } from 'path';
-import * as fs from 'fs';
+
 import {
   Composant,
   ComposantDocument,
@@ -235,17 +232,17 @@ export class LogsDiService {
     }
   }
 
-  // NEZIH ya m9a7eb
   async getAllLogsByDi(_idDi: string) {
     try {
       const logs = await this.logsDiModel.find({ _idDi });
+
       if (logs.length === 0) {
-        throw new Error('No logs for this DI');
-      } else {
-        return logs;
+        console.log('No logs for this DI');
+        return [];
       }
+      return logs;
     } catch (error) {
-      throw error;
+      console.log('🍎[error]:', error);
     }
   }
 
