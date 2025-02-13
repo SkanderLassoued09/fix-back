@@ -7,7 +7,7 @@ import { CreateDiCategoryInput } from './dto/create-di_category.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { DiCategory } from './entities/di_category.entity';
 import { Model } from 'mongoose';
-
+import { v4 as uuidv4 } from 'uuid';
 @Injectable()
 export class DiCategoryService {
   constructor(
@@ -36,7 +36,7 @@ export class DiCategoryService {
   async createDiCategory(category: string): Promise<DiCategory> {
     const index = await this.generateDiId();
     let dataCategory = {} as CreateDiCategoryInput;
-    dataCategory._id = `DI_C${index}`;
+    dataCategory._id = uuidv4();
     dataCategory.category = category;
 
     const result = await new this.DiCategoryModel(dataCategory).save();

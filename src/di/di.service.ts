@@ -38,7 +38,7 @@ import { AuditInput } from 'src/audit/dto/create-audit.input';
 import { Stat } from 'src/stat/entities/stat.entity';
 import * as moment from 'moment';
 import { LogsDiService } from 'src/logs-di/logs-di.service';
-
+import { v4 as uuidv4 } from 'uuid';
 @Injectable()
 export class DiService {
   constructor(
@@ -88,7 +88,7 @@ export class DiService {
     // --
     const index = await this.generateDiId();
 
-    createDiInput._id = `DI${index}`;
+    createDiInput._id = uuidv4();
 
     return await new this.diModel(createDiInput)
       .save()
@@ -820,15 +820,28 @@ export class DiService {
   }
   //Tech finsih Reperation
   async tech_finishReperation(_idDI: string, remarque: string) {
-    return await this.diModel.findOneAndUpdate(
-      { _id: _idDI },
-      {
-        $set: {
-          remarque_tech_repair: remarque,
+    let updateReamrqueRep;
+    const di = await this.diModel.findOne({ _id: _idDI });
+
+    if (di && di.ignoreCount && di.ignoreCount > 0) {
+      updateReamrqueRep = this.logsDiService.tech_finishReperationLogs(
+        _idDI,
+        di.ignoreCount,
+        remarque,
+      );
+    } else {
+      updateReamrqueRep = await this.diModel.findOneAndUpdate(
+        { _id: _idDI },
+        {
+          $set: {
+            remarque_tech_repair: remarque,
+          },
         },
-      },
-      { new: true },
-    );
+        { new: true },
+      );
+    }
+
+    return updateReamrqueRep;
   }
 
   async changeStatusTofinsh(_id: string) {
@@ -1040,7 +1053,9 @@ export class DiService {
       .limit(rows)
       .skip(first);
 
-    const coordDiList = di.map((di) => {
+    const coordDiList = di.map(async (di) => {
+      // Fetch logs related to this DI
+      const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
       return {
         _id: di._id,
         title: di.title,
@@ -1056,6 +1071,7 @@ export class DiService {
         location_id: di.location_id?.location_name ?? 'N/A',
         status: di.status,
         image: di.image,
+        logs: logsDi,
         isSentToCoordinator: di.isSentToCoordinator,
         isConfirmedComponentFromCoordinator:
           di.isConfirmedComponentFromCoordinator,

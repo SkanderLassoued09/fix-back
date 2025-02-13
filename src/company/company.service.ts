@@ -7,7 +7,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Company, CompanyTableData } from './entities/company.entity';
-
+import { v4 as uuidv4 } from 'uuid';
 @Injectable()
 export class CompanysService {
   constructor(@InjectModel('Company') private CompanyModel: Model<Company>) {}
@@ -31,7 +31,7 @@ export class CompanysService {
     createCompanyInput: CreateCompanyInput,
   ): Promise<Company> {
     const index = await this.generateCompanyId();
-    createCompanyInput._id = `S${index}`; //Societe
+    createCompanyInput._id = uuidv4(); //Societe
     return await new this.CompanyModel(createCompanyInput)
       .save()
       .then((res) => {

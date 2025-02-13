@@ -13,6 +13,7 @@ import {
   Composant,
   ComposantDocument,
 } from 'src/composant/entities/composant.entity';
+import { v4 as uuidv4 } from 'uuid';
 @Injectable()
 export class LogsDiService {
   constructor(
@@ -39,7 +40,7 @@ export class LogsDiService {
 
   async create(_idDi: string, idIgnore: number) {
     const index = await this.generateDiId();
-    let _id = `DIL${index}`;
+    let _id = uuidv4();
     return await new this.logsDiModel({ _id, _idDi, idIgnore }).save();
   }
 
@@ -193,14 +194,30 @@ export class LogsDiService {
       { new: true },
     );
   }
-  async componentConfirmedFromCoordinator(_id: string, idIgnore: number) {
+  async componentConfirmedFromCoordinator(_idDi: string, idIgnore: number) {
     return await this.logsDiModel.findOneAndUpdate(
-      { _id, idIgnore },
+      { _idDi, idIgnore },
       {
         $set: {
           isConfirmedComponentFromCoordinator: true,
         },
       },
+    );
+  }
+
+  async tech_finishReperationLogs(
+    _idDI: string,
+    idIgnore: number,
+    remarque: string,
+  ) {
+    return await this.logsDiModel.findOneAndUpdate(
+      { _idDI, idIgnore },
+      {
+        $set: {
+          remarque_tech_repair: remarque,
+        },
+      },
+      { new: true },
     );
   }
 
