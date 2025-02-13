@@ -219,6 +219,7 @@ export class DiResolver {
 
   @Mutation(() => Di)
   changestatusToFinishReparation(@Args('_id') _id: string) {
+    console.log('🥪[_id]:', _id);
     return this.diService.changeStatusTofinsh(_id);
   }
 

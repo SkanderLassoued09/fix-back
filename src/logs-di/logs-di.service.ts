@@ -206,12 +206,12 @@ export class LogsDiService {
   }
 
   async tech_finishReperationLogs(
-    _idDI: string,
+    _idDi: string,
     idIgnore: number,
     remarque: string,
   ) {
     return await this.logsDiModel.findOneAndUpdate(
-      { _idDI, idIgnore },
+      { _idDi, idIgnore },
       {
         $set: {
           remarque_tech_repair: remarque,

@@ -820,15 +820,18 @@ export class DiService {
   }
   //Tech finsih Reperation
   async tech_finishReperation(_idDI: string, remarque: string) {
+    console.log('🌰[remarque]:', remarque);
+    console.log('🍨[_idDI]:', _idDI);
     let updateReamrqueRep;
     const di = await this.diModel.findOne({ _id: _idDI });
 
     if (di && di.ignoreCount && di.ignoreCount > 0) {
-      updateReamrqueRep = this.logsDiService.tech_finishReperationLogs(
+      updateReamrqueRep = await this.logsDiService.tech_finishReperationLogs(
         _idDI,
         di.ignoreCount,
         remarque,
       );
+      console.log('🥚[updateReamrqueRep]:', updateReamrqueRep);
     } else {
       updateReamrqueRep = await this.diModel.findOneAndUpdate(
         { _id: _idDI },
@@ -841,6 +844,7 @@ export class DiService {
       );
     }
 
+    console.log('🍊[updateReamrqueRep]:', updateReamrqueRep);
     return updateReamrqueRep;
   }
 
