@@ -377,6 +377,8 @@ export class DiService {
           di_category_id: di.di_category_id?.category,
           location_id: di.location_id?.location_name ?? 'N/A',
           status: di.status,
+          price:di.price?? "N/A",
+          final_price:di.final_price?? "N/A",
           createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
           image: di?.image?.length > 0 ? di.image : '-',
           client_id: di.client_id?.first_name ?? '-',

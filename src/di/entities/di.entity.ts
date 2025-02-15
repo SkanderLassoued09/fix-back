@@ -372,7 +372,11 @@ export class DiTable {
   isErrorFromFixtronix: boolean;
   @Field(() => [LogsDi], { nullable: true })
   logs: LogsDi[];
-} //
+  @Field({ nullable: true })
+  price: number;
+  @Field({ nullable: true })
+  final_price: number;
+} 
 @ObjectType()
 export class DiTableData {
   @Field(() => [DiTable])
