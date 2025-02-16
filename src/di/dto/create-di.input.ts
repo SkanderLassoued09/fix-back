@@ -95,6 +95,14 @@ export class PaginationConfigDi {
   first: number;
 }
 @InputType()
+export class FilterConfigDi {
+  @Field({ nullable: true })
+  startDate?: string;
+
+  @Field({ nullable: true })
+  endDate?: string;
+}
+@InputType()
 export class ComposantStructureInput {
   @Field()
   nameComposant: string;
@@ -118,7 +126,6 @@ export class DiagUpdate {
   can_be_repaired: boolean;
   @Field(() => [ComposantStructureInput], { nullable: true })
   array_composants: ComposantStructureInput[];
- 
 }
 
 @InputType()

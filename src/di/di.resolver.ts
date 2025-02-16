@@ -10,6 +10,7 @@ import {
 import {
   CreateDiInput,
   DiagUpdate,
+  FilterConfigDi,
   PaginationConfigDi,
   UpdateDi,
 } from './dto/create-di.input';
@@ -80,8 +81,9 @@ export class DiResolver {
   @Query(() => DiTableData)
   async getAllDi(
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
+    @Args('filterConfig', { nullable: true }) filterConfig?: FilterConfigDi,
   ) {
-    return await this.diService.getAllDi(paginationConfig);
+    return await this.diService.getAllDi(paginationConfig, filterConfig);
   }
 
   @Query(() => LogsDiData)

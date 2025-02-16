@@ -1,6 +1,7 @@
 import { ObjectType, Field, Int } from '@nestjs/graphql';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
+import { DiCategory } from 'src/di_category/entities/di_category.entity';
 @Schema({ timestamps: true })
 export class DiLogsDocument extends Document {
   @Prop()
@@ -69,7 +70,8 @@ export class DiLogsDocument extends Document {
   isConfirmedComponentFromCoordinator: boolean;
   @Prop({ default: false })
   isSentToCoordinator: boolean;
-
+  @Prop({ type: String, ref: 'DiCategory' })
+  di_category_id: DiCategory;
   @Prop()
   comment: string;
   /** remarque section  */
@@ -147,6 +149,8 @@ export class LogsDi {
   @Field(() => String, { nullable: true })
   service_quality?: string;
 
+  @Field(() => String, { nullable: true })
+  di_category_id: string;
   @Field(() => String, { nullable: true })
   status?: string;
 

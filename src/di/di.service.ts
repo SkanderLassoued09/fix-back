@@ -8,6 +8,7 @@ import {
 import {
   CreateDiInput,
   DiagUpdate,
+  FilterConfigDi,
   PaginationConfigDi,
   UpdateDi,
 } from './dto/create-di.input';
@@ -193,7 +194,6 @@ export class DiService {
   }
 
   async addBlPDF(_id: string, pdf: string) {
-    console.log('🥠');
     const extension = getFileExtension(pdf);
     const buffer = Buffer.from(pdf.split(',')[1], 'base64');
 
@@ -207,14 +207,12 @@ export class DiService {
     );
     const di = await this.diModel.findOne({ _id });
     if (di && di.ignoreCount && di.ignoreCount > 0) {
-      console.log('logs');
       return await this.logsDiService.addBLPDFLogs(
         di._id,
         di.ignoreCount,
         `${randompdfFile}.${extension}`,
       );
     } else {
-      console.log('🍢original');
       return await this.diModel.updateOne(
         { _id },
         { $set: { bon_de_livraison: `${randompdfFile}.${extension}` } },
@@ -330,14 +328,30 @@ export class DiService {
     );
   }
   // workage
-  async getAllDi(paginationConfig: PaginationConfigDi) {
+  async getAllDi(
+    paginationConfig: PaginationConfigDi,
+    filterConfig?: FilterConfigDi,
+  ) {
     const { first, rows } = paginationConfig;
-    const totalDiCount = await this.diModel
-      .countDocuments({ isDeleted: false })
-      .exec();
+    const { startDate, endDate } = filterConfig || {};
+
+    const filter: any = { isDeleted: false };
+
+    if (startDate && startDate !== 'null') {
+      filter.createdAt = { $gte: new Date(startDate) };
+    }
+
+    if (endDate && endDate !== 'null') {
+      filter.createdAt = {
+        ...filter.createdAt,
+        $lte: new Date(endDate),
+      };
+    }
+
+    const totalDiCount = await this.diModel.countDocuments(filter).exec();
 
     const diRecords = await this.diModel
-      .find({ isDeleted: false })
+      .find(filter)
       .populate('client_id', 'first_name last_name')
       .populate('company_id', 'name')
       .populate('createdBy', 'firstName lastName')
@@ -348,58 +362,7 @@ export class DiService {
       .skip(first)
       .exec();
 
-    // Fetch linked stats & logs for each DI
-    const di = await Promise.all(
-      diRecords.map(async (di) => {
-        // Fetch the stat document based on the DI's _id
-        const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
-
-        // Fetch logs related to this DI
-        const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
-
-        return {
-          _id: di._id,
-          remarque_tech_diagnostic: di.remarque_tech_diagnostic,
-          remarque_manager: di.remarque_manager,
-          remarque_tech_repair: di.remarque_tech_repair,
-          title: di.title,
-          description: di.description,
-          ignoreCount: di.ignoreCount,
-          can_be_repaired: di.can_be_repaired,
-          bon_de_commande: di.bon_de_commande,
-          bon_de_livraison: di.bon_de_livraison,
-          facture: di.facture,
-          devis: di.devis,
-          contain_pdr: di.contain_pdr,
-          current_roles: di.current_roles,
-          array_composants: di.array_composants,
-          isErrorFromFixtronix: di.isErrorFromFixtronix,
-          di_category_id: di.di_category_id?.category,
-          location_id: di.location_id?.location_name ?? 'N/A',
-          status: di.status,
-          price:di.price?? "N/A",
-          final_price:di.final_price?? "N/A",
-          createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
-          image: di?.image?.length > 0 ? di.image : '-',
-          client_id: di.client_id?.first_name ?? '-',
-          company_id: di.company_id?.name ?? '-',
-          createdBy: `${di.createdBy?.firstName ?? '-'} ${
-            di.createdBy?.lastName ?? ''
-          }`,
-          // Include some fields from the linked stat if available
-          techDiag: stat?.id_tech_diag
-            ? await this.profileService.getTech(stat?.id_tech_diag)
-            : 'N/A',
-          techRep: stat?.id_tech_rep
-            ? await this.profileService.getTech(stat?.id_tech_rep)
-            : 'N/A',
-          // Include logs related to this DI
-          logs: logsDi.length > 0 ? logsDi : [],
-        };
-      }),
-    );
-
-    return { di, totalDiCount };
+    return { di: diRecords, totalDiCount };
   }
 
   async confirmationBetweenMagasinAndCoordinator(
@@ -541,7 +504,7 @@ export class DiService {
     final_price: number,
   ): Promise<UpdateNego> {
     const pricingNeg = await this.diModel.findOne({ _id: _idDi });
-    console.log('🍤[pricingNeg]:', pricingNeg);
+
     if (pricingNeg && pricingNeg.ignoreCount && pricingNeg.ignoreCount > 0) {
       console.log('log');
       return this.logsDiService.savePricing(
@@ -822,8 +785,6 @@ export class DiService {
   }
   //Tech finsih Reperation
   async tech_finishReperation(_idDI: string, remarque: string) {
-    console.log('🌰[remarque]:', remarque);
-    console.log('🍨[_idDI]:', _idDI);
     let updateReamrqueRep;
     const di = await this.diModel.findOne({ _id: _idDI });
 
@@ -833,7 +794,6 @@ export class DiService {
         di.ignoreCount,
         remarque,
       );
-      console.log('🥚[updateReamrqueRep]:', updateReamrqueRep);
     } else {
       updateReamrqueRep = await this.diModel.findOneAndUpdate(
         { _id: _idDI },
@@ -846,7 +806,6 @@ export class DiService {
       );
     }
 
-    console.log('🍊[updateReamrqueRep]:', updateReamrqueRep);
     return updateReamrqueRep;
   }
 
@@ -1137,7 +1096,7 @@ export class DiService {
     nameComponent: string,
   ): Promise<any> {
     const di = await this.diModel.findOne({ _id });
-    console.log('inside setSelectedComponentAsDone');
+
     if (di && di.ignoreCount && di.ignoreCount > 0) {
       return await this.logsDiService.setSelectedComponentAsDoneLogs(
         di._id,
@@ -1161,10 +1120,8 @@ export class DiService {
   }
 
   async affectinitialPrice(_id: string, price: number) {
-    console.log('🍆[_id]:', _id);
-    console.log('🍜[price]:', price);
     const pricing = await this.diModel.findOne({ _id });
-    console.log('🍠[pricing.ignoreCount]:', pricing.ignoreCount);
+
     if (pricing && pricing.ignoreCount && pricing.ignoreCount > 0) {
       return await this.logsDiService.savePricing(
         pricing._id,
