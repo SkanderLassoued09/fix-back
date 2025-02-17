@@ -15,8 +15,8 @@ export class DiCategoryResolver {
     return this.diCategoryService.createDiCategory(category);
   }
 
-  @Mutation(() => Boolean)
-  removeDiCategory(@Args('_id') _id: string): Promise<Boolean> {
+  @Mutation(() => DiCategory)
+  removeDiCategory(@Args('_id') _id: string): Promise<DiCategory> {
     try {
       return this.diCategoryService.removeDiCategory(_id);
     } catch (error) {

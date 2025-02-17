@@ -44,19 +44,17 @@ export class DiCategoryService {
   }
 
   // remove
-  async removeDiCategory(_id: string): Promise<Boolean> {
-    return this.DiCategoryModel.deleteOne({ _id })
-      .then(() => {
-        return true;
-      })
-      .catch(() => {
-        return false;
-      });
+  async removeDiCategory(_id: string): Promise<DiCategory> {
+    return await this.DiCategoryModel.findOneAndUpdate(
+      { _id },
+      { $set: { isDeleted: true } },
+      { new: true },
+    );
   }
 
   async findAllDiCategorys(): Promise<DiCategory[]> {
     try {
-      const categories = await this.DiCategoryModel.find({});
+      const categories = await this.DiCategoryModel.find({ isDeleted: false });
       if (categories.length === 0) {
         throw new NotFoundException('Unable to find catorgories');
       }
@@ -71,7 +69,10 @@ export class DiCategoryService {
 
   async findOneDiCategory(_id: string): Promise<DiCategory> {
     try {
-      const DiCategory = await this.DiCategoryModel.findById(_id).lean();
+      const DiCategory = await this.DiCategoryModel.findOne({
+        _id,
+        isDeleted: false,
+      });
 
       if (!DiCategory) {
         throw new Error(`DiCategory with ID '${_id}' not found.`);

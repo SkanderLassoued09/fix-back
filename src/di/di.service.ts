@@ -39,7 +39,7 @@ import { AuditInput } from 'src/audit/dto/create-audit.input';
 import { Stat } from 'src/stat/entities/stat.entity';
 import * as moment from 'moment';
 import { LogsDiService } from 'src/logs-di/logs-di.service';
-import { v4 as uuidv4 } from 'uuid';
+import { nanoid } from 'nanoid';
 @Injectable()
 export class DiService {
   constructor(
@@ -48,30 +48,15 @@ export class DiService {
     private composantModel: Model<ComposantDocument>,
     @InjectModel(Remarque.name)
     private readonly remarqueModel: Model<RemarqueDocument>,
-
+    private readonly profileService: ProfileService,
     @InjectModel(Stat.name)
     private readonly statModel: Model<Stat>,
     private readonly statsService: StatService,
-    private readonly profileService: ProfileService,
     private readonly notificationGateway: NotificationsGateway,
     private readonly auditService: AuditService,
     private readonly logsDiService: LogsDiService,
   ) {}
 
-  async generateDiId(): Promise<number> {
-    let indexDi = 0;
-    const lastDi = await this.diModel.findOne(
-      {},
-      {},
-      { sort: { createdAt: -1 } },
-    );
-
-    if (lastDi) {
-      indexDi = +lastDi._id.substring(2);
-      return indexDi + 1;
-    }
-    return indexDi;
-  }
   async createDi(createDiInput: CreateDiInput): Promise<Di> {
     if (createDiInput.image.length !== 0) {
       const extension = getFileExtension(createDiInput.image);
@@ -87,9 +72,8 @@ export class DiService {
       createDiInput.image = `${randompdfFile}.${extension}`;
     }
     // --
-    const index = await this.generateDiId();
 
-    createDiInput._id = uuidv4();
+    createDiInput._id = `DI_${nanoid(4)}`;
 
     return await new this.diModel(createDiInput)
       .save()
@@ -362,7 +346,61 @@ export class DiService {
       .skip(first)
       .exec();
 
-    return { di: diRecords, totalDiCount };
+    console.log('🥒[{ di: diRecords, totalDiCount }]:', {
+      di: diRecords,
+      totalDiCount,
+    });
+    // Fetch linked stats & logs for each DI
+    const di = await Promise.all(
+      diRecords.map(async (di) => {
+        // Fetch the stat document based on the DI's _id
+        const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
+
+        // Fetch logs related to this DI
+        const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
+
+        return {
+          _id: di._id,
+          remarque_tech_diagnostic: di.remarque_tech_diagnostic,
+          remarque_manager: di.remarque_manager,
+          remarque_tech_repair: di.remarque_tech_repair,
+          title: di.title,
+          description: di.description,
+          ignoreCount: di.ignoreCount,
+          can_be_repaired: di.can_be_repaired,
+          bon_de_commande: di.bon_de_commande,
+          bon_de_livraison: di.bon_de_livraison,
+          facture: di.facture,
+          devis: di.devis,
+          contain_pdr: di.contain_pdr,
+          current_roles: di.current_roles,
+          array_composants: di.array_composants,
+          isErrorFromFixtronix: di.isErrorFromFixtronix,
+          di_category_id: di.di_category_id?.category,
+          location_id: di.location_id?.location_name ?? 'N/A',
+          status: di.status,
+          price: di.price ?? 'N/A',
+          final_price: di.final_price ?? 'N/A',
+          createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
+          image: di?.image?.length > 0 ? di.image : '-',
+          client_id: di.client_id?.first_name ?? '-',
+          company_id: di.company_id?.name ?? '-',
+          createdBy: `${di.createdBy?.firstName ?? '-'} ${
+            di.createdBy?.lastName ?? ''
+          }`,
+          // Include some fields from the linked stat if available
+          techDiag: stat?.id_tech_diag
+            ? await this.profileService.getTech(stat?.id_tech_diag)
+            : 'N/A',
+          techRep: stat?.id_tech_rep
+            ? await this.profileService.getTech(stat?.id_tech_rep)
+            : 'N/A',
+          // Include logs related to this DI
+          logs: logsDi.length > 0 ? logsDi : [],
+        };
+      }),
+    );
+    return { di, totalDiCount };
   }
 
   async confirmationBetweenMagasinAndCoordinator(

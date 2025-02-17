@@ -19,7 +19,7 @@ export class ClientDocument extends Document {
   email: string;
   @Prop()
   phone: string;
-  @Prop()
+  @Prop({ default: false })
   isDeleted: boolean;
 }
 export const ClientSchema = SchemaFactory.createForClass(ClientDocument);

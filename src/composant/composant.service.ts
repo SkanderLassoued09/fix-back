@@ -77,18 +77,16 @@ export class ComposantService {
       });
   }
 
-  async removeComposant(_id: string): Promise<Boolean> {
-    return this.ComposantModel.deleteOne({ _id })
-      .then(() => {
-        return true;
-      })
-      .catch(() => {
-        return false;
-      });
+  async removeComposant(_id: string): Promise<Composant> {
+    return this.ComposantModel.findOneAndUpdate(
+      { _id },
+      { $set: { isDeleted: true } },
+      { new: true },
+    );
   }
 
   async findAllComposants(): Promise<[Composant]> {
-    return await this.ComposantModel.find({})
+    return await this.ComposantModel.find({ isDeleted: false })
       .then((res) => {
         return res;
       })

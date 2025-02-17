@@ -18,8 +18,8 @@ export class ComposantResolver {
     return this.composantService.createComposant(createComposantInput);
   }
 
-  @Mutation(() => Boolean)
-  removeComposant(@Args('_id') _id: string): Promise<Boolean> {
+  @Mutation(() => Composant)
+  removeComposant(@Args('_id') _id: string): Promise<Composant> {
     try {
       return this.composantService.removeComposant(_id);
     } catch (error) {

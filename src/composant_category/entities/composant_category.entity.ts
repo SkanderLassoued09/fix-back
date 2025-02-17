@@ -9,6 +9,8 @@ export class ComposantCategoryDocumet extends Document {
   _id: string;
   @Prop()
   category_composant: string;
+  @Prop({ default: false })
+  isDeleted: boolean;
 }
 export const Composant_CategorySchema = SchemaFactory.createForClass(
   ComposantCategoryDocumet,
@@ -20,4 +22,6 @@ export class Composant_Category {
   _id: string;
   @Field()
   category_composant: string;
+  @Field()
+  isDeleted: boolean;
 }

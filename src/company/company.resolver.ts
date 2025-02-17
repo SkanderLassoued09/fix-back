@@ -18,8 +18,8 @@ export class CompanysResolver {
     return await this.companysService.createcompany(createCompanyInput);
   }
 
-  @Mutation(() => Boolean)
-  removeCompany(@Args('_id') _id: string): Promise<Boolean> {
+  @Mutation(() => Company)
+  removeCompany(@Args('_id') _id: string): Promise<Company> {
     try {
       return this.companysService.removeCompany(_id);
     } catch (error) {

@@ -27,6 +27,8 @@ export class ComposantDocument extends Document {
   pdf: string;
   @Prop()
   status_composant: string;
+  @Prop({ default: false })
+  isDeleted: boolean;
 }
 export const ComposantSchema = SchemaFactory.createForClass(ComposantDocument);
 @ObjectType()
@@ -54,4 +56,6 @@ export class Composant {
   pdf: string;
   @Field({ nullable: true })
   status_composant: string;
+  @Field({ nullable: true })
+  isDeleted: boolean;
 }

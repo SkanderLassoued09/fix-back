@@ -1,6 +1,6 @@
 import { ObjectType, Field } from '@nestjs/graphql';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { IsString } from 'class-validator';
+
 import { Document } from 'mongoose';
 
 @Schema({ timestamps: true })
@@ -9,6 +9,8 @@ export class DiCategoryDocument extends Document {
   _id: string;
   @Prop()
   category: string;
+  @Prop({ default: false })
+  isDeleted: boolean;
 }
 export const DiCategorySchema =
   SchemaFactory.createForClass(DiCategoryDocument);
@@ -19,4 +21,6 @@ export class DiCategory {
   _id: string;
   @Field({ nullable: true })
   category: string;
+  @Field({ nullable: true })
+  isDeleted: boolean;
 }

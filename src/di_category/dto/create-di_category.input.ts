@@ -6,4 +6,6 @@ export class CreateDiCategoryInput {
   _id: string;
   @Field({ nullable: true })
   category: string;
+  @Field({ nullable: true })
+  isDeleted: boolean;
 }

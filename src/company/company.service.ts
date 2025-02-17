@@ -45,14 +45,11 @@ export class CompanysService {
  * 
 it should be soft delete ya nezih change it 
  */
-  async removeCompany(_id: string): Promise<Boolean> {
-    return this.CompanyModel.deleteOne({ _id })
-      .then(() => {
-        return true;
-      })
-      .catch(() => {
-        return false;
-      });
+  async removeCompany(_id: string): Promise<Company> {
+    return this.CompanyModel.findOneAndUpdate(
+      { _id },
+      { $set: { isDeleted: true } },
+    );
   }
 
   async findAllCompanys(

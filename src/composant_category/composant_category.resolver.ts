@@ -21,8 +21,10 @@ export class Composant_CategoryResolver {
     return data;
   }
 
-  @Mutation(() => Boolean)
-  removeComposant_Category(@Args('_id') _id: string): Promise<Boolean> {
+  @Mutation(() => Composant_Category)
+  removeComposant_Category(
+    @Args('_id') _id: string,
+  ): Promise<Composant_Category> {
     try {
       return this.composant_CategoryService.removeComposant_Category(_id);
     } catch (error) {

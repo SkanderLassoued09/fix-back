@@ -40,21 +40,19 @@ export class ClientsService {
       });
   }
 
-  async removeClient(_id: string): Promise<Boolean> {
-    return await this.ClientModel.deleteOne({ _id })
-      .then(() => {
-        return true;
-      })
-      .catch(() => {
-        return false;
-      });
+  async removeClient(_id: string): Promise<Client> {
+    return await this.ClientModel.findOneAndUpdate(
+      { _id },
+      { $set: { isDeleted: true } },
+      { new: true },
+    );
   }
 
   async findAllClients(
     paginationConfig: PaginationConfig,
   ): Promise<ClientTableData> {
     const { first, rows } = paginationConfig;
-    const clientRecords = await this.ClientModel.find({})
+    const clientRecords = await this.ClientModel.find({ isDeleted: false })
       .limit(rows)
       .skip(first)
       .exec();

@@ -41,14 +41,15 @@ export class Composant_CategoryService {
       });
   }
 
-  async removeComposant_Category(_id: string): Promise<Boolean> {
-    return this.Composant_CategoryModel.deleteOne({ _id })
-      .then(() => {
-        return true;
-      })
-      .catch(() => {
-        return false;
-      });
+  async removeComposant_Category(_id: string): Promise<Composant_Category> {
+    return this.Composant_CategoryModel.findOneAndUpdate(
+      { _id },
+      {
+        $set: {
+          isDeleted: true,
+        },
+      },
+    );
   }
 
   async findAllComposant_Categorys(): Promise<[Composant_Category]> {

@@ -29,22 +29,15 @@ export class ProfileService {
   }
 
   deleteUser(_id: string) {
-    return this.profileModel
-      .findOneAndUpdate(
-        { _id },
-        {
-          $set: {
-            isDeleted: true,
-          },
+    return this.profileModel.findOneAndUpdate(
+      { _id },
+      {
+        $set: {
+          isDeleted: true,
         },
-        { new: true },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        //
-      });
+      },
+      { new: true },
+    );
   }
   // for listing profiles pagination
   async getAllProfile(paginationConfig: PaginationConfigProfile) {

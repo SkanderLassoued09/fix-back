@@ -19,8 +19,8 @@ export class ClientsResolver {
     return this.clientsService.createClient(createClientInput);
   }
 
-  @Mutation(() => Boolean)
-  removeClient(@Args('_id') _id: string): Promise<Boolean> {
+  @Mutation(() => Client)
+  removeClient(@Args('_id') _id: string): Promise<Client> {
     try {
       return this.clientsService.removeClient(_id);
     } catch (error) {
