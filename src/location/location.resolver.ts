@@ -31,7 +31,7 @@ export class LocationResolver {
   }
 
   @Query(() => [Location])
-  async findAllLocation(): Promise<[Location]> {
+  async findAllLocation(): Promise<Location[]> {
     return await this.locationService.findAllLocations();
   }
 }

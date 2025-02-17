@@ -47,7 +47,7 @@ export class LocationService {
     );
   }
 
-  async findAllLocations(): Promise<[Location]> {
+  async findAllLocations(): Promise<Location[]> {
     return await this.LocationModel.find({ isDeleted: false })
       .then((res) => {
         return res;
