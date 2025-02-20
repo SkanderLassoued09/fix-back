@@ -52,8 +52,8 @@ export class Composant_CategoryService {
     );
   }
 
-  async findAllComposant_Categorys(): Promise<[Composant_Category]> {
-    return await this.Composant_CategoryModel.find({})
+  async findAllComposant_Categorys(): Promise<Composant_Category[]> {
+    return await this.Composant_CategoryModel.find({ isDeleted: false})
       .then((res) => {
         return res;
       })

@@ -40,7 +40,7 @@ export class LocationService {
       });
   }
 
-  async removeLocation(_id: string): Promise<Boolean> {
+  async removeLocation(_id: string): Promise<Location> {
     return this.LocationModel.findOneAndUpdate(
       { _id },
       { $set: { isDeleted: true } },

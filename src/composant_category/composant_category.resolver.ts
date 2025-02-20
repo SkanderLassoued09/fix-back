@@ -41,7 +41,7 @@ export class Composant_CategoryResolver {
   }
 
   @Query(() => [Composant_Category])
-  async findAllComposant_Category(): Promise<[Composant_Category]> {
+  async findAllComposant_Category(): Promise<Composant_Category[]> {
     return await this.composant_CategoryService.findAllComposant_Categorys();
   }
 }

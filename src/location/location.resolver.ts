@@ -15,8 +15,9 @@ export class LocationResolver {
     return this.locationService.createlocation(createLocationInput);
   }
 
-  @Mutation(() => Boolean)
-  removeLocation(@Args('_id') _id: string): Promise<Boolean> {
+  @Mutation(() => Location)
+  removeLocation(@Args('_id') _id: string): Promise<Location> {
+    console.log(_id,'_id');
     try {
       return this.locationService.removeLocation(_id);
     } catch (error) {
