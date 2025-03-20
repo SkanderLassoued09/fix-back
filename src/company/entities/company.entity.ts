@@ -50,6 +50,12 @@ export class CompanyDocument extends Document {
   @Prop()
   @IsString()
   webSiteLink: string;
+  @Prop()
+  @IsString()
+  mf:string;
+  @Prop()
+  @IsString()
+  rne:string;
   @Prop({ type: ServiceContactSchema })
   serviceFinancier: ServiceContactSchema;
   @Prop({ type: ServiceContactSchema })
@@ -109,6 +115,10 @@ export class Company extends Document {
   serviceFinancier: ServiceContact;
   @Field(() => ServiceContact, { nullable: true })
   serviceTechnique: ServiceContact;
+  @Field()
+  mf:string;
+  @Field()
+  rne:string;
   @Field({ defaultValue: false })
   @IsBoolean()
   isDeleted: boolean;

@@ -95,6 +95,8 @@ it should be soft delete ya nezih change it
           fax: payload.fax,
           raisonSociale: payload.raisonSociale,
           webSiteLink: payload.webSiteLink,
+          rne:payload.rne,
+          mf:payload.mf        
         },
       },
       { new: true },

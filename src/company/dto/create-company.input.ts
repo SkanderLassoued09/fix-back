@@ -48,6 +48,10 @@ export class CreateCompanyInput {
   serviceFinancier: ServiceContactInput;
   @Field(() => ServiceContactInput, { nullable: true })
   serviceTechnique: ServiceContactInput;
+  @Field()
+  mf:string;
+  @Field()
+  rne:string;
   @Field({ nullable: true })
   @IsBoolean()
   isDeleted: boolean;
@@ -79,4 +83,8 @@ export class UpdateCompanyInput {
   fax: string;
   @Field({ nullable: true })
   webSiteLink: string;
+  @Field()
+  mf:string;
+  @Field()
+  rne:string;
 }
