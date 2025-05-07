@@ -13,6 +13,8 @@ export class DiDocument extends Document {
   @Prop()
   _id: string;
   @Prop()
+  _idnum: string;
+  @Prop()
   // title of DI
   title: string;
   @Prop()
@@ -127,6 +129,8 @@ export const DiSchema = SchemaFactory.createForClass(DiDocument);
 export class Di {
   @Field({ nullable: true })
   _id: string;
+  @Field({ nullable: true })
+  _idnum: string;
   @Field({ nullable: true })
   comment: string;
   @Field({ nullable: true })
@@ -304,6 +308,8 @@ export class DiTable {
   @Field({ nullable: true })
   _id: string;
   @Field({ nullable: true })
+  _idnum: string;
+  @Field({ nullable: true })
   comment: string;
   @Field()
   title: string;
@@ -376,7 +382,7 @@ export class DiTable {
   price: number;
   @Field({ nullable: true })
   final_price: number;
-} 
+}
 @ObjectType()
 export class DiTableData {
   @Field(() => [DiTable])

@@ -57,10 +57,29 @@ export class DiService {
     private readonly logsDiService: LogsDiService,
   ) {}
 
+  async generateClientId(): Promise<number> {
+    let indexClient = 0;
+    const lastClient = await this.diModel.findOne(
+      {},
+      {},
+      { sort: { createdAt: -1 } },
+    );
+
+    if (lastClient) {
+      indexClient = +lastClient._idnum.substring(2);
+      return indexClient + 1;
+    }
+    console.log('🥤[indexClient]:', indexClient);
+    return indexClient;
+  }
+
   async createDi(createDiInput: CreateDiInput): Promise<Di> {
     if (createDiInput.image.length !== 0) {
       const extension = getFileExtension(createDiInput.image);
-      const buffer = Buffer.from(createDiInput.image.split(',')[1], 'base64');
+      const buffer = Buffer.from(
+        createDiInput.image.split(',')[1],
+        'base64',
+      ) as any;
       const randompdfFile = randomstring.generate({
         length: 12,
         charset: 'alphabetic',
@@ -72,8 +91,10 @@ export class DiService {
       createDiInput.image = `${randompdfFile}.${extension}`;
     }
     // --
-
+    const index = await this.generateClientId();
+    console.log('🍺[index]:', index);
     createDiInput._id = `DI_${nanoid(4)}`;
+    createDiInput._idnum = `DI${index}`;
 
     return await new this.diModel(createDiInput)
       .save()
@@ -152,7 +173,7 @@ export class DiService {
 
   async addDevisPDF(_id: string, pdf: string) {
     const extension = getFileExtension(pdf);
-    const buffer = Buffer.from(pdf.split(',')[1], 'base64');
+    const buffer = Buffer.from(pdf.split(',')[1], 'base64') as any;
 
     const randompdfFile = randomstring.generate({
       length: 12,
@@ -179,7 +200,7 @@ export class DiService {
 
   async addBlPDF(_id: string, pdf: string) {
     const extension = getFileExtension(pdf);
-    const buffer = Buffer.from(pdf.split(',')[1], 'base64');
+    const buffer = Buffer.from(pdf.split(',')[1], 'base64') as any;
 
     const randompdfFile = randomstring.generate({
       length: 12,
@@ -206,7 +227,7 @@ export class DiService {
 
   async addFacturePDF(_id: string, pdf: string) {
     const extension = getFileExtension(pdf);
-    const buffer = Buffer.from(pdf.split(',')[1], 'base64');
+    const buffer = Buffer.from(pdf.split(',')[1], 'base64') as any;
 
     const randompdfFile = randomstring.generate({
       length: 12,
@@ -233,7 +254,7 @@ export class DiService {
 
   async addBCPDF(_id: string, pdf: string) {
     const extension = getFileExtension(pdf);
-    const buffer = Buffer.from(pdf.split(',')[1], 'base64');
+    const buffer = Buffer.from(pdf.split(',')[1], 'base64') as any;
 
     const randompdfFile = randomstring.generate({
       length: 12,
@@ -277,7 +298,7 @@ export class DiService {
   async addPDFFile(_id: string, facture: string, bl: string) {
     // facture
     const extension = getFileExtension(facture);
-    const buffer = Buffer.from(facture.split(',')[1], 'base64');
+    const buffer = Buffer.from(facture.split(',')[1], 'base64') as any;
 
     const randompdfFile = randomstring.generate({
       length: 12,
@@ -289,7 +310,7 @@ export class DiService {
     );
     //  bl
     const extensionbl = getFileExtension(bl);
-    const bufferbl = Buffer.from(facture.split(',')[1], 'base64');
+    const bufferbl = Buffer.from(facture.split(',')[1], 'base64') as any;
 
     const randompdfFilebl = randomstring.generate({
       length: 12,
@@ -346,10 +367,6 @@ export class DiService {
       .skip(first)
       .exec();
 
-    console.log('🥒[{ di: diRecords, totalDiCount }]:', {
-      di: diRecords,
-      totalDiCount,
-    });
     // Fetch linked stats & logs for each DI
     const di = await Promise.all(
       diRecords.map(async (di) => {
@@ -361,6 +378,7 @@ export class DiService {
 
         return {
           _id: di._id,
+          _idnum: di._idnum,
           remarque_tech_diagnostic: di.remarque_tech_diagnostic,
           remarque_manager: di.remarque_manager,
           remarque_tech_repair: di.remarque_tech_repair,
