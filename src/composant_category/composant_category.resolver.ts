@@ -22,11 +22,11 @@ export class Composant_CategoryResolver {
   }
 
   @Mutation(() => Composant_Category)
-  removeComposant_Category(
+  async removeComposant_Category(
     @Args('_id') _id: string,
   ): Promise<Composant_Category> {
     try {
-      return this.composant_CategoryService.removeComposant_Category(_id);
+      return await this.composant_CategoryService.removeComposant_Category(_id);
     } catch (error) {
       console.error(error);
       throw new Error('Failed to delete Composant_Category');

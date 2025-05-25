@@ -19,9 +19,9 @@ export class ComposantResolver {
   }
 
   @Mutation(() => Composant)
-  removeComposant(@Args('_id') _id: string): Promise<Composant> {
+  async removeComposant(@Args('_id') _id: string): Promise<Composant> {
     try {
-      return this.composantService.removeComposant(_id);
+      return await this.composantService.removeComposant(_id);
     } catch (error) {
       console.error(error);
       throw new Error('Failed to delete Composant');

@@ -20,8 +20,8 @@ export const Composant_CategorySchema = SchemaFactory.createForClass(
 export class Composant_Category {
   @Field({ nullable: true })
   _id: string;
-  @Field()
+  @Field({ nullable: true })
   category_composant: string;
-  @Field()
+  @Field({ nullable: true })
   isDeleted: boolean;
 }

@@ -42,18 +42,22 @@ export class Composant_CategoryService {
   }
 
   async removeComposant_Category(_id: string): Promise<Composant_Category> {
-    return this.Composant_CategoryModel.findOneAndUpdate(
+    console.log('🍗[_id]:', _id);
+    const data = await this.Composant_CategoryModel.findOneAndUpdate(
       { _id },
       {
         $set: {
           isDeleted: true,
         },
       },
+      { new: true },
     );
+    console.log('🥚[data]:', data);
+    return data;
   }
 
   async findAllComposant_Categorys(): Promise<Composant_Category[]> {
-    return await this.Composant_CategoryModel.find({ isDeleted: false})
+    return await this.Composant_CategoryModel.find({ isDeleted: false })
       .then((res) => {
         return res;
       })

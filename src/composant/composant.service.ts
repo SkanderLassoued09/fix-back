@@ -78,7 +78,7 @@ export class ComposantService {
   }
 
   async removeComposant(_id: string): Promise<Composant> {
-    return this.ComposantModel.findOneAndUpdate(
+    return await this.ComposantModel.findOneAndUpdate(
       { _id },
       { $set: { isDeleted: true } },
       { new: true },
