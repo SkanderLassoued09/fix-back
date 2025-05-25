@@ -116,6 +116,12 @@ export class DiDocument extends Document {
   remarque_magasin: string;
   @Prop({ nullable: true })
   isErrorFromFixtronix: boolean;
+  @Prop({
+    nullable: true,
+    enum: ['DEFAULT', 'IN_COORDINATOR', 'IN_MAGASIN'],
+    default: 'IN_COORDINATOR',
+  })
+  handleSendingNotificationBetweenCoordinatorAndMagasin: string;
   @Prop({ nullable: true })
   remarque_coordinator: string;
   @Prop({ nullable: true })
@@ -230,6 +236,8 @@ export class Di {
   remarque_magasin: string;
   @Field({ nullable: true })
   remarque_coordinator: string;
+  @Field({ nullable: true })
+  handleSendingNotificationBetweenCoordinatorAndMagasin: string;
   @Field({ nullable: true })
   isErrorFromFixtronix: boolean;
 }
@@ -380,6 +388,8 @@ export class DiTable {
   logs: LogsDi[];
   @Field({ nullable: true })
   price: number;
+  @Field({ nullable: true })
+  handleSendingNotificationBetweenCoordinatorAndMagasin: string;
   @Field({ nullable: true })
   final_price: number;
 }

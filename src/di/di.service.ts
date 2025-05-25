@@ -64,7 +64,7 @@ export class DiService {
       {},
       { sort: { createdAt: -1 } },
     );
-
+    console.log('lastClient', lastClient);
     if (lastClient) {
       indexClient = +lastClient._idnum.substring(2);
       return indexClient + 1;
@@ -1092,6 +1092,8 @@ export class DiService {
         location_id: di.location_id?.location_name ?? 'N/A',
         status: di.status,
         image: di.image,
+        handleSendingNotificationBetweenCoordinatorAndMagasin:
+          di.handleSendingNotificationBetweenCoordinatorAndMagasin,
         logs: logsDi,
         isSentToCoordinator: di.isSentToCoordinator,
         isConfirmedComponentFromCoordinator:
@@ -1883,7 +1885,12 @@ export class DiService {
     } else {
       isSentToCoordinator = await this.diModel.findOneAndUpdate(
         { _id },
-        { $set: { isSentToCoordinator: true } },
+        {
+          $set: {
+            isSentToCoordinator: true,
+            handleSendingNotificationBetweenCoordinatorAndMagasin: 'IN_MAGASIN',
+          },
+        },
         { new: true },
       );
     }
@@ -1917,6 +1924,7 @@ export class DiService {
         {
           $set: {
             isConfirmedComponentFromCoordinator: true,
+            handleSendingNotificationBetweenCoordinatorAndMagasin: 'DEFAULT',
           },
         },
       );

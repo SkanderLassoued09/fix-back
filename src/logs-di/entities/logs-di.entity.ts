@@ -181,6 +181,8 @@ export class LogsDi {
   isSentToCoordinator?: boolean;
 
   @Field(() => String, { nullable: true })
+  handleSendingNotificationBetweenCoordinatorAndMagasin: string;
+  @Field(() => String, { nullable: true })
   comment?: string;
 
   @Field(() => String, { nullable: true })
