@@ -89,6 +89,12 @@ export class DiLogsDocument extends Document {
   remarque_magasin: string;
   @Prop({ nullable: true })
   remarque_coordinator: string;
+  @Prop({
+    nullable: true,
+    enum: ['DEFAULT', 'IN_COORDINATOR', 'IN_MAGASIN'],
+    default: 'IN_COORDINATOR',
+  })
+  handleSendingNotificationBetweenCoordinatorAndMagasin;
   @Prop({ nullable: true })
   confirmationComposant: string;
 
