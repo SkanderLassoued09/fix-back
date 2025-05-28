@@ -190,7 +190,12 @@ export class LogsDiService {
   async isSentToCoordinator(_idDi: string, idIgnore: number) {
     return await this.logsDiModel.findOneAndUpdate(
       { _idDi, idIgnore },
-      { $set: { isSentToCoordinator: true } },
+      {
+        $set: {
+          isSentToCoordinator: true,
+          handleSendingNotificationBetweenCoordinatorAndMagasin: 'IN_MAGASIN',
+        },
+      },
       { new: true },
     );
   }
@@ -200,6 +205,7 @@ export class LogsDiService {
       {
         $set: {
           isConfirmedComponentFromCoordinator: true,
+          handleSendingNotificationBetweenCoordinatorAndMagasin: 'DEFAULT',
         },
       },
     );
