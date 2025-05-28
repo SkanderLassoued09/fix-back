@@ -94,7 +94,7 @@ export class DiLogsDocument extends Document {
     enum: ['DEFAULT', 'IN_COORDINATOR', 'IN_MAGASIN'],
     default: 'IN_COORDINATOR',
   })
-  handleSendingNotificationBetweenCoordinatorAndMagasin;
+  handleSendingNotificationBetweenCoordinatorAndMagasin: string;
   @Prop({ nullable: true })
   confirmationComposant: string;
 
