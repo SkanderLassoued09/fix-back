@@ -111,6 +111,7 @@ export class ComposantService {
   async addComposantInfo(
     updateComposant: CreateComposantInput,
   ): Promise<UpdateComposantResponse> {
+    console.log('updateComposant', updateComposant);
     try {
       // Check if the PDF is a valid base64 string
       if (
@@ -151,7 +152,7 @@ export class ComposantService {
             link: updateComposant.link,
             quantity_stocked: updateComposant.quantity_stocked,
             pdf: updateComposant.pdf,
-            status: updateComposant.status_composant,
+            status_composant: updateComposant.status_composant,
             category_composant_id: updateComposant.category_composant_id,
           },
         },
