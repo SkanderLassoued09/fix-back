@@ -1089,6 +1089,15 @@ export class DiService {
         current_roles: di.current_roles,
         array_composants: di.array_composants,
         di_category_id: di.di_category_id?.category,
+        remarque_admin_manager: null,
+  remarque_admin_tech: di.remarque_admin_tech,
+  remarque_coordinator: di.remarque_coordinator,
+  remarque_magasin: di.remarque_magasin,
+  remarque_manager: di.remarque_manager,
+  remarque_tech_diagnostic: di.remarque_tech_diagnostic,
+  remarque_tech_repair: di.remarque_tech_repair,
+
+
         location_id: di.location_id?.location_name ?? 'N/A',
         status: di.status,
         image: di.image,
