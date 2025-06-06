@@ -83,8 +83,8 @@ export class UpdateCompanyInput {
   fax: string;
   @Field({ nullable: true })
   webSiteLink: string;
-  @Field()
+  @Field({ nullable: true })
   mf:string;
-  @Field()
+  @Field({ nullable: true })
   rne:string;
 }

@@ -134,9 +134,10 @@ export class DiagUpdate {
 export class UpdateDi {
   @Field()
   _id: string;
-
   @Field()
   title: string;
   @Field()
   description: string;
+  @Field()
+  remarque_manager: string;
 }
