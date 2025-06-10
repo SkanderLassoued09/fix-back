@@ -1080,6 +1080,8 @@ export class DiService {
       return {
         _id: di._id,
         title: di.title,
+        final_price:di.final_price,
+        price:di.price,
         description: di.description,
         ignoreCount: di.ignoreCount,
         can_be_repaired: di.can_be_repaired,
@@ -1108,7 +1110,7 @@ export class DiService {
         isConfirmedComponentFromCoordinator:
           di.isConfirmedComponentFromCoordinator,
         company_id: di.company_id?.name ?? '-', // Provide default values if necessary
-        client_id: di.client_id?.first_name ?? 'Unknown', // Provide default values if necessary
+        client_id: di.client_id?.first_name ?? '-', // Provide default values if necessary
         createdBy: `${di.createdBy?.firstName ?? 'Unknown'} ${
           di.createdBy?.lastName ?? ''
         }`,
