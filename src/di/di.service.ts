@@ -1075,9 +1075,11 @@ export class DiService {
       .skip(first);
 
     const coordDiList = di.map(async (di) => {
+      // Fetch the stat document based on the DI's _id
+        const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
       // Fetch logs related to this DI
       const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
-      return {
+      return { //nezih
         _id: di._id,
         title: di.title,
         final_price:di.final_price,
@@ -1096,6 +1098,12 @@ export class DiService {
         remarque_coordinator: di.remarque_coordinator,
         remarque_magasin: di.remarque_magasin,
         remarque_manager: di.remarque_manager,
+        techDiag: stat?.id_tech_diag
+            ? await this.profileService.getTech(stat?.id_tech_diag)
+            : 'N/A',
+          techRep: stat?.id_tech_rep
+            ? await this.profileService.getTech(stat?.id_tech_rep)
+            : 'N/A',
         remarque_tech_diagnostic: di.remarque_tech_diagnostic,
         remarque_tech_repair: di.remarque_tech_repair,
         createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
