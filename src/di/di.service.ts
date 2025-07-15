@@ -105,7 +105,7 @@ export class DiService {
         return err;
       });
   }
-  //nezih
+  
   /**
    * async findOneClient(_id: string): Promise<Client> {
     try {
