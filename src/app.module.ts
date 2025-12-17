@@ -26,8 +26,8 @@ import { LogsDiModule } from './logs-di/logs-di.module';
     LocationModule,
     CompanysModule,
     MongooseModule.forRoot(
-      'mongodb+srv://benjemianezih:fixtronix@fixtronixdatabase.1xkjlbq.mongodb.net/',
-      // 'mongodb+srv://skander:09101996@tpedb.yy1h9.mongodb.net/',
+      // 'mongodb+srv://benjemianezih:fixtronix@fixtronixdatabase.1xkjlbq.mongodb.net/',
+      'mongodb://mongodb:27017/fixtronix',
     ),
     GraphQLModule.forRoot<ApolloDriverConfig>({
       driver: ApolloDriver,
