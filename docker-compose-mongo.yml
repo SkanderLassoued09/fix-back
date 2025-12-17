@@ -1,0 +1,19 @@
+version: '3.5'
+services:
+  mongodb:
+    image: mongo:6.0
+    container_name: mongodb-fixtronix
+    volumes:
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+      - ./database:/data/db # Correct persistent path
+
+    ports:
+      - '27017:27017'
+    # environment:
+    #   MONGO_INIT_DB_ROOT_USERNAME: admin
+    #   MONGO_INIT_DB_ROOT_PASSWORD: admin
+    #   MONGO_INIT_DATABASE: keysstore
+networks:
+  default:
+    external: true
+    name: hostglobal

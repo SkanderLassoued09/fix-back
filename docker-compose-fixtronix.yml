@@ -1,0 +1,20 @@
+version: '3.5'
+services:
+  keys-nezih:
+    image: node-fixtronix-backend
+    env_file:
+      - .env
+    container_name: 'fixtronix-backend'
+    working_dir: /app
+    command: ['tail', '-f', '/dev/null']
+    ports:
+      - '0.0.0.0:3000:3000'
+    networks:
+      - hostglobal
+    volumes:
+      - '.:/app'
+
+networks:
+  hostglobal:
+    external: true
+
