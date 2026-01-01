@@ -121,14 +121,10 @@ export class ProfileService {
   // }
 
   async getAllTech() {
-    return await this.profileModel
-      .find({ role: { $in: [ROLE.ADMIN_TECH, ROLE.TECH] } })
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+    return await this.profileModel.find({
+      role: { $in: [ROLE.ADMIN_TECH, ROLE.TECH] },
+      isDeleted: false,
+    });
   }
 
   async getAllAdmins() {
