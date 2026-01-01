@@ -164,4 +164,16 @@ export class ComposantService {
       throw new Error('Failed to update composant: ' + error.message);
     }
   }
+  async searchComposants(name: string): Promise<any[]> {
+    if (!name || name.trim().length < 2) {
+      return [];
+    }
+
+    return this.ComposantModel.find({
+      name: { $regex: name, $options: 'i' },
+      isDeleted: false,
+    })
+      .select('_id name')
+      .limit(20);
+  }
 }

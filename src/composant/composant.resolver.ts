@@ -52,4 +52,9 @@ export class ComposantResolver {
   async findAllComposant(): Promise<[Composant]> {
     return await this.composantService.findAllComposants();
   }
+
+  @Query(() => [Composant])
+  async searchComposants(@Args('name') name: string): Promise<any> {
+    return await this.composantService.searchComposants(name);
+  }
 }
