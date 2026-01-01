@@ -51,4 +51,8 @@ export class CompanysResolver {
   ) {
     return this.companysService.updateCompany(updateCompanyInput);
   }
+  @Query(() => [Company])
+  async searchCompanies(@Args('name') name: string): Promise<Company[]> {
+    return this.companysService.searchCompanies(name);
+  }
 }

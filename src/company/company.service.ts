@@ -95,11 +95,25 @@ it should be soft delete ya nezih change it
           fax: payload.fax,
           raisonSociale: payload.raisonSociale,
           webSiteLink: payload.webSiteLink,
-          rne:payload.rne,
-          mf:payload.mf        
+          rne: payload.rne,
+          mf: payload.mf,
         },
       },
       { new: true },
     );
+  }
+
+  async searchCompanies(name: string): Promise<any[]> {
+    if (!name || name.trim().length < 2) {
+      return [];
+    }
+
+    return this.CompanyModel.find({
+      company_name: { $regex: name, $options: 'i' },
+      isDeleted: false,
+    })
+      .select('_id company_name')
+      .limit(20)
+      .lean();
   }
 }
