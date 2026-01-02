@@ -12,6 +12,7 @@ import {
   DiagUpdate,
   FilterConfigDi,
   PaginationConfigDi,
+  SearchDiInput,
   UpdateDi,
 } from './dto/create-di.input';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
@@ -84,6 +85,18 @@ export class DiResolver {
     @Args('filterConfig', { nullable: true }) filterConfig?: FilterConfigDi,
   ) {
     return await this.diService.getAllDi(paginationConfig, filterConfig);
+  }
+  @Query(() => DiTableData)
+  async searchDi(
+    @Args('paginationConfig') paginationConfig: PaginationConfigDi,
+    @Args('search') search: SearchDiInput,
+    @Args('filterConfig', { nullable: true }) filterConfig?: FilterConfigDi,
+  ) {
+    return await this.diService.searchDi(
+      paginationConfig,
+      search,
+      // filterConfig,
+    );
   }
 
   @Query(() => LogsDiData)

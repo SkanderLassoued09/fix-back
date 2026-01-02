@@ -40,10 +40,22 @@ import { Stat } from 'src/stat/entities/stat.entity';
 import * as moment from 'moment';
 import { LogsDiService } from 'src/logs-di/logs-di.service';
 import { nanoid } from 'nanoid';
+import { Profile, ProfileDocument } from 'src/profile/entities/profile.entity';
+import { Company, CompanyDocument } from 'src/company/entities/company.entity';
+import { Client, ClientDocument } from 'src/clients/entities/client.entity';
+import {
+  Location,
+  LocationDocument,
+} from 'src/location/entities/location.entity';
 @Injectable()
 export class DiService {
   constructor(
     @InjectModel(Di.name) private diModel: Model<DiDocument>,
+    @InjectModel(Profile.name) private profileModel: Model<ProfileDocument>,
+    @InjectModel(Company.name) private companyModel: Model<CompanyDocument>,
+    @InjectModel(Client.name) private clientModel: Model<ClientDocument>,
+    @InjectModel(Location.name) private locationModel: Model<LocationDocument>,
+
     @InjectModel(Composant.name)
     private composantModel: Model<ComposantDocument>,
     @InjectModel(Remarque.name)
@@ -105,7 +117,7 @@ export class DiService {
         return err;
       });
   }
-  
+
   /**
    * async findOneClient(_id: string): Promise<Client> {
     try {
@@ -332,6 +344,133 @@ export class DiService {
       },
     );
   }
+  async searchDi(
+    paginationConfig: PaginationConfigDi,
+    search: { field: string; value: string },
+  ) {
+    const { first, rows } = paginationConfig;
+    const { field, value } = search;
+    console.log(search);
+
+    // Base filter
+    const filter: any = { isDeleted: false };
+
+    // Only apply search if value has 2+ characters
+    if (field && value && value.trim().length >= 2) {
+      const trimmedValue = value.trim();
+      let regex: any;
+
+      regex = { $regex: `${trimmedValue}`, $options: 'i' };
+
+      switch (field) {
+        case '_id':
+        case '_idnum':
+        case 'title':
+          filter[field] = regex;
+          break;
+
+        case 'status':
+          filter.status = trimmedValue;
+          break;
+
+        case 'company':
+          const companyIds = await this.companyModel
+            .find({ name: regex })
+            .distinct('_id');
+          if (companyIds.length > 0) filter.company_id = { $in: companyIds };
+          break;
+
+        case 'client':
+          const clientIds = await this.clientModel
+            .find({ $or: [{ first_name: regex }, { last_name: regex }] })
+            .distinct('_id');
+          if (clientIds.length > 0) filter.client_id = { $in: clientIds };
+          break;
+
+        case 'location':
+          const locationIds = await this.locationModel
+            .find({ location_name: regex })
+            .distinct('_id');
+          if (locationIds.length > 0) filter.location_id = { $in: locationIds };
+          break;
+
+        case 'createdBy':
+          const profileIds = await this.profileModel
+            .find({ $or: [{ firstName: regex }, { lastName: regex }] })
+            .distinct('_id');
+          if (profileIds.length > 0) filter.createdBy = { $in: profileIds };
+          break;
+      }
+    }
+
+    console.log('🍉[filter]:', JSON.stringify(filter, null, 2));
+
+    // COUNT
+    const totalDiCount = await this.diModel.countDocuments(filter);
+
+    // FETCH
+    const diRecords = await this.diModel
+      .find(filter)
+      .populate('client_id', 'first_name last_name')
+      .populate('company_id', 'name')
+      .populate('createdBy', 'firstName lastName')
+      .populate('location_id', '_id location_name')
+      .populate('di_category_id', '_id category')
+      .sort({ createdAt: -1 })
+      .limit(rows)
+      .skip(first)
+      .exec();
+
+    // MAP RESPONSE
+    const di = await Promise.all(
+      diRecords.map(async (di) => {
+        const stat = await this.statModel.findOne({ _idDi: di._id });
+        const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
+
+        return {
+          _id: di._id,
+          _idnum: di._idnum,
+          title: di.title,
+          description: di.description,
+          remarque_tech_diagnostic: di.remarque_tech_diagnostic,
+          remarque_manager: di.remarque_manager,
+          remarque_tech_repair: di.remarque_tech_repair,
+          ignoreCount: di.ignoreCount,
+          can_be_repaired: di.can_be_repaired,
+          bon_de_commande: di.bon_de_commande,
+          bon_de_livraison: di.bon_de_livraison,
+          facture: di.facture,
+          devis: di.devis,
+          contain_pdr: di.contain_pdr,
+          current_roles: di.current_roles,
+          array_composants: di.array_composants,
+          isErrorFromFixtronix: di.isErrorFromFixtronix,
+          di_category_id: di.di_category_id?.category,
+          location_id: di.location_id?.location_name ?? 'N/A',
+          status: di.status,
+          price: di.price ?? 'N/A',
+          final_price: di.final_price ?? 'N/A',
+          createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
+          image: di?.image?.length > 0 ? di.image : '-',
+          client_id: di.client_id?.first_name ?? '-',
+          company_id: di.company_id?.name ?? '-',
+          createdBy: `${di.createdBy?.firstName ?? '-'} ${
+            di.createdBy?.lastName ?? ''
+          }`,
+          techDiag: stat?.id_tech_diag
+            ? await this.profileService.getTech(stat.id_tech_diag)
+            : 'N/A',
+          techRep: stat?.id_tech_rep
+            ? await this.profileService.getTech(stat.id_tech_rep)
+            : 'N/A',
+          logs: logsDi.length > 0 ? logsDi : [],
+        };
+      }),
+    );
+
+    return { di, totalDiCount };
+  }
+
   // workage
   async getAllDi(
     paginationConfig: PaginationConfigDi,
@@ -1076,14 +1215,15 @@ export class DiService {
 
     const coordDiList = di.map(async (di) => {
       // Fetch the stat document based on the DI's _id
-        const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
+      const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
       // Fetch logs related to this DI
       const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
-      return { //nezih
+      return {
+        //nezih
         _id: di._id,
         title: di.title,
-        final_price:di.final_price,
-        price:di.price,
+        final_price: di.final_price,
+        price: di.price,
         description: di.description,
         ignoreCount: di.ignoreCount,
         can_be_repaired: di.can_be_repaired,
@@ -1099,15 +1239,15 @@ export class DiService {
         remarque_magasin: di.remarque_magasin,
         remarque_manager: di.remarque_manager,
         techDiag: stat?.id_tech_diag
-            ? await this.profileService.getTech(stat?.id_tech_diag)
-            : 'N/A',
-          techRep: stat?.id_tech_rep
-            ? await this.profileService.getTech(stat?.id_tech_rep)
-            : 'N/A',
+          ? await this.profileService.getTech(stat?.id_tech_diag)
+          : 'N/A',
+        techRep: stat?.id_tech_rep
+          ? await this.profileService.getTech(stat?.id_tech_rep)
+          : 'N/A',
         remarque_tech_diagnostic: di.remarque_tech_diagnostic,
         remarque_tech_repair: di.remarque_tech_repair,
         createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
-        updatedAt:di.updatedAt,
+        updatedAt: di.updatedAt,
         location_id: di.location_id?.location_name ?? 'N/A',
         status: di.status,
         image: di.image,

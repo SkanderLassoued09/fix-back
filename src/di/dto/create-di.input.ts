@@ -1,6 +1,15 @@
 import { InputType, Field } from '@nestjs/graphql';
 
 @InputType()
+export class SearchDiInput {
+  @Field()
+  field: string;
+
+  @Field()
+  value: string;
+}
+
+@InputType()
 export class CreateDiInput {
   @Field({ nullable: true })
   _id: string;

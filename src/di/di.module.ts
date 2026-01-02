@@ -21,6 +21,12 @@ import { Profile, ProfileSchema } from 'src/profile/entities/profile.entity';
 import { PubSubModule } from 'src/pubsub/pubsub.module';
 import { AuditModule } from 'src/audit/audit.module';
 import { LogsDiModule } from 'src/logs-di/logs-di.module';
+import { Client, ClientSchema } from 'src/clients/entities/client.entity';
+import { Company, CompanySchema } from 'src/company/entities/company.entity';
+import {
+  Location,
+  LocationSchema,
+} from 'src/location/entities/location.entity';
 
 @Module({
   providers: [
@@ -54,6 +60,18 @@ import { LogsDiModule } from 'src/logs-di/logs-di.module';
       {
         name: Profile.name,
         schema: ProfileSchema,
+      },
+      {
+        name: Client.name,
+        schema: ClientSchema,
+      },
+      {
+        name: Company.name,
+        schema: CompanySchema,
+      },
+      {
+        name: Location.name,
+        schema: LocationSchema,
       },
     ]),
   ],
