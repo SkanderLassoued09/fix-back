@@ -20,12 +20,14 @@ export class ComposantResolver {
 
   @Mutation(() => Composant)
   async removeComposant(@Args('_id') _id: string): Promise<Composant> {
-    try {
-      return await this.composantService.removeComposant(_id);
-    } catch (error) {
-      console.error(error);
-      throw new Error('Failed to delete Composant');
-    }
+    return await this.composantService.removeComposant(_id);
+  }
+
+  @Mutation(() => UpdateComposantResponse)
+  async updateComposant(
+    @Args('updateComposant') updateComposant: CreateComposantInput,
+  ): Promise<UpdateComposantResponse> {
+    return await this.composantService.updateComposant(updateComposant);
   }
   @Mutation(() => UpdateComposantResponse)
   async addComposantInfo(

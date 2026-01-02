@@ -106,6 +106,29 @@ export class ComposantService {
     //   throw error;
     // }
   }
+  async updateComposant(updateComposant: CreateComposantInput) {
+    console.log('---------------', updateComposant);
+    const update = await this.ComposantModel.findByIdAndUpdate(
+      updateComposant._id,
+      {
+        $set: {
+          package: updateComposant.package,
+          prix_achat: updateComposant.prix_achat,
+          prix_vente: updateComposant.prix_vente,
+          coming_date: updateComposant.coming_date,
+          link: updateComposant.link,
+          quantity_stocked: updateComposant.quantity_stocked,
+          pdf: updateComposant.pdf,
+          status_composant: updateComposant.status_composant,
+          category_composant_id: updateComposant.category_composant_id,
+        },
+      },
+      { new: true },
+    );
+
+    console.log('update', update);
+    return update;
+  }
 
   // this function after recieving ticket from tech
   async addComposantInfo(
