@@ -366,11 +366,8 @@ export class DiService {
         case '_id':
         case '_idnum':
         case 'title':
-          filter[field] = regex;
-          break;
-
         case 'status':
-          filter.status = trimmedValue;
+          filter[field] = regex;
           break;
 
         case 'company':
@@ -393,6 +390,43 @@ export class DiService {
             .distinct('_id');
           if (locationIds.length > 0) filter.location_id = { $in: locationIds };
           break;
+        case 'techDiag': {
+          // 1. Find matching profiles
+          const profileIds = await this.profileModel
+            .find({ $or: [{ firstName: regex }, { lastName: regex }] })
+            .distinct('_id');
+
+          if (profileIds.length === 0) break;
+
+          // 2. Find stats where tech diag matches
+          const diIds = await this.statModel
+            .find({ id_tech_diag: { $in: profileIds } })
+            .distinct('_idDi');
+
+          if (diIds.length > 0) {
+            filter._id = { $in: diIds };
+          }
+          break;
+        }
+
+        case 'techRep': {
+          // 1. Find matching profiles
+          const profileIds = await this.profileModel
+            .find({ $or: [{ firstName: regex }, { lastName: regex }] })
+            .distinct('_id');
+
+          if (profileIds.length === 0) break;
+
+          // 2. Find stats where tech rep matches
+          const diIds = await this.statModel
+            .find({ id_tech_rep: { $in: profileIds } })
+            .distinct('_idDi');
+
+          if (diIds.length > 0) {
+            filter._id = { $in: diIds };
+          }
+          break;
+        }
 
         case 'createdBy':
           const profileIds = await this.profileModel
