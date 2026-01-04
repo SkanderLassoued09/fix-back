@@ -1255,6 +1255,7 @@ export class DiService {
       return {
         //nezih
         _id: di._id,
+        _idnum: di._idnum,
         title: di.title,
         final_price: di.final_price,
         price: di.price,
