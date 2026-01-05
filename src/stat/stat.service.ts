@@ -181,6 +181,7 @@ export class StatService {
     startDate?: Date,
     endDate?: Date,
   ) {
+    // this.migrateFieldsToReferenceTheDiEntity();
     const { first, rows } = paginationConfig;
 
     // Building the date filter if both startDate and endDate are provided
@@ -222,11 +223,47 @@ export class StatService {
     const totalTechDataCount = await this.StatModel.countDocuments(queryFilter);
 
     const stat = await this.StatModel.find(queryFilter)
+      .populate({
+        path: 'diRef', // the virtual we defined
+        select: '_idnum client_id company_id', // fields to fetch from Di
+        populate: [
+          // nested populate
+          { path: 'client_id', select: '_id first_name last_name phone' }, // adjust fields you want
+          { path: 'company_id', select: '_id name fax' }, // adjust fields you want
+        ],
+      })
       .sort({ createdAt: -1 })
       .limit(rows)
-      .skip(first);
+      .skip(first)
+      .lean();
 
-    return { stat, totalTechDataCount };
+    const desiredData = stat.map((el: any) => ({
+      ...el,
+      _idnum: el.diRef?._idnum,
+      client:
+        this.isEmpty(el.diRef?.client_id) === false
+          ? el.diRef?.client_id
+          : null,
+      company:
+        this.isEmpty(el.diRef?.company_id) === false
+          ? el.diRef?.company_id
+          : null,
+    }));
+    console.log('stat service', desiredData);
+    return {
+      stat: desiredData,
+      totalTechDataCount,
+    };
+  }
+
+  isEmpty(value) {
+    return (
+      value === null ||
+      value === undefined ||
+      value === '' ||
+      value === 'null' ||
+      value === 'undefined'
+    );
   }
   // to get techrep and tech daig and their times
   async getRetourDataStats(_id: string) {
@@ -464,5 +501,14 @@ export class StatService {
 
     // Save the updated Stat
     return stat.save();
+  }
+
+  //
+  async migrateFieldsToReferenceTheDiEntity() {
+    console.log('Migrating fields to reference the Di entity...');
+    return await this.StatModel.updateMany(
+      { diRef: { $exists: false }, _idDi: { $type: 'string' } },
+      [{ $set: { diRef: '$_idDi' } }],
+    );
   }
 }

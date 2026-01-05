@@ -1445,7 +1445,8 @@ export class DiService {
     return result;
   }
 
-  async changeStatusInDiagnostic(_id: string) {
+  async changeStatusInDiagnostic(_id: any) {
+    console.log(_id);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {

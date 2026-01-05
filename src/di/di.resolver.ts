@@ -101,6 +101,7 @@ export class DiResolver {
 
   @Query(() => LogsDiData)
   async getDiById(@Args('_id') _id: string) {
+    console.log(_id);
     try {
       const diData = await this.diService.getDiById(_id);
       return diData;

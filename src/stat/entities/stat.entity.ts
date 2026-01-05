@@ -23,6 +23,9 @@ export class StatDocument extends Document {
   @Prop({ type: String, ref: 'Location' })
   // belongs to which location
   location_id: LocationDocument;
+  @Prop({ type: String, ref: 'Di' })
+  // belongs to which location
+  diRef: string;
   @Prop()
   id_tech_retour: string[];
   @Prop({ type: Date })
@@ -77,11 +80,40 @@ export class PauseLog {
 }
 
 @ObjectType()
+export class ClientType {
+  @Field()
+  _id: string;
+
+  @Field({ nullable: true })
+  first_name?: string;
+
+  @Field({ nullable: true })
+  last_name?: string;
+
+  @Field({ nullable: true })
+  phone?: string;
+}
+
+@ObjectType()
+export class CompanyType {
+  @Field()
+  _id: string;
+
+  @Field()
+  name: string;
+
+  @Field({ nullable: true })
+  fax?: string;
+}
+
+@ObjectType()
 export class Stat {
   @Field()
   _id: string;
   @Field({ nullable: true })
   _idDi: string;
+  @Field({ nullable: true })
+  _idnum: string;
   @Field({ nullable: true })
   id_tech_diag: string;
   @Field({ nullable: true })
@@ -109,6 +141,10 @@ export class Stat {
   // Embedded array for pause logs
   @Field(() => [PauseLog], { nullable: true })
   pauseLogs?: PauseLog[];
+  @Field({ nullable: true })
+  client: ClientType;
+  @Field({ nullable: true })
+  company: CompanyType;
 }
 
 @ObjectType()
