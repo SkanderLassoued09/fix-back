@@ -159,6 +159,14 @@ export class DiResolver {
   }
 
   @Query(() => DiTableData)
+  async searchCoordinatorDI(
+    @Args('paginationConfig') paginationConfig: PaginationConfigDi,
+    @Args('search') search: SearchDiInput,
+  ) {
+    return this.diService.searchCoordinatorDI(paginationConfig, search);
+  }
+
+  @Query(() => DiTableData)
   async get_coordinatorDI(
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
   ) {
@@ -169,6 +177,15 @@ export class DiResolver {
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
   ) {
     return await this.diService.getDiForMagasin(paginationConfig);
+  }
+
+  @Query(() => DiTableData)
+  async searchDiForMagasin(
+    @Args('paginationConfig') paginationConfig: PaginationConfigDi,
+    @Args('search') search: SearchDiInput,
+  ) {
+    console.log('search', search);
+    return this.diService.searchDiForMagasin(paginationConfig, search);
   }
 
   @Mutation(() => Di)

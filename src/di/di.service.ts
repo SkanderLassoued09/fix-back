@@ -1222,6 +1222,140 @@ export class DiService {
 
     return result;
   }
+  async searchCoordinatorDI(
+    paginationConfig: PaginationConfigDi,
+    search: { field: string; value: string },
+  ) {
+    const { first, rows } = paginationConfig;
+    const { field, value } = search;
+
+    // ✅ Coordinator base filter
+    const filter: any = {
+      status: {
+        $nin: [
+          STATUS_DI.Created.status,
+          STATUS_DI.Finished.status,
+          STATUS_DI.Annuler.status,
+        ],
+      },
+      isDeleted: false,
+    };
+
+    // ✅ Apply search only if valid
+    if (field && value && value.trim().length >= 2) {
+      const regex = { $regex: value.trim(), $options: 'i' };
+
+      switch (field) {
+        case '_id':
+        case '_idnum':
+        case 'title':
+        case 'status':
+          filter[field] = regex;
+          break;
+
+        case 'company': {
+          const ids = await this.companyModel
+            .find({ name: regex })
+            .distinct('_id');
+          if (ids.length) filter.company_id = { $in: ids };
+          break;
+        }
+
+        case 'client': {
+          const ids = await this.clientModel
+            .find({ $or: [{ first_name: regex }, { last_name: regex }] })
+            .distinct('_id');
+          if (ids.length) filter.client_id = { $in: ids };
+          break;
+        }
+
+        case 'location': {
+          const ids = await this.locationModel
+            .find({ location_name: regex })
+            .distinct('_id');
+          if (ids.length) filter.location_id = { $in: ids };
+          break;
+        }
+
+        case 'createdBy': {
+          const ids = await this.profileModel
+            .find({ $or: [{ firstName: regex }, { lastName: regex }] })
+            .distinct('_id');
+          if (ids.length) filter.createdBy = { $in: ids };
+          break;
+        }
+
+        case 'techDiag':
+        case 'techRep': {
+          const profileIds = await this.profileModel
+            .find({ $or: [{ firstName: regex }, { lastName: regex }] })
+            .distinct('_id');
+
+          if (!profileIds.length) break;
+
+          const statField =
+            field === 'techDiag' ? 'id_tech_diag' : 'id_tech_rep';
+
+          const diIds = await this.statModel
+            .find({ [statField]: { $in: profileIds } })
+            .distinct('_idDi');
+
+          if (diIds.length) filter._id = { $in: diIds };
+          break;
+        }
+      }
+    }
+
+    // 🔢 Count
+    const totalDiCount = await this.diModel.countDocuments(filter);
+
+    // 📦 Fetch
+    const diRecords = await this.diModel
+      .find(filter)
+      .populate('client_id', 'first_name last_name')
+      .populate('company_id', 'name')
+      .populate('createdBy', 'firstName lastName')
+      .populate('location_id', 'location_name')
+      .sort({ createdAt: -1 })
+      .limit(rows)
+      .skip(first)
+      .exec();
+
+    // 🔁 Map
+    const di = await Promise.all(
+      diRecords.map(async (di) => {
+        const stat = await this.statModel.findOne({ _idDi: di._id });
+        const logs = await this.logsDiService.getAllLogsByDi(di._id);
+
+        return {
+          _id: di._id,
+          _idnum: di._idnum,
+          title: di.title,
+          status: di.status,
+          price: di.price ?? 'N/A',
+          final_price: di.final_price ?? 'N/A',
+          createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
+          location_id: di.location_id?.location_name ?? 'N/A',
+          company_id: di.company_id?.name ?? '-',
+          client_id: di.client_id?.first_name ?? '-',
+          createdBy: `${di.createdBy?.firstName ?? '-'} ${
+            di.createdBy?.lastName ?? ''
+          }`,
+          techDiag: stat?.id_tech_diag
+            ? await this.profileService.getTech(stat.id_tech_diag)
+            : 'N/A',
+          techRep: stat?.id_tech_rep
+            ? await this.profileService.getTech(stat.id_tech_rep)
+            : 'N/A',
+          logs,
+        };
+      }),
+    );
+
+    console.log('di', di);
+
+    return { di, totalDiCount };
+  }
 
   // *Query For Coordinator
   async get_coordinatorDI(paginationConfig: PaginationConfigDi) {
@@ -1341,6 +1475,45 @@ export class DiService {
       .skip(first);
 
     return { di, totalDiCount };
+  }
+
+  async searchDiForMagasin(
+    paginationConfig: PaginationConfigDi,
+    search: { field: string; value: string },
+  ) {
+    const { first, rows } = paginationConfig;
+    const { field, value } = search;
+
+    // ✅ Base filter
+    const filter: any = {
+      contain_pdr: true,
+      isDeleted: false,
+    };
+
+    // ✅ Search ONLY title & status
+    if (
+      value &&
+      value.trim().length >= 2 &&
+      ['title', 'status'].includes(field)
+    ) {
+      filter[field] = {
+        $regex: value.trim(),
+        $options: 'i',
+      };
+    }
+
+    // 🔢 Count
+    const totalDiCount = await this.diModel.countDocuments(filter);
+
+    // 📦 Fetch
+    const diRecords = await this.diModel
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .limit(rows)
+      .skip(first)
+      .exec();
+    console.log('diRecords', diRecords);
+    return { di: diRecords, totalDiCount };
   }
 
   async setSelectedComponentAsDone(

@@ -50,6 +50,7 @@ export class StatService {
       createStatInput.ignoreCount = di.ignoreCount;
       await this.logsDiService.create(createStatInput._idDi, di.ignoreCount);
     }
+
     const result = await new this.StatModel(createStatInput).save();
 
     if (!result) {
@@ -181,7 +182,7 @@ export class StatService {
     startDate?: Date,
     endDate?: Date,
   ) {
-    // this.migrateFieldsToReferenceTheDiEntity();
+    this.migrateFieldsToReferenceTheDiEntity();
     const { first, rows } = paginationConfig;
 
     // Building the date filter if both startDate and endDate are provided
@@ -224,19 +225,18 @@ export class StatService {
 
     const stat = await this.StatModel.find(queryFilter)
       .populate({
-        path: 'diRef', // the virtual we defined
-        select: '_idnum client_id company_id', // fields to fetch from Di
+        path: 'diRef',
+        select: '_idnum client_id company_id',
         populate: [
-          // nested populate
-          { path: 'client_id', select: '_id first_name last_name phone' }, // adjust fields you want
-          { path: 'company_id', select: '_id name fax' }, // adjust fields you want
+          { path: 'client_id', select: '_id first_name last_name phone' },
+          { path: 'company_id', select: '_id name fax' },
         ],
       })
       .sort({ createdAt: -1 })
       .limit(rows)
       .skip(first)
       .lean();
-
+    console.log('stat raw data', stat[0]);
     const desiredData = stat.map((el: any) => ({
       ...el,
       _idnum: el.diRef?._idnum,
@@ -249,7 +249,7 @@ export class StatService {
           ? el.diRef?.company_id
           : null,
     }));
-    console.log('stat service', desiredData);
+    // console.log('stat service', desiredData[0]);
     return {
       stat: desiredData,
       totalTechDataCount,
