@@ -39,6 +39,62 @@ export class ProfileService {
       { new: true },
     );
   }
+  async searchProfile(
+    paginationConfig: PaginationConfigProfile,
+    search: { field: string; value: string },
+  ) {
+    const { first, rows } = paginationConfig;
+    const { field, value } = search;
+
+    // Base filter
+    const filter: any = { isDeleted: false };
+
+    // Only apply search if value has 2+ characters
+    if (field && value && value.trim().length >= 2) {
+      const trimmedValue = value.trim();
+      const regex = { $regex: `${trimmedValue}`, $options: 'i' };
+
+      switch (field) {
+        case 'username':
+        case 'firstName':
+        case 'lastName':
+        case 'phone':
+        case 'email':
+        case 'role':
+          filter[field] = regex;
+          break;
+
+        case 'createdAt':
+        case 'updatedAt':
+          // For date fields, try to parse and search
+          // This will match dates that contain the search string
+          // You might want to implement more sophisticated date search
+          const dateSearch = new Date(trimmedValue);
+          if (!isNaN(dateSearch.getTime())) {
+            filter[field] = {
+              $gte: new Date(dateSearch.setHours(0, 0, 0, 0)),
+              $lte: new Date(dateSearch.setHours(23, 59, 59, 999)),
+            };
+          }
+          break;
+      }
+    }
+
+    console.log('🔍[Profile Search Filter]:', JSON.stringify(filter, null, 2));
+
+    // COUNT
+    const totalProfileCount = await this.profileModel.countDocuments(filter);
+
+    // FETCH
+    const profileRecord = await this.profileModel
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .limit(rows)
+      .skip(first)
+      .exec();
+
+    return { profileRecord, totalProfileCount };
+  }
   // for listing profiles pagination
   async getAllProfile(paginationConfig: PaginationConfigProfile) {
     const { first, rows } = paginationConfig;

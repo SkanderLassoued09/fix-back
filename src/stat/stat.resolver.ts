@@ -17,6 +17,7 @@ import {
 import {
   CreateStatInput,
   PauseLogInput,
+  SearchInput,
   UpdatedPauseTime,
 } from './dto/create-stat.input';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
@@ -120,6 +121,29 @@ export class StatResolver {
   @Query(() => Stat)
   getLastPauseTimeforreaparation(@Args('_id') _id: string) {
     return this.statService.getLastPauseTimeForReparation(_id);
+  }
+
+  @Query(() => StatsTableData)
+  @UseGuards(JwtAuthGuard)
+  searchTechDI(
+    @CurrentUser() profile: Profile,
+    @Args('paginationConfig') paginationConfig: PaginationConfigDi,
+    @Args('search') search: SearchInput,
+    @Args('startDate', { nullable: true }) startDate?: string,
+    @Args('endDate', { nullable: true }) endDate?: string,
+  ) {
+    // Convert the date strings to JavaScript Date objects if provided
+    const start = startDate ? new Date(startDate) : undefined;
+    const end = endDate ? new Date(endDate) : undefined;
+
+    return this.statService.searchTechDi(
+      paginationConfig,
+      search,
+      profile._id,
+      profile.role,
+      start,
+      end,
+    );
   }
 
   @Query(() => StatsTableData)

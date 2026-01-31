@@ -8,8 +8,13 @@ import { NotificationsGateway } from 'src/notification.gateway';
 import { ProfileService } from 'src/profile/profile.service';
 import { Profile, ProfileSchema } from 'src/profile/entities/profile.entity';
 import { Di } from 'src/di/entities/di.entity';
-import { LogsDiService } from 'src/logs-di/logs-di.service';
 import { LogsDiModule } from 'src/logs-di/logs-di.module';
+import {
+  Location,
+  LocationSchema,
+} from 'src/location/entities/location.entity';
+import { Company, CompanySchema } from 'src/company/entities/company.entity';
+import { Client, ClientSchema } from 'src/clients/entities/client.entity';
 
 @Module({
   providers: [StatResolver, StatService, NotificationsGateway, ProfileService],
@@ -24,6 +29,18 @@ import { LogsDiModule } from 'src/logs-di/logs-di.module';
       {
         name: Profile.name,
         schema: ProfileSchema,
+      },
+      {
+        name: Location.name,
+        schema: LocationSchema,
+      },
+      {
+        name: Company.name,
+        schema: CompanySchema,
+      },
+      {
+        name: Client.name,
+        schema: ClientSchema,
       },
       {
         name: Di.name,

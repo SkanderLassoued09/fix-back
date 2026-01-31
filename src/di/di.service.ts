@@ -1482,7 +1482,9 @@ export class DiService {
     search: { field: string; value: string },
   ) {
     const { first, rows } = paginationConfig;
+    console.log('paginationConfig', paginationConfig);
     const { field, value } = search;
+    console.log('search', search);
 
     // ✅ Base filter
     const filter: any = {

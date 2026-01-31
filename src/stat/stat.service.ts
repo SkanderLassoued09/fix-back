@@ -14,11 +14,18 @@ import { PaginationConfigDi } from 'src/di/dto/create-di.input';
 import { Di } from 'src/di/entities/di.entity';
 import { LogsDiService } from 'src/logs-di/logs-di.service';
 import { v4 as uuidv4 } from 'uuid';
+import { Profile } from 'src/profile/entities/profile.entity';
+import { Company } from 'src/company/entities/company.entity';
+import { Client } from 'src/clients/entities/client.entity';
 @Injectable()
 export class StatService {
   constructor(
     @InjectModel('Stat') private StatModel: Model<Stat>,
     @InjectModel('Di') private diModel: Model<Di>,
+    @InjectModel('Profile') private profileModel: Model<Profile>,
+    @InjectModel('Company') private companyModel: Model<Company>,
+    @InjectModel('Location') private locationModel: Model<Location>,
+    @InjectModel('Client') private clientModel: Model<Client>,
     private readonly notificationGateway: NotificationsGateway,
     private readonly profileService: ProfileService,
     private readonly logsDiService: LogsDiService,
@@ -173,6 +180,230 @@ export class StatService {
     ]);
 
     return result;
+  }
+
+  async searchTechDi(
+    paginationConfig: PaginationConfigDi,
+    search: { field: string; value: string },
+    _idtech: string,
+    role: string,
+    startDate?: Date,
+    endDate?: Date,
+  ) {
+    const { first, rows } = paginationConfig;
+    const { field, value } = search;
+
+    // Base filters
+    const dateFilter =
+      startDate && endDate
+        ? {
+            createdAt: {
+              $gte: startDate,
+              $lte: endDate,
+            },
+          }
+        : {};
+
+    const isAdmin = ['ADMIN_MANAGER', 'ADMIN_TECH'].includes(role);
+
+    const techFilter = isAdmin
+      ? {}
+      : {
+          $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }],
+        };
+
+    const statusFilter = {
+      status: { $ne: STATUS_DI.Finished.status },
+    };
+
+    // Initialize combined filter
+    let combinedFilter: any = {
+      $and: [techFilter, dateFilter, statusFilter].filter(
+        (filter) => Object.keys(filter).length > 0,
+      ),
+    };
+
+    // Only apply search if value has 2+ characters
+    if (field && value && value.trim().length >= 2) {
+      const trimmedValue = value.trim();
+      const regex = { $regex: `${trimmedValue}`, $options: 'i' };
+
+      switch (field) {
+        case '_id':
+        case 'status':
+          combinedFilter.$and.push({ [field]: regex });
+          break;
+
+        case '_idnum':
+        case 'title': {
+          // Search in the referenced Di document
+          const diIds = await this.diModel
+            .find({ [field]: regex })
+            .distinct('_id');
+          if (diIds.length > 0) {
+            combinedFilter.$and.push({ _idDi: { $in: diIds } });
+          } else {
+            // No matching DIs, return empty result
+            return { stat: [], totalTechDataCount: 0 };
+          }
+          break;
+        }
+
+        case 'client': {
+          const clientIds = await this.clientModel
+            .find({ $or: [{ first_name: regex }, { last_name: regex }] })
+            .distinct('_id');
+
+          if (clientIds.length > 0) {
+            const diIds = await this.diModel
+              .find({ client_id: { $in: clientIds } })
+              .distinct('_id');
+
+            if (diIds.length > 0) {
+              combinedFilter.$and.push({ _idDi: { $in: diIds } });
+            } else {
+              return { stat: [], totalTechDataCount: 0 };
+            }
+          } else {
+            return { stat: [], totalTechDataCount: 0 };
+          }
+          break;
+        }
+
+        case 'company': {
+          const companyIds = await this.companyModel
+            .find({ name: regex })
+            .distinct('_id');
+
+          if (companyIds.length > 0) {
+            const diIds = await this.diModel
+              .find({ company_id: { $in: companyIds } })
+              .distinct('_id');
+
+            if (diIds.length > 0) {
+              combinedFilter.$and.push({ _idDi: { $in: diIds } });
+            } else {
+              return { stat: [], totalTechDataCount: 0 };
+            }
+          } else {
+            return { stat: [], totalTechDataCount: 0 };
+          }
+          break;
+        }
+
+        case 'location': {
+          const locationIds = await this.locationModel
+            .find({ location_name: regex })
+            .distinct('_id');
+
+          if (locationIds.length > 0) {
+            const diIds = await this.diModel
+              .find({ location_id: { $in: locationIds } })
+              .distinct('_id');
+
+            if (diIds.length > 0) {
+              combinedFilter.$and.push({ _idDi: { $in: diIds } });
+            } else {
+              return { stat: [], totalTechDataCount: 0 };
+            }
+          } else {
+            return { stat: [], totalTechDataCount: 0 };
+          }
+          break;
+        }
+
+        case 'techDiag': {
+          const profileIds = await this.profileModel
+            .find({ $or: [{ firstName: regex }, { lastName: regex }] })
+            .distinct('_id');
+
+          if (profileIds.length > 0) {
+            combinedFilter.$and.push({ id_tech_diag: { $in: profileIds } });
+          } else {
+            return { stat: [], totalTechDataCount: 0 };
+          }
+          break;
+        }
+
+        case 'techRep': {
+          const profileIds = await this.profileModel
+            .find({ $or: [{ firstName: regex }, { lastName: regex }] })
+            .distinct('_id');
+
+          if (profileIds.length > 0) {
+            combinedFilter.$and.push({ id_tech_rep: { $in: profileIds } });
+          } else {
+            return { stat: [], totalTechDataCount: 0 };
+          }
+          break;
+        }
+
+        case 'createdBy': {
+          const profileIds = await this.profileModel
+            .find({ $or: [{ firstName: regex }, { lastName: regex }] })
+            .distinct('_id');
+
+          if (profileIds.length > 0) {
+            const diIds = await this.diModel
+              .find({ createdBy: { $in: profileIds } })
+              .distinct('_id');
+
+            if (diIds.length > 0) {
+              combinedFilter.$and.push({ _idDi: { $in: diIds } });
+            } else {
+              return { stat: [], totalTechDataCount: 0 };
+            }
+          } else {
+            return { stat: [], totalTechDataCount: 0 };
+          }
+          break;
+        }
+      }
+    }
+
+    // Clean up empty $and array
+    const queryFilter = combinedFilter.$and.length > 0 ? combinedFilter : {};
+
+    console.log(
+      '🔍[Tech Search Filter]:',
+      JSON.stringify(queryFilter, null, 2),
+    );
+
+    // COUNT
+    const totalTechDataCount = await this.StatModel.countDocuments(queryFilter);
+
+    // FETCH
+    const stat = await this.StatModel.find(queryFilter)
+      .populate({
+        path: 'diRef',
+        select: '_idnum client_id company_id',
+        populate: [
+          { path: 'client_id', select: '_id first_name last_name phone' },
+          { path: 'company_id', select: '_id name fax' },
+        ],
+      })
+      .sort({ createdAt: -1 })
+      .limit(rows)
+      .skip(first)
+      .lean();
+
+    const desiredData = stat.map((el: any) => ({
+      ...el,
+      _idnum: el.diRef?._idnum,
+      client:
+        this.isEmpty(el.diRef?.client_id) === false
+          ? el.diRef?.client_id
+          : null,
+      company:
+        this.isEmpty(el.diRef?.company_id) === false
+          ? el.diRef?.company_id
+          : null,
+    }));
+
+    return {
+      stat: desiredData,
+      totalTechDataCount,
+    };
   }
 
   async getDiForTech(

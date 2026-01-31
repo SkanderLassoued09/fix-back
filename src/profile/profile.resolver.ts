@@ -15,6 +15,7 @@ import { UpdateProfileInput } from './dto/update-profile.input';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 import { BadRequestException, UseGuards } from '@nestjs/common';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
+import { SearchInput } from 'src/stat/dto/create-stat.input';
 
 @Resolver()
 export class ProfileResolver {
@@ -49,6 +50,13 @@ export class ProfileResolver {
   @Query(() => [TechTickets])
   async getAllAdmins() {
     return await this.profileService.getAllAdmins();
+  }
+  @Query(() => ProfileTableData)
+  async searchProfile(
+    @Args('paginationConfig') paginationConfig: PaginationConfigProfile,
+    @Args('search') search: SearchInput,
+  ) {
+    return await this.profileService.searchProfile(paginationConfig, search);
   }
 
   // @Roles(Role.ADMIN_MANAGER, Role.ADMIN_TECH)

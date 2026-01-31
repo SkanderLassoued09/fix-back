@@ -1,5 +1,12 @@
 import { InputType, Int, Field } from '@nestjs/graphql';
+@InputType()
+export class SearchInput {
+  @Field()
+  field: string;
 
+  @Field()
+  value: string;
+}
 @InputType()
 export class CreateStatInput {
   @Field({ nullable: true })
