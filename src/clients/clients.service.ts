@@ -48,6 +48,48 @@ export class ClientsService {
     );
   }
 
+  async searchClient(
+    paginationConfig: PaginationConfig,
+    search: { field: string; value: string },
+  ): Promise<ClientTableData> {
+    const { first, rows } = paginationConfig;
+    const { field, value } = search;
+
+    // Base filter
+    const filter: any = { isDeleted: false };
+
+    // Only apply search if value has 2+ characters
+    if (field && value && value.trim().length >= 2) {
+      const trimmedValue = value.trim();
+      const regex = { $regex: `${trimmedValue}`, $options: 'i' };
+
+      switch (field) {
+        case 'first_name':
+        case 'last_name':
+        case 'email':
+        case 'region':
+        case 'phone':
+        case 'address':
+          filter[field] = regex;
+          break;
+      }
+    }
+
+    console.log('🔍[Client Search Filter]:', JSON.stringify(filter, null, 2));
+
+    // COUNT
+    const totalClientRecord = await this.ClientModel.countDocuments(filter);
+
+    // FETCH
+    const clientRecords = await this.ClientModel.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(rows)
+      .skip(first)
+      .exec();
+
+    return { clientRecords, totalClientRecord };
+  }
+
   async findAllClients(
     paginationConfig: PaginationConfig,
   ): Promise<ClientTableData> {

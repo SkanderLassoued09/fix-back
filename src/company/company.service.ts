@@ -65,6 +65,81 @@ it should be soft delete ya nezih change it
     return { companyRecords, totalCompanyRecord };
   }
 
+  async searchCompany(
+    paginationConfig: PaginationConfig,
+    search: { field: string; value: string },
+  ): Promise<CompanyTableData> {
+    const { first, rows } = paginationConfig;
+    console.log(paginationConfig);
+    const { field, value } = search;
+    console.log(search);
+
+    // Base filter
+    const filter: any = {};
+
+    // Only apply search if value has 2+ characters
+    if (field && value && value.trim().length >= 2) {
+      const trimmedValue = value.trim();
+      const regex = { $regex: `${trimmedValue}`, $options: 'i' };
+
+      switch (field) {
+        case 'name':
+        case 'region':
+        case 'address':
+        case 'email':
+        case 'raisonSociale':
+        case 'exoneration':
+        case 'fax':
+        case 'activitePrincipale':
+        case 'activiteSecondaire':
+        case 'webSiteLink':
+          filter[field] = regex;
+          break;
+
+        // Search in nested service objects
+        case 'serviceAchat':
+          filter.$or = [
+            { 'serviceAchat.name': regex },
+            { 'serviceAchat.email': regex },
+            { 'serviceAchat.phone': regex },
+          ];
+          break;
+
+        case 'serviceFinancier':
+          filter.$or = [
+            { 'serviceFinancier.name': regex },
+            { 'serviceFinancier.email': regex },
+            { 'serviceFinancier.phone': regex },
+          ];
+          break;
+
+        case 'serviceTechnique':
+          filter.$or = [
+            { 'serviceTechnique.name': regex },
+            { 'serviceTechnique.email': regex },
+            { 'serviceTechnique.phone': regex },
+          ];
+          break;
+      }
+    }
+
+    console.log('🔍[Company Search Filter]:', JSON.stringify(filter, null, 2));
+
+    // COUNT
+    const totalCompanyRecord = await this.CompanyModel.countDocuments(filter);
+
+    // FETCH
+    const companyRecords = await this.CompanyModel.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(rows)
+      .skip(first)
+      .exec();
+
+    console.log('🔍[Company Search Result]:', companyRecords);
+
+    return { companyRecords, totalCompanyRecord };
+  }
+
   async getAllComapnyforDropDown() {
     return await this.CompanyModel.find({}).exec();
   }

@@ -6,6 +6,7 @@ import {
   UpdateClientInput,
 } from './dto/create-client.input';
 import { PaginationConfig } from 'src/company/dto/create-company.input';
+import { SearchInput } from 'src/stat/dto/create-stat.input';
 
 @Resolver(() => Client)
 export class ClientsResolver {
@@ -56,5 +57,12 @@ export class ClientsResolver {
     @Args('PaginationConfig') paginationConfig: PaginationConfig,
   ): Promise<ClientTableData> {
     return await this.clientsService.findAllClients(paginationConfig);
+  }
+  @Query(() => ClientTableData)
+  async searchClient(
+    @Args('paginationConfig') paginationConfig: PaginationConfig,
+    @Args('search') search: SearchInput,
+  ): Promise<ClientTableData> {
+    return await this.clientsService.searchClient(paginationConfig, search);
   }
 }
