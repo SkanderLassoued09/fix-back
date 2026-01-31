@@ -6,6 +6,7 @@ import {
   PaginationConfig,
   UpdateCompanyInput,
 } from './dto/create-company.input';
+import { SearchInput } from 'src/stat/dto/create-stat.input';
 
 @Resolver(() => Company)
 export class CompanysResolver {
@@ -36,6 +37,13 @@ export class CompanysResolver {
   @Query(() => [Company])
   async getAllComapnyforDropDown(): Promise<any> {
     return await this.companysService.getAllComapnyforDropDown();
+  }
+  @Query(() => CompanyTableData)
+  async searchCompany(
+    @Args('paginationConfig') paginationConfig: PaginationConfig,
+    @Args('search') search: SearchInput,
+  ): Promise<CompanyTableData> {
+    return await this.companysService.searchCompany(paginationConfig, search);
   }
 
   @Query(() => CompanyTableData)
