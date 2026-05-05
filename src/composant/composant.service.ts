@@ -107,7 +107,6 @@ export class ComposantService {
     // }
   }
   async updateComposant(updateComposant: CreateComposantInput) {
-    console.log('---------------', updateComposant);
     const update = await this.ComposantModel.findByIdAndUpdate(
       updateComposant._id,
       {
@@ -125,8 +124,6 @@ export class ComposantService {
       },
       { new: true },
     );
-
-    console.log('update', update);
     return update;
   }
 
@@ -134,7 +131,6 @@ export class ComposantService {
   async addComposantInfo(
     updateComposant: CreateComposantInput,
   ): Promise<UpdateComposantResponse> {
-    console.log('updateComposant', updateComposant);
     try {
       // Check if the PDF is a valid base64 string
       if (
@@ -181,7 +177,6 @@ export class ComposantService {
         },
         { new: true },
       );
-      console.log('update', update);
       return update;
     } catch (error) {
       throw new Error('Failed to update composant: ' + error.message);

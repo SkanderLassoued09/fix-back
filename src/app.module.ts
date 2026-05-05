@@ -20,6 +20,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { AuditModule } from './audit/audit.module';
 import { LogsDiModule } from './logs-di/logs-di.module';
+import { DashboardKpiModule } from './dashboard-kpi/dashboard-kpi.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { LogsDiModule } from './logs-di/logs-di.module';
     CronModule,
     AuditModule,
     LogsDiModule,
+    DashboardKpiModule,
   ],
   controllers: [],
   providers: [],

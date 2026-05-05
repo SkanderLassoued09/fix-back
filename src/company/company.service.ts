@@ -70,9 +70,7 @@ it should be soft delete ya nezih change it
     search: { field: string; value: string },
   ): Promise<CompanyTableData> {
     const { first, rows } = paginationConfig;
-    console.log(paginationConfig);
     const { field, value } = search;
-    console.log(search);
 
     // Base filter
     const filter: any = {};
@@ -123,8 +121,6 @@ it should be soft delete ya nezih change it
       }
     }
 
-    console.log('🔍[Company Search Filter]:', JSON.stringify(filter, null, 2));
-
     // COUNT
     const totalCompanyRecord = await this.CompanyModel.countDocuments(filter);
 
@@ -134,8 +130,6 @@ it should be soft delete ya nezih change it
       .limit(rows)
       .skip(first)
       .exec();
-
-    console.log('🔍[Company Search Result]:', companyRecords);
 
     return { companyRecords, totalCompanyRecord };
   }

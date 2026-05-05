@@ -67,7 +67,6 @@ export class DiResolver {
 
   @Mutation(() => Di)
   addBl(@Args('_id') _id: string, @Args('pdf') pdf: string) {
-    console.log('bl');
     return this.diService.addBlPDF(_id, pdf);
   }
   @Mutation(() => Di)
@@ -101,7 +100,6 @@ export class DiResolver {
 
   @Query(() => LogsDiData)
   async getDiById(@Args('_id') _id: string) {
-    console.log(_id);
     try {
       const diData = await this.diService.getDiById(_id);
       return diData;
@@ -184,7 +182,6 @@ export class DiResolver {
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
     @Args('search') search: SearchDiInput,
   ) {
-    console.log('search', search);
     return this.diService.searchDiForMagasin(paginationConfig, search);
   }
 
@@ -252,7 +249,6 @@ export class DiResolver {
 
   @Mutation(() => Di)
   changestatusToFinishReparation(@Args('_id') _id: string) {
-    console.log('🥪[_id]:', _id);
     return this.diService.changeStatusTofinsh(_id);
   }
 

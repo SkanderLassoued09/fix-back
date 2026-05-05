@@ -42,7 +42,6 @@ export class Composant_CategoryService {
   }
 
   async removeComposant_Category(_id: string): Promise<Composant_Category> {
-    console.log('🍗[_id]:', _id);
     const data = await this.Composant_CategoryModel.findOneAndUpdate(
       { _id },
       {
@@ -52,7 +51,6 @@ export class Composant_CategoryService {
       },
       { new: true },
     );
-    console.log('🥚[data]:', data);
     return data;
   }
 

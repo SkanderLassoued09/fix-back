@@ -80,8 +80,6 @@ export class ProfileService {
       }
     }
 
-    console.log('🔍[Profile Search Filter]:', JSON.stringify(filter, null, 2));
-
     // COUNT
     const totalProfileCount = await this.profileModel.countDocuments(filter);
 

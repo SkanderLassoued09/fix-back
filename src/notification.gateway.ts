@@ -34,15 +34,24 @@ export class NotificationsGateway
   sendNotificationDiag(message: any) {
     this.server.emit('sendDitoDiagnostique', message);
   }
+
   sendNotifcationToAdmins(message: any) {
     this.server.emit('sendNotifcationToAdmins', message);
   }
+
   confirmComposant(message: any) {
     this.server.emit('confirmAllComposant', message);
   }
 
-  sendComponenttoCoordinatorFromMagasin(data) {
-    this.server.emit('sendComponentToCoordinatorFromMagasin', { ...data });
+  blAddedNotification(data: any) {
+    this.server.emit('blAddedNotification', data);
+  }
+
+  sendComponentToCoordinatorFromMagasin(data) {
+    this.server.emit('component:sent_to_coordinator', data);
+  }
+  sendComponentToMagasinFromCoordinator(data) {
+    this.server.emit('component:confirmed_by_coordinator', data);
   }
 
   /**
@@ -50,6 +59,7 @@ export class NotificationsGateway
    * @param ticket
    * content will contains ticket and profile data
    * target == profile
+   *
    */
   updateTicket(message: { action: string; content: any; target?: any }) {
     this.server.emit('updateTicket', message);

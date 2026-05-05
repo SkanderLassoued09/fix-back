@@ -9,7 +9,7 @@ import { Stat } from './entities/stat.entity';
 import { Model } from 'mongoose';
 import { NotificationsGateway } from 'src/notification.gateway';
 import { ProfileService } from 'src/profile/profile.service';
-import { STATUS_DI } from 'src/di/di.status';
+import { STATUS_DI, TECH_STATUS_DI_VALUES } from 'src/di/di.status';
 import { PaginationConfigDi } from 'src/di/dto/create-di.input';
 import { Di } from 'src/di/entities/di.entity';
 import { LogsDiService } from 'src/logs-di/logs-di.service';
@@ -97,14 +97,7 @@ export class StatService {
   }
 
   async deleteStat(_id: string) {
-    const result = await this.StatModel.deleteOne({ _idDi: _id });
-    if (result.deletedCount === 0) {
-      throw new NotFoundException(
-        `Unable to remove stats linked to di with id ${_id}`,
-      );
-    }
-
-    return result;
+    return await this.StatModel.deleteMany({ _idDi: _id });
   }
 
   async affectForRep(_idDi: string, _idTech: string) {
@@ -213,7 +206,7 @@ export class StatService {
         };
 
     const statusFilter = {
-      status: { $ne: STATUS_DI.Finished.status },
+      status: { $in: TECH_STATUS_DI_VALUES },
     };
 
     // Initialize combined filter
@@ -364,11 +357,6 @@ export class StatService {
     // Clean up empty $and array
     const queryFilter = combinedFilter.$and.length > 0 ? combinedFilter : {};
 
-    console.log(
-      '🔍[Tech Search Filter]:',
-      JSON.stringify(queryFilter, null, 2),
-    );
-
     // COUNT
     const totalTechDataCount = await this.StatModel.countDocuments(queryFilter);
 
@@ -436,9 +424,8 @@ export class StatService {
       : {
           $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }],
         };
-    // Filter for excluding 'FINISHED' status
     const statusFilter = {
-      status: { $ne: STATUS_DI.Finished.status },
+      status: { $in: TECH_STATUS_DI_VALUES },
     };
     // Combine filters
     const finalFilter = {
@@ -467,7 +454,6 @@ export class StatService {
       .limit(rows)
       .skip(first)
       .lean();
-    console.log('stat raw data', stat[0]);
     const desiredData = stat.map((el: any) => ({
       ...el,
       _idnum: el.diRef?._idnum,
@@ -480,7 +466,6 @@ export class StatService {
           ? el.diRef?.company_id
           : null,
     }));
-    // console.log('stat service', desiredData[0]);
     return {
       stat: desiredData,
       totalTechDataCount,
@@ -736,7 +721,6 @@ export class StatService {
 
   //
   async migrateFieldsToReferenceTheDiEntity() {
-    console.log('Migrating fields to reference the Di entity...');
     return await this.StatModel.updateMany(
       { diRef: { $exists: false }, _idDi: { $type: 'string' } },
       [{ $set: { diRef: '$_idDi' } }],

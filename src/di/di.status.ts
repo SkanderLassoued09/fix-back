@@ -120,3 +120,16 @@ export const STATUS_DI = {
     future_status: null,
   },
 };
+
+export const TECH_STATUS_DI_VALUES = Object.values(STATUS_DI)
+  .filter((status) => status.role.includes('Tech'))
+  .map((status) => status.status);
+
+export const MAGASIN_STATUS_DI_VALUES = Object.values(STATUS_DI)
+  .filter((status) => status.role.includes('Magasin'))
+  .map((status) => status.status);
+
+export const COORDINATOR_STATUS_DI_VALUES = Object.values(STATUS_DI)
+  .filter((status) => status.role.includes('Coordinator'))
+  .map((status) => status.status)
+  .concat(STATUS_DI.InMagasin.status);

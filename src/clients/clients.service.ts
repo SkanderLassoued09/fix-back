@@ -75,8 +75,6 @@ export class ClientsService {
       }
     }
 
-    console.log('🔍[Client Search Filter]:', JSON.stringify(filter, null, 2));
-
     // COUNT
     const totalClientRecord = await this.ClientModel.countDocuments(filter);
 

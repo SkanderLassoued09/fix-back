@@ -15,7 +15,12 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Di, DiDocument, UpdateNego } from './entities/di.entity';
 import { Model } from 'mongoose';
-import { STATUS_DI } from './di.status';
+import {
+  COORDINATOR_STATUS_DI_VALUES,
+  MAGASIN_STATUS_DI_VALUES,
+  STATUS_DI,
+  TECH_STATUS_DI_VALUES,
+} from './di.status';
 import { Role } from 'src/auth/roles';
 import {
   Composant,
@@ -76,12 +81,10 @@ export class DiService {
       {},
       { sort: { createdAt: -1 } },
     );
-    console.log('lastClient', lastClient);
     if (lastClient) {
       indexClient = +lastClient._idnum.substring(2);
       return indexClient + 1;
     }
-    console.log('🥤[indexClient]:', indexClient);
     return indexClient;
   }
 
@@ -104,7 +107,6 @@ export class DiService {
     }
     // --
     const index = await this.generateClientId();
-    console.log('🍺[index]:', index);
     createDiInput._id = `DI_${nanoid(4)}`;
     createDiInput._idnum = `DI${index}`;
 
@@ -224,16 +226,31 @@ export class DiService {
     );
     const di = await this.diModel.findOne({ _id });
     if (di && di.ignoreCount && di.ignoreCount > 0) {
-      return await this.logsDiService.addBLPDFLogs(
+      let addbllogspdf = await this.logsDiService.addBLPDFLogs(
         di._id,
         di.ignoreCount,
         `${randompdfFile}.${extension}`,
       );
+      this.notificationGateway.blAddedNotification({
+        di,
+        message: `A new BL has been added for DI ${di._idnum} with ignore count ${di.ignoreCount}`,
+      });
+
+      return addbllogspdf;
     } else {
-      return await this.diModel.updateOne(
+      const addbl = await this.diModel.updateOne(
         { _id },
         { $set: { bon_de_livraison: `${randompdfFile}.${extension}` } },
       );
+
+      this.notificationGateway.blAddedNotification({
+        di,
+        message: {
+          role: 'MAGASIN',
+          content: `A new BL has been added for DI ${di._idnum}`,
+        },
+      });
+      return addbl;
     }
   }
 
@@ -350,7 +367,6 @@ export class DiService {
   ) {
     const { first, rows } = paginationConfig;
     const { field, value } = search;
-    console.log(search);
 
     // Base filter
     const filter: any = { isDeleted: false };
@@ -366,8 +382,11 @@ export class DiService {
         case '_id':
         case '_idnum':
         case 'title':
-        case 'status':
           filter[field] = regex;
+          break;
+
+        case 'status':
+          filter.$and = [...(filter.$and ?? []), { status: regex }];
           break;
 
         case 'company':
@@ -436,8 +455,6 @@ export class DiService {
           break;
       }
     }
-
-    console.log('🍉[filter]:', JSON.stringify(filter, null, 2));
 
     // COUNT
     const totalDiCount = await this.diModel.countDocuments(filter);
@@ -630,7 +647,7 @@ export class DiService {
         _idNotification,
         confirmationComposant,
       );
-      this.notificationGateway.confirmComposant(reply);
+      this.notificationGateway.confirmComposant(reply); //
     }
 
     return result;
@@ -735,7 +752,6 @@ export class DiService {
     const pricingNeg = await this.diModel.findOne({ _id: _idDi });
 
     if (pricingNeg && pricingNeg.ignoreCount && pricingNeg.ignoreCount > 0) {
-      console.log('log');
       return this.logsDiService.savePricing(
         _idDi,
         pricingNeg.ignoreCount,
@@ -743,7 +759,6 @@ export class DiService {
         final_price,
       );
     } else {
-      console.log('org');
       return await this.diModel.findOneAndUpdate(
         { _id: _idDi },
         {
@@ -829,7 +844,6 @@ export class DiService {
 
   //Tech finsih diagnostic
   async tech_startDiagnostic(_idDI: string, diag: DiagUpdate) {
-    console.log(diag, 'diag info');
     const didata = await this.diModel.findOne({ _id: _idDI });
     if (didata && didata.ignoreCount && didata.ignoreCount > 0) {
       return await this.logsDiService.tech_startDiagnostic(
@@ -1231,13 +1245,7 @@ export class DiService {
 
     // ✅ Coordinator base filter
     const filter: any = {
-      status: {
-        $nin: [
-          STATUS_DI.Created.status,
-          STATUS_DI.Finished.status,
-          STATUS_DI.Annuler.status,
-        ],
-      },
+      status: { $in: COORDINATOR_STATUS_DI_VALUES },
       isDeleted: false,
     };
 
@@ -1249,8 +1257,11 @@ export class DiService {
         case '_id':
         case '_idnum':
         case 'title':
-        case 'status':
           filter[field] = regex;
+          break;
+
+        case 'status':
+          filter.$and = [...(filter.$and ?? []), { status: regex }];
           break;
 
         case 'company': {
@@ -1352,21 +1363,13 @@ export class DiService {
       }),
     );
 
-    console.log('di', di);
-
     return { di, totalDiCount };
   }
 
   // *Query For Coordinator
   async get_coordinatorDI(paginationConfig: PaginationConfigDi) {
     const queryCoordinator = {
-      status: {
-        $nin: [
-          STATUS_DI.Created.status,
-          STATUS_DI.Finished.status,
-          STATUS_DI.Annuler.status,
-        ],
-      },
+      status: { $in: COORDINATOR_STATUS_DI_VALUES },
       isDeleted: false,
     };
     const { first, rows } = paginationConfig;
@@ -1442,15 +1445,7 @@ export class DiService {
       .find({
         current_workers_ids: tech_id,
         status: {
-          $in: [
-            STATUS_DI.Diagnostic.status,
-            STATUS_DI.InDiagnostic.status,
-            STATUS_DI.Reparation.status,
-            STATUS_DI.InReparation.status,
-            STATUS_DI.Retour1.status,
-            STATUS_DI.Retour2.status,
-            STATUS_DI.Retour3.status,
-          ],
+          $in: TECH_STATUS_DI_VALUES,
         },
       })
       .then((res) => {
@@ -1462,14 +1457,16 @@ export class DiService {
   }
   //! working here
   async getDiForMagasin(paginationConfig: PaginationConfigDi) {
-    const queryCoordinator = {
+    const queryMagasin = {
       contain_pdr: true,
+      status: { $in: MAGASIN_STATUS_DI_VALUES },
+      isDeleted: false,
     };
 
     const { first, rows } = paginationConfig;
-    const totalDiCount = await this.diModel.countDocuments(queryCoordinator);
+    const totalDiCount = await this.diModel.countDocuments(queryMagasin);
     const di = await this.diModel
-      .find({ isDeleted: false, ...queryCoordinator })
+      .find(queryMagasin)
       .sort({ createdAt: -1 })
       .limit(rows)
       .skip(first);
@@ -1482,13 +1479,12 @@ export class DiService {
     search: { field: string; value: string },
   ) {
     const { first, rows } = paginationConfig;
-    console.log('paginationConfig', paginationConfig);
     const { field, value } = search;
-    console.log('search', search);
 
     // ✅ Base filter
     const filter: any = {
       contain_pdr: true,
+      status: { $in: MAGASIN_STATUS_DI_VALUES },
       isDeleted: false,
     };
 
@@ -1498,10 +1494,16 @@ export class DiService {
       value.trim().length >= 2 &&
       ['title', 'status'].includes(field)
     ) {
-      filter[field] = {
+      const regex = {
         $regex: value.trim(),
         $options: 'i',
       };
+
+      if (field === 'status') {
+        filter.$and = [...(filter.$and ?? []), { status: regex }];
+      } else {
+        filter[field] = regex;
+      }
     }
 
     // 🔢 Count
@@ -1514,7 +1516,6 @@ export class DiService {
       .limit(rows)
       .skip(first)
       .exec();
-    console.log('diRecords', diRecords);
     return { di: diRecords, totalDiCount };
   }
 
@@ -1621,7 +1622,6 @@ export class DiService {
   }
 
   async changeStatusInDiagnostic(_id: any) {
-    console.log(_id);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
@@ -2245,15 +2245,18 @@ export class DiService {
   }
   //function that send confirmation composant from magasin to coordinatoor
   async sendComponentToConMagasinForConfirmation(_id: string) {
-    let isSentToCoordinator: any;
     const di = await this.diModel.findOne({ _id });
-    if (di && di.ignoreCount && di.ignoreCount > 0) {
-      isSentToCoordinator = await this.logsDiService.isSentToCoordinator(
+    if (!di) return null;
+
+    let updated;
+
+    if (di.ignoreCount && di.ignoreCount > 0) {
+      updated = await this.logsDiService.isSentToCoordinator(
         _id,
         di.ignoreCount,
       );
     } else {
-      isSentToCoordinator = await this.diModel.findOneAndUpdate(
+      updated = await this.diModel.findOneAndUpdate(
         { _id },
         {
           $set: {
@@ -2261,35 +2264,34 @@ export class DiService {
             handleSendingNotificationBetweenCoordinatorAndMagasin: 'IN_MAGASIN',
           },
         },
-        { new: true },
+        { new: true }, // 🔥 IMPORTANT FIX
       );
     }
 
-    if (isSentToCoordinator) {
-      const dataToSend = {
-        _id: isSentToCoordinator._id,
-        array_composants: isSentToCoordinator.array_composants,
-        isSentToCoordinator: isSentToCoordinator.isSentToCoordinator,
-      };
-      this.notificationGateway.sendComponenttoCoordinatorFromMagasin(
-        dataToSend,
-      );
-    }
+    if (!updated) return null;
 
-    return isSentToCoordinator;
+    const payload = this.buildPayload(updated, {
+      isSentToCoordinator: true,
+      event: 'SENT_TO_COORDINATOR',
+    });
+
+    this.notificationGateway.sendComponentToCoordinatorFromMagasin(payload);
+    return updated;
   }
 
   async componentConfirmedFromCoordinator(_id: string) {
-    let isConfirmedComponentFromCoordinator;
     const di = await this.diModel.findOne({ _id });
-    if (di && di.ignoreCount && di.ignoreCount > 0) {
-      isConfirmedComponentFromCoordinator =
-        await this.logsDiService.componentConfirmedFromCoordinator(
-          _id,
-          di.ignoreCount,
-        );
+    if (!di) return null;
+
+    let updated;
+
+    if (di.ignoreCount && di.ignoreCount > 0) {
+      updated = await this.logsDiService.componentConfirmedFromCoordinator(
+        _id,
+        di.ignoreCount,
+      );
     } else {
-      isConfirmedComponentFromCoordinator = await this.diModel.findOneAndUpdate(
+      updated = await this.diModel.findOneAndUpdate(
         { _id },
         {
           $set: {
@@ -2297,21 +2299,26 @@ export class DiService {
             handleSendingNotificationBetweenCoordinatorAndMagasin: 'DEFAULT',
           },
         },
+        { new: true }, // 🔥 IMPORTANT FIX
       );
     }
 
-    if (isConfirmedComponentFromCoordinator) {
-      const dataToSend = {
-        _id: isConfirmedComponentFromCoordinator._id,
-        array_composants: isConfirmedComponentFromCoordinator.array_composants,
-        isConfirmedComponentFromCoordinator:
-          isConfirmedComponentFromCoordinator.isConfirmedComponentFromCoordinator,
-      };
-      this.notificationGateway.sendComponenttoCoordinatorFromMagasin(
-        dataToSend,
-      );
-    }
+    if (!updated) return null;
 
-    return isConfirmedComponentFromCoordinator;
+    const payload = this.buildPayload(updated, {
+      isConfirmedComponentFromCoordinator: true,
+      event: 'CONFIRMED_BY_COORDINATOR',
+    });
+
+    this.notificationGateway.sendComponentToMagasinFromCoordinator(payload);
+
+    return updated;
+  }
+  private buildPayload(di: any, extra: any) {
+    return {
+      _id: di._idnum,
+      array_composants: di.array_composants,
+      ...extra,
+    };
   }
 }
