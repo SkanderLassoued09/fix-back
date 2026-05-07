@@ -16,11 +16,6 @@ export class CreateProfileInput {
   role: string;
   @Field({ nullable: true })
   email: string;
-
-  // @Field()
-  // createdAt: Date;
-  // @Field()
-  // updatedAt: Date;
 }
 
 @ObjectType()

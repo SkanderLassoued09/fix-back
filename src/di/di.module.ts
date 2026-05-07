@@ -27,6 +27,7 @@ import {
   Location,
   LocationSchema,
 } from 'src/location/entities/location.entity';
+import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 
 @Module({
   providers: [
@@ -35,6 +36,7 @@ import {
     StatService,
     NotificationsGateway,
     ProfileService,
+    DiscordHookService,
   ],
   imports: [
     PubSubModule,

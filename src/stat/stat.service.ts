@@ -17,6 +17,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Profile } from 'src/profile/entities/profile.entity';
 import { Company } from 'src/company/entities/company.entity';
 import { Client } from 'src/clients/entities/client.entity';
+import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 @Injectable()
 export class StatService {
   constructor(
@@ -29,6 +30,7 @@ export class StatService {
     private readonly notificationGateway: NotificationsGateway,
     private readonly profileService: ProfileService,
     private readonly logsDiService: LogsDiService,
+    private readonly discordHookService: DiscordHookService,
   ) {}
 
   async generateStatId(): Promise<number> {
@@ -50,9 +52,11 @@ export class StatService {
 
   async createStat(createStatInput: CreateStatInput): Promise<Stat> {
     const index = await this.generateStatId();
-    // Fetch the di entity
+
     createStatInput._id = uuidv4();
+
     const di = await this.diModel.findOne({ _id: createStatInput._idDi });
+
     if (di.ignoreCount > 0) {
       createStatInput.ignoreCount = di.ignoreCount;
       await this.logsDiService.create(createStatInput._idDi, di.ignoreCount);
@@ -64,25 +68,29 @@ export class StatService {
       throw new InternalServerErrorException('Unable to create');
     }
 
-    // Fetch the statTech entity (statistic)
     const statTech = await this.StatModel.findOne({ _id: result._id });
 
-    // Add the status from di to statTech
     const statWithStatus = {
-      ...statTech.toObject(), // Convert statTech to a plain object
-      status: di?.status || null, // Add the status from di, set null if not found
+      ...statTech.toObject(),
+      status: di?.status || null,
     };
-
-    // Log the updated statTech with status
 
     const profile = await this.profileService.findProlileById(
       result.id_tech_diag,
     );
 
-    // Send the notification with the profile and updated statTech (with status)
-    const payload = { profile, stat: statWithStatus };
+    // 🔔 Discord notification
+    try {
+      await this.discordHookService.sendDiAssignedToTech({
+        di,
+        stat: statWithStatus,
+        technician: profile,
+      });
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
 
-    // this.notificationGateway.sendNotificationDiag(payload);
+    // existing socket notification
     this.notificationGateway.updateTicket({
       action: 'updateState',
       content: { di, states: statWithStatus },

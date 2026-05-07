@@ -21,14 +21,15 @@ import { join } from 'path';
 import { AuditModule } from './audit/audit.module';
 import { LogsDiModule } from './logs-di/logs-di.module';
 import { DashboardKpiModule } from './dashboard-kpi/dashboard-kpi.module';
+import { DiscordHookModule } from './discord-hook/discord-hook.module';
 
 @Module({
   imports: [
     LocationModule,
     CompanysModule,
     MongooseModule.forRoot(
-      'mongodb+srv://benjemianezih:fixtronix@fixtronixdatabase.1xkjlbq.mongodb.net/',
-      // 'mongodb://localhost:27017/fixtronix',
+      // 'mongodb+srv://benjemianezih:fixtronix@fixtronixdatabase.1xkjlbq.mongodb.net/',
+      'mongodb://localhost:27017/fixtronix',
     ),
     GraphQLModule.forRoot<ApolloDriverConfig>({
       driver: ApolloDriver,
@@ -54,6 +55,7 @@ import { DashboardKpiModule } from './dashboard-kpi/dashboard-kpi.module';
     AuditModule,
     LogsDiModule,
     DashboardKpiModule,
+    DiscordHookModule,
   ],
   controllers: [],
   providers: [],

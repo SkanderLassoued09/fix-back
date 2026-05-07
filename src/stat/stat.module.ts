@@ -15,9 +15,16 @@ import {
 } from 'src/location/entities/location.entity';
 import { Company, CompanySchema } from 'src/company/entities/company.entity';
 import { Client, ClientSchema } from 'src/clients/entities/client.entity';
+import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 
 @Module({
-  providers: [StatResolver, StatService, NotificationsGateway, ProfileService],
+  providers: [
+    StatResolver,
+    StatService,
+    NotificationsGateway,
+    ProfileService,
+    DiscordHookService,
+  ],
   imports: [
     LogsDiModule,
     PubSubModule,

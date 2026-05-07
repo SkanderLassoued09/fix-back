@@ -52,6 +52,8 @@ import {
   Location,
   LocationDocument,
 } from 'src/location/entities/location.entity';
+import { DiscordHook } from 'src/discord-hook/entities/discord-hook.entity';
+import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 @Injectable()
 export class DiService {
   constructor(
@@ -72,6 +74,7 @@ export class DiService {
     private readonly notificationGateway: NotificationsGateway,
     private readonly auditService: AuditService,
     private readonly logsDiService: LogsDiService,
+    private readonly discordHookService: DiscordHookService,
   ) {}
 
   async generateClientId(): Promise<number> {
@@ -88,36 +91,42 @@ export class DiService {
     return indexClient;
   }
 
-  async createDi(createDiInput: CreateDiInput): Promise<Di> {
-    if (createDiInput.image.length !== 0) {
-      const extension = getFileExtension(createDiInput.image);
-      const buffer = Buffer.from(
-        createDiInput.image.split(',')[1],
-        'base64',
-      ) as any;
-      const randompdfFile = randomstring.generate({
-        length: 12,
-        charset: 'alphabetic',
-      });
-      fs.writeFileSync(
-        join(__dirname, `../../docs/${randompdfFile}.${extension}`),
-        buffer,
-      );
-      createDiInput.image = `${randompdfFile}.${extension}`;
-    }
-    // --
-    const index = await this.generateClientId();
-    createDiInput._id = `DI_${nanoid(4)}`;
-    createDiInput._idnum = `DI${index}`;
+  async createDi(createDiInput: CreateDiInput): Promise<any> {
+    try {
+      // 🖼️ Handle image
+      if (createDiInput.image?.length) {
+        const extension = getFileExtension(createDiInput.image);
 
-    return await new this.diModel(createDiInput)
-      .save()
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+        const buffer = Buffer.from(createDiInput.image.split(',')[1], 'base64');
+
+        const fileName = `${randomstring.generate({
+          length: 12,
+          charset: 'alphabetic',
+        })}.${extension}`;
+
+        fs.writeFileSync(join(__dirname, `../../docs/${fileName}`), buffer);
+
+        createDiInput.image = fileName;
+      }
+
+      // 🆔 Generate IDs
+      const index = await this.generateClientId();
+      createDiInput._id = `DI_${nanoid(4)}`;
+      createDiInput._idnum = `DI${index}`;
+
+      // 💾 Save
+      const di = await new this.diModel(createDiInput).save();
+
+      // 🔔 Notify (only if pending)
+      if (di.status === 'PENDING1') {
+        this.discordHookService.sendDiPendingNotification(di);
+      }
+
+      return di;
+    } catch (error) {
+      console.error('createDi error:', error);
+      throw new Error('Failed to create DI');
+    }
   }
 
   /**
@@ -187,29 +196,45 @@ export class DiService {
 
   async addDevisPDF(_id: string, pdf: string) {
     const extension = getFileExtension(pdf);
-    const buffer = Buffer.from(pdf.split(',')[1], 'base64') as any;
+    const buffer = Buffer.from(pdf.split(',')[1], 'base64');
 
     const randompdfFile = randomstring.generate({
       length: 12,
       charset: 'alphabetic',
     });
-    fs.writeFileSync(
-      join(__dirname, `../../docs/${randompdfFile}.${extension}`),
-      buffer,
-    );
+
+    const fileName = `${randompdfFile}.${extension}`;
+
+    fs.writeFileSync(join(__dirname, `../../docs/${fileName}`), buffer);
+
     const di = await this.diModel.findOne({ _id });
+
+    let result;
+
     if (di && di.ignoreCount && di.ignoreCount > 0) {
-      return await this.logsDiService.addDevisPDFLogs(
+      result = await this.logsDiService.addDevisPDFLogs(
         di._id,
         di.ignoreCount,
-        `${randompdfFile}.${extension}`,
+        fileName,
       );
     } else {
-      return await this.diModel.updateOne(
+      result = await this.diModel.updateOne(
         { _id },
-        { $set: { devis: `${randompdfFile}.${extension}` } },
+        { $set: { devis: fileName } },
       );
     }
+
+    // 🔔 Discord notification (Devis uploaded)
+    try {
+      await this.discordHookService.sendDiDevisUploaded({
+        di,
+        fileName,
+      });
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
+
+    return result;
   }
 
   async addBlPDF(_id: string, pdf: string) {
@@ -283,30 +308,45 @@ export class DiService {
 
   async addBCPDF(_id: string, pdf: string) {
     const extension = getFileExtension(pdf);
-    const buffer = Buffer.from(pdf.split(',')[1], 'base64') as any;
+    const buffer = Buffer.from(pdf.split(',')[1], 'base64');
 
     const randompdfFile = randomstring.generate({
       length: 12,
       charset: 'alphabetic',
     });
-    fs.writeFileSync(
-      join(__dirname, `../../docs/${randompdfFile}.${extension}`),
-      buffer,
-    );
+
+    const fileName = `${randompdfFile}.${extension}`;
+
+    fs.writeFileSync(join(__dirname, `../../docs/${fileName}`), buffer);
 
     const di = await this.diModel.findOne({ _id });
+
+    let result;
+
     if (di && di.ignoreCount && di.ignoreCount > 0) {
-      return await this.logsDiService.addBCPDFLogs(
+      result = await this.logsDiService.addBCPDFLogs(
         di._id,
         di.ignoreCount,
-        `${randompdfFile}.${extension}`,
+        fileName,
       );
     } else {
-      return await this.diModel.updateOne(
+      result = await this.diModel.updateOne(
         { _id },
-        { $set: { bon_de_commande: `${randompdfFile}.${extension}` } },
+        { $set: { bon_de_commande: fileName } },
       );
     }
+
+    // 🔔 Discord notification (BC uploaded)
+    try {
+      await this.discordHookService.sendDiBCUploaded({
+        di,
+        fileName,
+      });
+    } catch (err) {
+      console.error('Discord notification failed:', err.message);
+    }
+
+    return result;
   }
 
   // async getDiById(_id:string){
@@ -845,14 +885,17 @@ export class DiService {
   //Tech finsih diagnostic
   async tech_startDiagnostic(_idDI: string, diag: DiagUpdate) {
     const didata = await this.diModel.findOne({ _id: _idDI });
+
+    let updatedDi;
+
     if (didata && didata.ignoreCount && didata.ignoreCount > 0) {
-      return await this.logsDiService.tech_startDiagnostic(
+      updatedDi = await this.logsDiService.tech_startDiagnostic(
         didata._id,
         didata.ignoreCount,
         diag,
       );
     } else {
-      return await this.diModel.findOneAndUpdate(
+      updatedDi = await this.diModel.findOneAndUpdate(
         { _id: _idDI },
         {
           $set: {
@@ -864,8 +907,21 @@ export class DiService {
             isErrorFromFixtronix: diag.isErrorFromFixtronix ?? false,
           },
         },
+        { new: true },
       );
     }
+
+    // 🔔 Discord notification (diagnostic finished)
+    try {
+      await this.discordHookService.sendDiagnosticFinished({
+        di: updatedDi || didata,
+        diag,
+      });
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
+
+    return updatedDi;
   }
 
   async getStatusCount() {
@@ -1063,15 +1119,23 @@ export class DiService {
       throw new Error('Issue in changing state changeStatusTofinsh');
     }
 
+    // ✅ Fix: call statsService only once
     if (result.ignoreCount > 0) {
-      this.statsService.updateStatus(
+      await this.statsService.updateStatus(
         _id,
         STATUS_DI.Finished.status,
         result.ignoreCount,
       );
+    } else {
+      await this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
     }
 
-    await this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
+    // 🔔 Discord notification (Finished)
+    try {
+      await this.discordHookService.sendDiFinished(result);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
 
     return result;
   }
@@ -1550,14 +1614,16 @@ export class DiService {
   async affectinitialPrice(_id: string, price: number) {
     const pricing = await this.diModel.findOne({ _id });
 
+    let updatedDi;
+
     if (pricing && pricing.ignoreCount && pricing.ignoreCount > 0) {
-      return await this.logsDiService.savePricing(
+      updatedDi = await this.logsDiService.savePricing(
         pricing._id,
         pricing.ignoreCount,
         price,
       );
     } else {
-      return await this.diModel.findOneAndUpdate(
+      updatedDi = await this.diModel.findOneAndUpdate(
         { _id },
         {
           $set: {
@@ -1567,31 +1633,51 @@ export class DiService {
         { new: true },
       );
     }
-  }
 
-  async countIgnore(_id: string) {
-    const countIgnore = await this.diModel.findOne({ _id });
-    let { ignoreCount } = countIgnore;
-    if (ignoreCount < 3) {
-      ignoreCount++;
+    // 🔔 Discord notification (price assigned)
+    try {
+      await this.discordHookService.sendDiPriceAssigned({
+        di: updatedDi || pricing,
+        price,
+      });
+    } catch (err) {
+      console.error('Discord notification failed:', err);
     }
-    const isignore = await this.diModel.updateOne(
+
+    return updatedDi;
+  }
+  async countIgnore(_id: string) {
+    const di = await this.diModel.findOne({ _id });
+
+    if (!di) {
+      throw new Error('DI not found');
+    }
+
+    let newIgnoreCount = di.ignoreCount || 0;
+
+    if (newIgnoreCount < 3) {
+      newIgnoreCount++;
+    }
+
+    const updated = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
-          ignoreCount,
+          ignoreCount: newIgnoreCount,
         },
       },
+      { new: true },
     );
 
-    if (isignore.matchedCount === 0) {
+    // 🔔 Discord notification (ignore incremented)
+    try {
+      await this.discordHookService.sendDiIgnored(updated);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
     }
 
-    const v = await this.diModel.findOne({ _id });
-
-    return v;
+    return updated;
   }
-
   async getAllRemarque(_idDI: string) {
     return await this.diModel.findOne({ _id: _idDI }).exec();
   }
@@ -1600,24 +1686,35 @@ export class DiService {
    * Changing status di section
    */
   async changeStatusPending1(_id: string) {
-    const result = await this.diModel.updateOne(
+    const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
           status: STATUS_DI.Pending1.status,
         },
       },
+      { new: true },
     );
+
+    if (!result) {
+      throw new Error('Issue in changeStatusPending1');
+    }
 
     await this.statsService.updateStatus(_id, STATUS_DI.Pending1.status);
 
-    const di = this.getDiById(_id);
+    // 🔔 Discord notification (Pending1)
+    try {
+      await this.discordHookService.sendDiStatusPending1(result);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { result, states: result },
       target: {},
     });
+
     return result;
   }
 
@@ -1666,7 +1763,7 @@ export class DiService {
     );
 
     if (!result) {
-      throw new Error('Issue in changeStatusInMagasin ');
+      throw new Error('Issue in changeStatusInMagasin');
     }
 
     if (result.ignoreCount > 0) {
@@ -1679,11 +1776,19 @@ export class DiService {
       await this.statsService.updateStatus(_id, STATUS_DI.InMagasin.status);
     }
 
+    // Discord notification
+    try {
+      await this.discordHookService.sendDiInMagasin(result);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
+
     this.notificationGateway.updateTicket({
       action: 'updateState',
       content: { result, states: result },
       target: {},
     });
+
     return result;
   }
 
@@ -1731,6 +1836,7 @@ export class DiService {
           status: STATUS_DI.Pending2.status,
         },
       },
+      { new: true }, // 👈 important
     );
 
     if (!result) {
@@ -1747,11 +1853,20 @@ export class DiService {
       await this.statsService.updateStatus(_id, STATUS_DI.Pending2.status);
     }
 
+    // 🔔 Discord notification (status changed to Pending2)
+    try {
+      await this.discordHookService.sendDiStatusPending2(result);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
+
+    // existing socket notification
     this.notificationGateway.updateTicket({
       action: 'updateState',
       content: { result, states: result },
       target: {},
     });
+
     return result;
   }
 
@@ -1780,6 +1895,14 @@ export class DiService {
       await this.statsService.updateStatus(_id, STATUS_DI.Pricing.status);
     }
 
+    // 🔔 Discord notification (Pricing stage)
+    try {
+      await this.discordHookService.sendDiPricing(result);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
+
+    // existing notifications
     this.notificationGateway.sendNotifcationToAdmins(
       'Veuillez affecter le prix de ce DI',
     );
@@ -1789,6 +1912,7 @@ export class DiService {
       content: { result, states: result },
       target: {},
     });
+
     return result;
   }
 
@@ -1870,7 +1994,7 @@ export class DiService {
     );
 
     if (!result) {
-      throw new Error('Issue in changeStatusPending3 ');
+      throw new Error('Issue in changeStatusPending3');
     }
 
     if (result.ignoreCount > 0) {
@@ -1882,6 +2006,15 @@ export class DiService {
     } else {
       await this.statsService.updateStatus(_id, STATUS_DI.Pending3.status);
     }
+
+    // 🔔 Discord notification (Pending3)
+    try {
+      await this.discordHookService.sendDiStatusPending3(result);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
+
+    // existing socket notification
     this.notificationGateway.updateTicket({
       action: 'updateState',
       content: { result, states: result },
@@ -1916,11 +2049,19 @@ export class DiService {
       await this.statsService.updateStatus(_id, STATUS_DI.Reparation.status);
     }
 
+    // 🔔 Discord notification (Reparation started)
+    try {
+      await this.discordHookService.sendDiInReparation(result);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
+
     this.notificationGateway.updateTicket({
       action: 'updateState',
       content: { result, states: result },
       target: {},
     });
+
     return result;
   }
 
@@ -2264,7 +2405,7 @@ export class DiService {
             handleSendingNotificationBetweenCoordinatorAndMagasin: 'IN_MAGASIN',
           },
         },
-        { new: true }, // 🔥 IMPORTANT FIX
+        { new: true },
       );
     }
 
@@ -2275,7 +2416,16 @@ export class DiService {
       event: 'SENT_TO_COORDINATOR',
     });
 
+    // 🔔 Discord notification
+    try {
+      await this.discordHookService.sendComponentsSentToCoordinator(updated);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
+
+    // existing socket notification
     this.notificationGateway.sendComponentToCoordinatorFromMagasin(payload);
+
     return updated;
   }
 
@@ -2299,7 +2449,7 @@ export class DiService {
             handleSendingNotificationBetweenCoordinatorAndMagasin: 'DEFAULT',
           },
         },
-        { new: true }, // 🔥 IMPORTANT FIX
+        { new: true },
       );
     }
 
@@ -2310,6 +2460,16 @@ export class DiService {
       event: 'CONFIRMED_BY_COORDINATOR',
     });
 
+    // 🔔 Discord notification
+    try {
+      await this.discordHookService.sendComponentsConfirmedByCoordinator(
+        updated,
+      );
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
+
+    // existing socket notification
     this.notificationGateway.sendComponentToMagasinFromCoordinator(payload);
 
     return updated;
