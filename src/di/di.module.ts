@@ -27,7 +27,8 @@ import {
   Location,
   LocationSchema,
 } from 'src/location/entities/location.entity';
-import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
+import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
+import { DiWorkflowService } from './workflow/di-workflow.service';
 
 @Module({
   providers: [
@@ -36,9 +37,10 @@ import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
     StatService,
     NotificationsGateway,
     ProfileService,
-    DiscordHookService,
+    DiWorkflowService,
   ],
   imports: [
+    DiscordHookModule,
     PubSubModule,
     AuditModule,
     LogsDiModule,

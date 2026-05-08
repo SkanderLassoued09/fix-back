@@ -15,7 +15,7 @@ import {
 } from 'src/location/entities/location.entity';
 import { Company, CompanySchema } from 'src/company/entities/company.entity';
 import { Client, ClientSchema } from 'src/clients/entities/client.entity';
-import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
+import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
 
 @Module({
   providers: [
@@ -23,9 +23,9 @@ import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
     StatService,
     NotificationsGateway,
     ProfileService,
-    DiscordHookService,
   ],
   imports: [
+    DiscordHookModule,
     LogsDiModule,
     PubSubModule,
     MongooseModule.forFeature([

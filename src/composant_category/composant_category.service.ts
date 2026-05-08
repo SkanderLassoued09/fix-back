@@ -29,8 +29,27 @@ export class Composant_CategoryService {
   async createComposant_Category(
     createComposant_CategoryInput: CreateComposant_CategoryInput,
   ): Promise<Composant_Category> {
+    const normalizedCategory =
+      createComposant_CategoryInput.category_composant?.trim();
+    if (!normalizedCategory) {
+      throw new Error('Composant category name is required');
+    }
+    const escapedCategory = normalizedCategory.replace(
+      /[.*+?^${}()|[\]\\]/g,
+      '\\$&',
+    );
+    const existing = await this.Composant_CategoryModel.findOne({
+      category_composant: { $regex: `^${escapedCategory}$`, $options: 'i' },
+      isDeleted: false,
+    });
+
+    if (existing) {
+      return existing;
+    }
+
     const index = await this.generateComposant_CategoryId();
     createComposant_CategoryInput._id = `C_Composant${index}`;
+    createComposant_CategoryInput.category_composant = normalizedCategory;
     return await new this.Composant_CategoryModel(createComposant_CategoryInput)
       .save()
       .then((res) => {

@@ -11,7 +11,7 @@ export class ComposantDocument extends Document {
   name: string;
   @Prop()
   package: string;
-  @Prop()
+  @Prop({ type: String, ref: 'Composant_Category' })
   category_composant_id: string;
   @Prop()
   prix_achat: number;
@@ -31,6 +31,7 @@ export class ComposantDocument extends Document {
   isDeleted: boolean;
 }
 export const ComposantSchema = SchemaFactory.createForClass(ComposantDocument);
+ComposantSchema.index({ category_composant_id: 1, isDeleted: 1 });
 @ObjectType()
 export class Composant {
   @Field({ nullable: true })

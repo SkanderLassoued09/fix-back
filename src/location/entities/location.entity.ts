@@ -15,12 +15,18 @@ export class LocationDocument extends Document {
   max_capacity: number;
   @Prop()
   current_item_stored: number;
+  @Prop({ default: 0, min: 0 })
+  storedDiCount: number;
+  @Prop({ default: false })
+  hasStoredDi: boolean;
   @Prop()
   avaible: boolean;
   @Prop({ default: false })
   isDeleted: boolean;
 }
 export const LocationSchema = SchemaFactory.createForClass(LocationDocument);
+LocationSchema.index({ location_name: 1 });
+LocationSchema.index({ hasStoredDi: 1, storedDiCount: 1 });
 @ObjectType()
 export class Location {
   @Field()
@@ -35,6 +41,10 @@ export class Location {
   max_capacity: number;
   @Field(() => Int, { nullable: true })
   current_item_stored: number;
+  @Field(() => Int, { nullable: true })
+  storedDiCount: number;
+  @Field({ nullable: true })
+  hasStoredDi: boolean;
   @Field({ defaultValue: true })
   avaible: boolean;
   @Field()

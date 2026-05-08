@@ -1,15 +1,192 @@
 import { Injectable } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 import axios from 'axios';
+import { Client } from 'src/clients/entities/client.entity';
+import { Company } from 'src/company/entities/company.entity';
+import { Profile } from 'src/profile/entities/profile.entity';
+
+// Centralized human-readable status labels with color emoji prefix.
+// New raw enum values added to STATUS_DI MUST be added here so embeds
+// never leak the raw enum name to Discord.
+const STATUS_LABELS: Record<string, string> = {
+  CREATED: '🆕 Created',
+  PENDING1: '🟡 Pending Diagnostic',
+  DIAGNOSTIC: '🧭 Diagnostic Assigned',
+  DIAGNOSTIC_Pause: '⏸️ Diagnostic Paused',
+  INDIAGNOSTIC: '🔍 In Diagnostic',
+  MagasinEstimation: '🏬 Magasin Estimation',
+  INMAGASIN: '🏬 In Magasin',
+  PENDING2: '📦 Pending Pricing',
+  PRICING: '💰 In Pricing',
+  NEGOTIATION1: '🤝 Negotiation 1 (Manager)',
+  NEGOTIATION2: '🤝 Negotiation 2 (Admin)',
+  ANNULER: '❌ Cancelled',
+  PENDING3: '🚚 Pending Reparation',
+  REPARATION: '🛠️ Reparation Assigned',
+  REPARATION_Pause: '⏸️ Reparation Paused',
+  INREPARATION: '🔧 In Reparation',
+  FINISHED: '✅ Finished',
+  RETOUR1: '🔁 Retour 1',
+  RETOUR2: '🔁 Retour 2',
+  RETOUR3: '⚠️ Retour 3',
+};
+
+interface EmbedContext {
+  idnum: string;
+  title: string;
+  clientName: string;
+  companyName: string;
+  customerLabel: string; // company if present, otherwise client
+  customerFieldName: string; // '🏢 Company' or '👤 Client'
+  statusLabel: string;
+}
 
 @Injectable()
 export class DiscordHookService {
   private readonly webhookUrl =
     'https://discord.com/api/webhooks/1501210507581984859/EgrS4cT9DrGOnzrJcAJmZWelTKB0Iw-Gi7PVl7Z1hOrkQ4XEWGbk2A4V6l0-3AKZJhB1';
 
+  constructor(
+    @InjectModel(Client.name) private readonly clientModel: Model<any>,
+    @InjectModel(Company.name) private readonly companyModel: Model<any>,
+    @InjectModel(Profile.name) private readonly profileModel: Model<any>,
+  ) {}
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Centralized resolvers — every embed routes through these so no raw
+  // ObjectIds, UUIDs, or enum values can leak to Discord.
+  // ─────────────────────────────────────────────────────────────────────
+
+  resolveStatusLabel(status: string | undefined | null): string {
+    if (!status) return 'Unknown';
+    return STATUS_LABELS[status] || status;
+  }
+
+  private formatProfile(p: any): string {
+    if (!p) return 'N/A';
+    if (p.username) return p.username;
+    const full = `${p.firstName || ''} ${p.lastName || ''}`.trim();
+    return full || 'N/A';
+  }
+
+  async resolveProfileDisplay(value: any): Promise<string> {
+    if (!value) return 'N/A';
+    if (typeof value === 'object') {
+      const display = this.formatProfile(value);
+      if (display !== 'N/A') return display;
+      // object lacks username/name fields — fall back to id lookup
+      if (value._id) {
+        const p = await this.profileModel.findOne({ _id: value._id }).lean();
+        return this.formatProfile(p);
+      }
+      return 'N/A';
+    }
+    if (typeof value === 'string') {
+      // looks like an id — resolve. If it doesn't match a profile, return
+      // 'N/A' rather than echoing the raw string (avoid id leak).
+      const p = await this.profileModel.findOne({ _id: value }).lean();
+      return this.formatProfile(p);
+    }
+    return 'N/A';
+  }
+
+  private formatClient(c: any): string {
+    if (!c) return '';
+    return `${c.first_name || ''} ${c.last_name || ''}`.trim();
+  }
+
+  private async resolveClientName(value: any): Promise<string> {
+    if (!value) return '';
+    if (typeof value === 'object') {
+      const display = this.formatClient(value);
+      if (display) return display;
+      if (value._id) {
+        const c = await this.clientModel.findOne({ _id: value._id }).lean();
+        return this.formatClient(c);
+      }
+      return '';
+    }
+    if (typeof value === 'string') {
+      const c = await this.clientModel.findOne({ _id: value }).lean();
+      return this.formatClient(c);
+    }
+    return '';
+  }
+
+  private async resolveCompanyName(value: any): Promise<string> {
+    if (!value) return '';
+    if (typeof value === 'object') {
+      if (value.name) return value.name;
+      if (value._id) {
+        const co: any = await this.companyModel
+          .findOne({ _id: value._id })
+          .lean();
+        return co?.name || '';
+      }
+      return '';
+    }
+    if (typeof value === 'string') {
+      const co: any = await this.companyModel.findOne({ _id: value }).lean();
+      return co?.name || '';
+    }
+    return '';
+  }
+
+  async buildContext(di: any): Promise<EmbedContext> {
+    const idnum = di?._idnum || 'N/A';
+    const title = di?.title || 'N/A';
+    const [clientName, companyName] = await Promise.all([
+      this.resolveClientName(di?.client_id),
+      this.resolveCompanyName(di?.company_id),
+    ]);
+    const useCompany = Boolean(companyName);
+    return {
+      idnum,
+      title,
+      clientName: clientName || 'N/A',
+      companyName: companyName || 'N/A',
+      customerLabel: useCompany ? companyName : clientName || 'N/A',
+      customerFieldName: useCompany ? '🏢 Company' : '👤 Client',
+      statusLabel: this.resolveStatusLabel(di?.status),
+    };
+  }
+
+  // Build the standard 4-field skeleton: DI Number, Title, Customer, Status.
+  // Append extraFields after status for context-specific data.
+  private buildBaseFields(
+    ctx: EmbedContext,
+    statusOverride?: string,
+    extraFields: any[] = [],
+  ) {
+    return [
+      { name: '🆔 DI Number', value: ctx.idnum, inline: true },
+      { name: '📄 Title', value: ctx.title },
+      {
+        name: ctx.customerFieldName,
+        value: ctx.customerLabel,
+        inline: true,
+      },
+      {
+        name: '📊 Status',
+        value: statusOverride || ctx.statusLabel,
+        inline: true,
+      },
+      ...extraFields,
+    ];
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Embed senders. Each one routes through buildContext so client,
+  // company, technician and status are always resolved to display names.
+  // ─────────────────────────────────────────────────────────────────────
+
   async sendDiPendingNotification(di: any) {
     if (!this.webhookUrl) {
       throw new Error('DISCORD_WEBHOOK_URL is not defined');
     }
+    const ctx = await this.buildContext(di);
+    const createdBy = await this.resolveProfileDisplay(di?.createdBy);
 
     await axios.post(this.webhookUrl, {
       embeds: [
@@ -17,38 +194,10 @@ export class DiscordHookService {
           title: '📌 DI Pending',
           description: 'A new DI has been created and is pending.',
           color: 16776960, // yellow (pending)
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di._idnum,
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di.client_id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '🧑‍💼 Created By',
-              value: di.createdBy || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📌 Status',
-              value: di.status,
-              inline: true,
-            },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          fields: this.buildBaseFields(ctx, undefined, [
+            { name: '🧑‍💼 Created By', value: createdBy, inline: true },
+          ]),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -64,49 +213,23 @@ export class DiscordHookService {
     stat: any;
     technician: any;
   }) {
+    const ctx = await this.buildContext({
+      ...di,
+      // The Stat carries the live status when DI hasn't been refetched yet.
+      status: stat?.status || di?.status,
+    });
+    const techDisplay = await this.resolveProfileDisplay(technician);
+
     await axios.post(this.webhookUrl, {
       embeds: [
         {
           title: '🛠️ DI Assigned to Technician',
           description: 'A DI has been assigned for diagnostic.',
           color: 3447003, // blue
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di._idnum,
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di.client_id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '👨‍🔧 Technician',
-              value: technician?.fullName || technician?._id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📊 Status',
-              value: stat.status || 'N/A',
-              inline: true,
-            },
-            {
-              name: '🧾 Diagnostic ID',
-              value: stat._id || 'N/A',
-              inline: true,
-            },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          fields: this.buildBaseFields(ctx, undefined, [
+            { name: '👨‍🔧 Technician', value: techDisplay, inline: true },
+          ]),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -114,51 +237,18 @@ export class DiscordHookService {
   }
 
   async sendComponentsSentToCoordinator(di: any) {
+    const ctx = await this.buildContext(di);
     await axios.post(this.webhookUrl, {
       embeds: [
         {
           title: '📦 Components Sent for Confirmation',
           description: 'Magasin sent components to coordinator for validation.',
-          color: 10197915, // purple / workflow step
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di?._idnum || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di?.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di?.client_id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '🏬 Source',
-              value: 'Magasin',
-              inline: true,
-            },
-            {
-              name: '🧑‍💼 Target',
-              value: 'Coordinator',
-              inline: true,
-            },
-            {
-              name: '📌 Flow',
-              value:
-                di?.handleSendingNotificationBetweenCoordinatorAndMagasin ||
-                'N/A',
-              inline: true,
-            },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          color: 10197915,
+          fields: this.buildBaseFields(ctx, undefined, [
+            { name: '🏬 Source', value: 'Magasin', inline: true },
+            { name: '🧑‍💼 Target', value: 'Coordinator', inline: true },
+          ]),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -166,52 +256,19 @@ export class DiscordHookService {
   }
 
   async sendComponentsConfirmedByCoordinator(di: any) {
+    const ctx = await this.buildContext(di);
     await axios.post(this.webhookUrl, {
       embeds: [
         {
           title: '✅ Components Confirmed by Coordinator',
           description:
             'Coordinator validated the components. Magasin can proceed.',
-          color: 3066993, // green (approval)
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di?._idnum || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di?.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di?.client_id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '🧑‍💼 Source',
-              value: 'Coordinator',
-              inline: true,
-            },
-            {
-              name: '🏬 Target',
-              value: 'Magasin',
-              inline: true,
-            },
-            {
-              name: '📌 Flow Reset',
-              value:
-                di?.handleSendingNotificationBetweenCoordinatorAndMagasin ||
-                'DEFAULT',
-              inline: true,
-            },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          color: 3066993,
+          fields: this.buildBaseFields(ctx, undefined, [
+            { name: '🧑‍💼 Source', value: 'Coordinator', inline: true },
+            { name: '🏬 Target', value: 'Magasin', inline: true },
+          ]),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -219,78 +276,31 @@ export class DiscordHookService {
   }
 
   async sendDiInMagasin(di: any) {
+    const ctx = await this.buildContext(di);
     await axios.post(this.webhookUrl, {
       embeds: [
         {
           title: '🏬 DI Arrived in Magasin',
           description: 'The DI is now in the warehouse/magasin.',
           color: 5763719,
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di._idnum || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di.client_id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📌 Status',
-              value: di.status,
-              inline: true,
-            },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          fields: this.buildBaseFields(ctx),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
     });
   }
+
   async sendDiStatusPending3(di: any) {
+    const ctx = await this.buildContext(di);
     await axios.post(this.webhookUrl, {
       embeds: [
         {
           title: '🚚 DI Moved to Pending3',
           description: 'DI advanced to the next stage (Pending3).',
-          color: 5793266, // teal / progression color
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di._idnum || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di.client_id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📌 Status',
-              value: di.status,
-              inline: true,
-            },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          color: 5793266,
+          fields: this.buildBaseFields(ctx),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -298,43 +308,17 @@ export class DiscordHookService {
   }
 
   async sendDiDevisUploaded({ di, fileName }: { di: any; fileName: string }) {
+    const ctx = await this.buildContext(di);
     await axios.post(this.webhookUrl, {
       embeds: [
         {
           title: '🧾 Devis Uploaded',
           description: 'A quote (devis) has been uploaded.',
-          color: 10181046, // purple-ish
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di?._idnum || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di?.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di?.client_id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📎 File',
-              value: fileName,
-            },
-            {
-              name: '📌 Status',
-              value: di?.status || 'N/A',
-              inline: true,
-            },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          color: 10181046,
+          fields: this.buildBaseFields(ctx, undefined, [
+            { name: '📎 File', value: fileName },
+          ]),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -342,43 +326,17 @@ export class DiscordHookService {
   }
 
   async sendDiBCUploaded({ di, fileName }: { di: any; fileName: string }) {
+    const ctx = await this.buildContext(di);
     await axios.post(this.webhookUrl, {
       embeds: [
         {
           title: '📄 Bon de Commande Uploaded',
           description: 'A BC (PDF) has been uploaded for this DI.',
-          color: 3447003, // blue
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di?._idnum || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di?.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di?.client_id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📎 File',
-              value: fileName,
-            },
-            {
-              name: '📌 Status',
-              value: di?.status || 'N/A',
-              inline: true,
-            },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          color: 3447003,
+          fields: this.buildBaseFields(ctx, undefined, [
+            { name: '📎 File', value: fileName },
+          ]),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -386,44 +344,17 @@ export class DiscordHookService {
   }
 
   async sendDiPriceAssigned({ di, price }: { di: any; price: number }) {
+    const ctx = await this.buildContext(di);
     await axios.post(this.webhookUrl, {
       embeds: [
         {
           title: '💰 DI Price Assigned',
           description: 'Pricing has been completed.',
-          color: 3066993, // green (completed step)
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di?._idnum || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di?.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di?.client_id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '💵 Price',
-              value: `${price} TND`,
-              inline: true,
-            },
-            {
-              name: '📌 Status',
-              value: di?.status || 'N/A',
-              inline: true,
-            },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          color: 3066993,
+          fields: this.buildBaseFields(ctx, undefined, [
+            { name: '💵 Price', value: `${price} TND`, inline: true },
+          ]),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -431,39 +362,15 @@ export class DiscordHookService {
   }
 
   async sendDiStatusPending2(di: any) {
+    const ctx = await this.buildContext(di);
     await axios.post(this.webhookUrl, {
       embeds: [
         {
           title: '📦 DI Status Updated',
           description: 'DI moved to Pending2 (next processing stage).',
-          color: 15844367, // orange
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di._idnum || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di.client_id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📌 New Status',
-              value: di.status,
-              inline: true,
-            },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          color: 15844367,
+          fields: this.buildBaseFields(ctx),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -471,39 +378,15 @@ export class DiscordHookService {
   }
 
   async sendDiPricing(di: any) {
+    const ctx = await this.buildContext(di);
     await axios.post(this.webhookUrl, {
       embeds: [
         {
           title: '💰 DI Ready for Pricing',
           description: 'A DI is ready for pricing. Action required by admin.',
-          color: 16753920, // gold-ish
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di._idnum || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di.client_id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📌 Status',
-              value: di.status,
-              inline: true,
-            },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          color: 16753920,
+          fields: this.buildBaseFields(ctx),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -511,39 +394,15 @@ export class DiscordHookService {
   }
 
   async sendDiStatusPending1(di: any) {
+    const ctx = await this.buildContext(di);
     await axios.post(this.webhookUrl, {
       embeds: [
         {
           title: '🆕 DI Created (Pending1)',
           description: 'A new DI entered the workflow.',
-          color: 16776960, // yellow
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di._idnum || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di.client_id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📌 Status',
-              value: di.status,
-              inline: true,
-            },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          color: 16776960,
+          fields: this.buildBaseFields(ctx),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -551,8 +410,8 @@ export class DiscordHookService {
   }
 
   async sendDiIgnored(di: any) {
-    const isMax = (di.ignoreCount || 0) >= 3;
-
+    const ctx = await this.buildContext(di);
+    const isMax = (di?.ignoreCount || 0) >= 3;
     await axios.post(this.webhookUrl, {
       embeds: [
         {
@@ -560,34 +419,15 @@ export class DiscordHookService {
           description: isMax
             ? 'This DI reached the maximum ignore limit.'
             : 'This DI has been ignored.',
-          color: isMax ? 15158332 : 16776960, // red if max, yellow otherwise
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di?._idnum || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di?.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di?.client_id || 'N/A',
-              inline: true,
-            },
+          color: isMax ? 15158332 : 16776960,
+          fields: this.buildBaseFields(ctx, undefined, [
             {
               name: '🚫 Ignore Count',
-              value: `${di.ignoreCount}/3`,
+              value: `${di?.ignoreCount ?? 0}/3`,
               inline: true,
             },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          ]),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -595,44 +435,21 @@ export class DiscordHookService {
   }
 
   async sendDiFinished(di: any) {
+    const ctx = await this.buildContext(di);
     await axios.post(this.webhookUrl, {
       embeds: [
         {
           title: '🎉 DI Completed',
           description: 'Repair process is fully completed.',
-          color: 3066993, // green
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di._idnum || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di.client_id || 'N/A',
-              inline: true,
-            },
+          color: 3066993,
+          fields: this.buildBaseFields(ctx, undefined, [
             {
               name: '💵 Final Price',
-              value: di.price ? `${di.price} TND` : 'N/A',
+              value: di?.price ? `${di.price} TND` : 'N/A',
               inline: true,
             },
-            {
-              name: '📌 Status',
-              value: di.status,
-              inline: true,
-            },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          ]),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -640,39 +457,17 @@ export class DiscordHookService {
   }
 
   async sendDiInReparation(di: any) {
+    // Called when status is REPARATION — assigned but not yet started.
+    const ctx = await this.buildContext(di);
     await axios.post(this.webhookUrl, {
       embeds: [
         {
-          title: '🛠️ DI In Reparation',
-          description: 'Repair process has started.',
-          color: 15105570, // amber / in-progress
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di._idnum || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di.client_id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📌 Status',
-              value: di.status,
-              inline: true,
-            },
-          ],
-
-          footer: {
-            text: 'Fixtronix System',
-          },
-
+          title: '🛠️ DI Ready for Reparation',
+          description:
+            'Reparation phase assigned. Awaiting technician to start.',
+          color: 15105570,
+          fields: this.buildBaseFields(ctx),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -680,35 +475,18 @@ export class DiscordHookService {
   }
 
   async sendDiagnosticFinished({ di, diag }: { di: any; diag: any }) {
-    const result = diag?.can_be_repaired ? 'Repairable' : 'Not Repairable';
-
+    const ctx = await this.buildContext(di);
+    const repairable = diag?.can_be_repaired
+      ? '✅ Repairable'
+      : '🚫 Not Repairable';
     await axios.post(this.webhookUrl, {
       embeds: [
         {
           title: '✅ Diagnostic Completed',
           description: 'Technician has finished the diagnostic.',
-          color: diag?.can_be_repaired ? 3066993 : 15158332, // green / red
-
-          fields: [
-            {
-              name: '🆔 DI Number',
-              value: di?._idnum || 'N/A',
-              inline: true,
-            },
-            {
-              name: '📄 Title',
-              value: di?.title || 'N/A',
-            },
-            {
-              name: '👤 Client',
-              value: di?.client_id || 'N/A',
-              inline: true,
-            },
-            {
-              name: '🧾 Result',
-              value: result,
-              inline: true,
-            },
+          color: diag?.can_be_repaired ? 3066993 : 15158332,
+          fields: this.buildBaseFields(ctx, undefined, [
+            { name: '🧾 Result', value: repairable, inline: true },
             {
               name: '📦 Contains PDR',
               value: diag?.contain_pdr ? 'Yes' : 'No',
@@ -723,12 +501,248 @@ export class DiscordHookService {
               name: '📝 Diagnostic Note',
               value: diag?.remarque_tech_diagnostic || 'N/A',
             },
-          ],
+          ]),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
 
-          footer: {
-            text: 'Fixtronix System',
-          },
+  // ── Pause / Resume / Started / Assigned (workflow refinements) ──────
 
+  async sendDiagnosticPaused(di: any) {
+    const ctx = await this.buildContext(di);
+    const note = di?.remarque_tech_diagnostic;
+    await axios.post(this.webhookUrl, {
+      embeds: [
+        {
+          title: '⏸️ Diagnostic Paused',
+          description: 'Technician paused the diagnostic process.',
+          color: 9807270,
+          fields: this.buildBaseFields(
+            ctx,
+            undefined,
+            note ? [{ name: '📝 Note', value: note }] : [],
+          ),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  async sendDiagnosticResumed(di: any) {
+    const ctx = await this.buildContext(di);
+    await axios.post(this.webhookUrl, {
+      embeds: [
+        {
+          title: '▶️ Diagnostic Resumed',
+          description: 'Technician resumed the diagnostic.',
+          color: 3447003,
+          fields: this.buildBaseFields(ctx),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  async sendDiagnosticStarted(di: any) {
+    const ctx = await this.buildContext(di);
+    await axios.post(this.webhookUrl, {
+      embeds: [
+        {
+          title: '🔍 Diagnostic Started',
+          description: 'Technician started the diagnostic.',
+          color: 3447003,
+          fields: this.buildBaseFields(ctx),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  async sendDiagnosticAssigned(di: any) {
+    const ctx = await this.buildContext(di);
+    await axios.post(this.webhookUrl, {
+      embeds: [
+        {
+          title: '🧭 Diagnostic Assigned',
+          description: 'Coordinator assigned this DI to diagnostic.',
+          color: 3447003,
+          fields: this.buildBaseFields(ctx),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  async sendReparationStarted(di: any) {
+    const ctx = await this.buildContext(di);
+    await axios.post(this.webhookUrl, {
+      embeds: [
+        {
+          title: '🔧 Reparation Started',
+          description: 'Technician started the repair.',
+          color: 15105570,
+          fields: this.buildBaseFields(ctx),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  async sendReparationPaused(di: any) {
+    const ctx = await this.buildContext(di);
+    const note = di?.remarque_tech_repair;
+    await axios.post(this.webhookUrl, {
+      embeds: [
+        {
+          title: '⏸️ Reparation Paused',
+          description: 'Technician paused the repair.',
+          color: 9807270,
+          fields: this.buildBaseFields(
+            ctx,
+            undefined,
+            note ? [{ name: '📝 Note', value: note }] : [],
+          ),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  async sendReparationResumed(di: any) {
+    const ctx = await this.buildContext(di);
+    await axios.post(this.webhookUrl, {
+      embeds: [
+        {
+          title: '▶️ Reparation Resumed',
+          description: 'Technician resumed the repair.',
+          color: 15105570,
+          fields: this.buildBaseFields(ctx),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  async sendDiNegotiation1(di: any) {
+    const ctx = await this.buildContext(di);
+    await axios.post(this.webhookUrl, {
+      embeds: [
+        {
+          title: '🤝 Negotiation Started (Manager)',
+          description: 'DI entered the first negotiation round (Manager).',
+          color: 15418782,
+          fields: this.buildBaseFields(ctx, undefined, [
+            {
+              name: '💵 Initial Price',
+              value: di?.price ? `${di.price} TND` : 'N/A',
+              inline: true,
+            },
+          ]),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  async sendDiNegotiation2(di: any) {
+    const ctx = await this.buildContext(di);
+    await axios.post(this.webhookUrl, {
+      embeds: [
+        {
+          title: '🤝 Negotiation Escalated (Admin Manager)',
+          description: 'Negotiation escalated to Admin Manager.',
+          color: 15418782,
+          fields: this.buildBaseFields(ctx, undefined, [
+            {
+              name: '💵 Initial Price',
+              value: di?.price ? `${di.price} TND` : 'N/A',
+              inline: true,
+            },
+            {
+              name: '💵 Final Price',
+              value: di?.final_price ? `${di.final_price} TND` : 'N/A',
+              inline: true,
+            },
+          ]),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  async sendDiCancelled(di: any) {
+    const ctx = await this.buildContext(di);
+    await axios.post(this.webhookUrl, {
+      embeds: [
+        {
+          title: '❌ DI Cancelled',
+          description: 'DI was cancelled during negotiation.',
+          color: 15158332,
+          fields: this.buildBaseFields(ctx),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  async sendDiRetour(di: any, level: 1 | 2 | 3) {
+    const ctx = await this.buildContext(di);
+    const titles = {
+      1: '🔁 Retour 1',
+      2: '🔁 Retour 2',
+      3: '⚠️ Retour 3 — Final Alert',
+    };
+    const colors = { 1: 15844367, 2: 15105570, 3: 15158332 } as const;
+    const descriptions = {
+      1: 'DI returned for the first time.',
+      2: 'DI returned a second time.',
+      3: 'DI reached the final retour level. Operational attention required.',
+    };
+    await axios.post(this.webhookUrl, {
+      embeds: [
+        {
+          title: titles[level],
+          description: descriptions[level],
+          color: colors[level],
+          fields: this.buildBaseFields(ctx, undefined, [
+            {
+              name: '🚫 Ignore Count',
+              value: `${di?.ignoreCount ?? 0}/3`,
+              inline: true,
+            },
+          ]),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  async sendDiBLUploaded({ di, fileName }: { di: any; fileName: string }) {
+    const ctx = await this.buildContext(di);
+    await axios.post(this.webhookUrl, {
+      embeds: [
+        {
+          title: '📦 Bon de Livraison Uploaded',
+          description: 'A delivery slip (BL) has been uploaded.',
+          color: 3447003,
+          fields: this.buildBaseFields(ctx, undefined, [
+            { name: '📎 File', value: fileName },
+          ]),
+          footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
       ],

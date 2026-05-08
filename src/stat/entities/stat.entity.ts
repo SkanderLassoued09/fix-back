@@ -173,6 +173,60 @@ export class DiReparationInfo {
   diData: Di;
 }
 
+@ObjectType()
+export class DiStatConsistencyMismatch {
+  @Field()
+  _idDi: string;
+
+  @Field({ nullable: true })
+  _idnum?: string;
+
+  @Field({ nullable: true })
+  diStatus?: string;
+
+  @Field({ nullable: true })
+  statStatus?: string;
+
+  @Field({ nullable: true })
+  diIgnoreCount?: number;
+
+  @Field({ nullable: true })
+  statIgnoreCount?: number;
+
+  @Field()
+  mismatchType: string;
+
+  @Field()
+  severity: string;
+
+  @Field()
+  message: string;
+}
+
+@ObjectType()
+export class DiStatConsistencyReport {
+  @Field()
+  checkedDiCount: number;
+
+  @Field()
+  mismatchCount: number;
+
+  @Field()
+  missingStatCount: number;
+
+  @Field()
+  statusMismatchCount: number;
+
+  @Field()
+  multipleStatCount: number;
+
+  @Field()
+  generatedAt: string;
+
+  @Field(() => [DiStatConsistencyMismatch])
+  mismatches: DiStatConsistencyMismatch[];
+}
+
 /**
  * @ObjectType()
 export class DiReparationInfo {

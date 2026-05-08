@@ -1,6 +1,7 @@
 import {
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { CreateStatInput, PauseLogInput } from './dto/create-stat.input';
@@ -18,8 +19,14 @@ import { Profile } from 'src/profile/entities/profile.entity';
 import { Company } from 'src/company/entities/company.entity';
 import { Client } from 'src/clients/entities/client.entity';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
+import {
+  DiStatConsistencyMismatch,
+  DiStatConsistencyReport,
+} from './entities/stat.entity';
 @Injectable()
 export class StatService {
+  private readonly logger = new Logger(StatService.name);
+
   constructor(
     @InjectModel('Stat') private StatModel: Model<Stat>,
     @InjectModel('Di') private diModel: Model<Di>,
@@ -104,6 +111,123 @@ export class StatService {
     return await this.StatModel.findOne({ _idDi });
   }
 
+  async checkDiStatConsistency(limit = 100): Promise<DiStatConsistencyReport> {
+    const safeLimit = Math.min(Math.max(limit || 100, 1), 500);
+    const generatedAt = new Date().toISOString();
+
+    const diRecords = await this.diModel
+      .find({ isDeleted: false })
+      .sort({ updatedAt: -1 })
+      .limit(safeLimit)
+      .select('_id _idnum status ignoreCount')
+      .lean();
+
+    const diIds = diRecords.map((di: any) => di._id);
+
+    const statRecords = await this.StatModel.find({ _idDi: { $in: diIds } })
+      .select('_id _idDi status ignoreCount')
+      .lean();
+
+    const statsByDiId = statRecords.reduce((acc, stat: any) => {
+      acc[stat._idDi] = acc[stat._idDi] || [];
+      acc[stat._idDi].push(stat);
+      return acc;
+    }, {});
+
+    const mismatches: DiStatConsistencyMismatch[] = [];
+
+    for (const di of diRecords as any[]) {
+      const stats = statsByDiId[di._id] || [];
+
+      if (stats.length === 0) {
+        mismatches.push({
+          _idDi: di._id,
+          _idnum: di._idnum,
+          diStatus: di.status,
+          diIgnoreCount: di.ignoreCount || 0,
+          mismatchType: 'MISSING_STAT',
+          severity: 'WARN',
+          message: `No Stat document found for DI ${di._id}`,
+        });
+        continue;
+      }
+
+      if (stats.length > 1) {
+        mismatches.push({
+          _idDi: di._id,
+          _idnum: di._idnum,
+          diStatus: di.status,
+          diIgnoreCount: di.ignoreCount || 0,
+          mismatchType: 'MULTIPLE_STATS',
+          severity: 'WARN',
+          message: `Multiple Stat documents found for DI ${di._id}`,
+        });
+      }
+
+      const expectedIgnoreCount = di.ignoreCount || 0;
+      const matchingStat =
+        stats.find((stat) => (stat.ignoreCount || 0) === expectedIgnoreCount) ||
+        stats[0];
+
+      if (matchingStat.status !== di.status) {
+        mismatches.push({
+          _idDi: di._id,
+          _idnum: di._idnum,
+          diStatus: di.status,
+          statStatus: matchingStat.status,
+          diIgnoreCount: expectedIgnoreCount,
+          statIgnoreCount: matchingStat.ignoreCount || 0,
+          mismatchType: 'STATUS_MISMATCH',
+          severity: 'WARN',
+          message: `DI status '${di.status}' does not match Stat status '${matchingStat.status}'`,
+        });
+      }
+    }
+
+    const report: DiStatConsistencyReport = {
+      checkedDiCount: diRecords.length,
+      mismatchCount: mismatches.length,
+      missingStatCount: mismatches.filter(
+        (mismatch) => mismatch.mismatchType === 'MISSING_STAT',
+      ).length,
+      statusMismatchCount: mismatches.filter(
+        (mismatch) => mismatch.mismatchType === 'STATUS_MISMATCH',
+      ).length,
+      multipleStatCount: mismatches.filter(
+        (mismatch) => mismatch.mismatchType === 'MULTIPLE_STATS',
+      ).length,
+      generatedAt,
+      mismatches,
+    };
+
+    this.logConsistencyReport(report, safeLimit);
+
+    return report;
+  }
+
+  private logConsistencyReport(
+    report: DiStatConsistencyReport,
+    limit: number,
+  ): void {
+    if (report.mismatchCount === 0) {
+      return;
+    }
+
+    this.logger.warn(
+      JSON.stringify({
+        event: 'di.stat.consistency.warning',
+        category: 'di_stat_consistency_mismatch',
+        checkedDiCount: report.checkedDiCount,
+        mismatchCount: report.mismatchCount,
+        missingStatCount: report.missingStatCount,
+        statusMismatchCount: report.statusMismatchCount,
+        multipleStatCount: report.multipleStatCount,
+        limit,
+        generatedAt: report.generatedAt,
+      }),
+    );
+  }
+
   async deleteStat(_id: string) {
     return await this.StatModel.deleteMany({ _idDi: _id });
   }
@@ -114,8 +238,9 @@ export class StatService {
       throw new Error('Issue in finding di in send di to reparation');
     }
 
+    let result;
     if (di && di.ignoreCount && di.ignoreCount > 0) {
-      return await this.StatModel.updateOne(
+      result = await this.StatModel.updateOne(
         { _idDi, ignoreCount: di.ignoreCount },
         {
           $set: {
@@ -124,7 +249,7 @@ export class StatService {
         },
       );
     } else {
-      return await this.StatModel.updateOne(
+      result = await this.StatModel.updateOne(
         { _idDi },
         {
           $set: {
@@ -133,6 +258,27 @@ export class StatService {
         },
       );
     }
+
+    const stat = await this.StatModel.findOne(
+      di.ignoreCount > 0 ? { _idDi, ignoreCount: di.ignoreCount } : { _idDi },
+    );
+    const profile = await this.profileService.findProlileById(_idTech);
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: {
+        di,
+        states: {
+          ...(stat?.toObject?.() || {}),
+          _idDi,
+          id_tech_rep: _idTech,
+          status: di.status,
+        },
+      },
+      target: profile,
+    });
+
+    return result;
   }
 
   // Fiter tech data

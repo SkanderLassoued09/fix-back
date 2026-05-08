@@ -10,6 +10,7 @@ import { StatService } from './stat.service';
 import {
   CreateStatNotificationReturn,
   DiReparationInfo,
+  DiStatConsistencyReport,
   Stat,
   StatsCount,
   StatsTableData,
@@ -22,13 +23,15 @@ import {
 } from './dto/create-stat.input';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
 import { Profile } from 'src/profile/entities/profile.entity';
-import { UseGuards } from '@nestjs/common';
+import { Logger, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 import { PubSub } from 'graphql-subscriptions';
 import { PaginationConfigDi } from 'src/di/dto/create-di.input';
 
 @Resolver(() => Stat)
 export class StatResolver {
+  private readonly logger = new Logger(StatResolver.name);
+
   constructor(
     private readonly statService: StatService,
     private readonly pubsub: PubSub,
@@ -51,19 +54,40 @@ export class StatResolver {
   }
 
   @Mutation(() => Boolean)
-  affectForRep(@Args('_idDi') _idDi: string, @Args('_idTech') _idTech: string) {
-    const isAffected = this.statService.affectForRep(_idDi, _idTech);
-    this.pubsub.publish('you-got-notification-reparation', {
-      notificationReparation: {
-        _idDi,
-        messageNotification: 'createStatInput.notificationMessage',
-        id_tech_diag: _idTech,
-      },
-    });
-    if (isAffected) {
+  async affectForRep(
+    @Args('_idDi') _idDi: string,
+    @Args('_idTech') _idTech: string,
+  ): Promise<boolean> {
+    try {
+      const result: any = await this.statService.affectForRep(_idDi, _idTech);
+      const matchedCount =
+        typeof result?.matchedCount === 'number' ? result.matchedCount : 0;
+      const isAffected = matchedCount > 0;
+
+      if (!isAffected) {
+        this.logger.warn(
+          `affectForRep: no Stat row matched for _idDi=${_idDi} _idTech=${_idTech} (matchedCount=${matchedCount})`,
+        );
+        return false;
+      }
+
+      await this.pubsub.publish('you-got-notification-reparation', {
+        notificationReparation: {
+          _idDi,
+          messageNotification: 'createStatInput.notificationMessage',
+          id_tech_diag: _idTech,
+        },
+      });
+
       return true;
-    } else {
-      false;
+    } catch (error) {
+      this.logger.error(
+        `affectForRep failed for _idDi=${_idDi} _idTech=${_idTech}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      return false;
     }
   }
   @Subscription(() => CreateStatNotificationReturn)
@@ -208,6 +232,14 @@ export class StatResolver {
   @Query(() => [Stat])
   async getRetourDataStats(@Args('_idDi') _idDi: string) {
     return await this.statService.getRetourDataStats(_idDi);
+  }
+
+  @Query(() => DiStatConsistencyReport)
+  @UseGuards(JwtAuthGuard)
+  async checkDiStatConsistency(
+    @Args('limit', { nullable: true, type: () => Int }) limit?: number,
+  ) {
+    return await this.statService.checkDiStatConsistency(limit);
   }
 
   @Mutation(() => Stat)

@@ -3,6 +3,7 @@ import { LocationService } from './location.service';
 import { LocationResolver } from './location.resolver';
 import { MongooseModule } from '@nestjs/mongoose';
 import { LocationSchema } from './entities/location.entity';
+import { Di, DiSchema } from 'src/di/entities/di.entity';
 
 @Module({
   providers: [LocationResolver, LocationService],
@@ -11,6 +12,10 @@ import { LocationSchema } from './entities/location.entity';
       {
         name: 'Location',
         schema: LocationSchema,
+      },
+      {
+        name: Di.name,
+        schema: DiSchema,
       },
     ]),
   ],

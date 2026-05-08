@@ -130,6 +130,8 @@ export class DiDocument extends Document {
   updatedAt: Date;
 }
 export const DiSchema = SchemaFactory.createForClass(DiDocument);
+DiSchema.index({ location_id: 1, isDeleted: 1 });
+DiSchema.index({ di_category_id: 1, isDeleted: 1 });
 
 @ObjectType()
 export class Di {

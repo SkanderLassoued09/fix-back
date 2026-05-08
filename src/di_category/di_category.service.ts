@@ -34,10 +34,27 @@ export class DiCategoryService {
 
   // create
   async createDiCategory(category: string): Promise<DiCategory> {
+    const normalizedCategory = category?.trim();
+    if (!normalizedCategory) {
+      throw new InternalServerErrorException('Category name is required');
+    }
+    const escapedCategory = normalizedCategory.replace(
+      /[.*+?^${}()|[\]\\]/g,
+      '\\$&',
+    );
+    const existing = await this.DiCategoryModel.findOne({
+      category: { $regex: `^${escapedCategory}$`, $options: 'i' },
+      isDeleted: false,
+    });
+
+    if (existing) {
+      return existing;
+    }
+
     const index = await this.generateDiId();
     let dataCategory = {} as CreateDiCategoryInput;
     dataCategory._id = uuidv4();
-    dataCategory.category = category;
+    dataCategory.category = normalizedCategory;
 
     const result = await new this.DiCategoryModel(dataCategory).save();
     return result;

@@ -54,6 +54,7 @@ import {
 } from 'src/location/entities/location.entity';
 import { DiscordHook } from 'src/discord-hook/entities/discord-hook.entity';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
+import { DiWorkflowService } from './workflow/di-workflow.service';
 @Injectable()
 export class DiService {
   constructor(
@@ -75,6 +76,7 @@ export class DiService {
     private readonly auditService: AuditService,
     private readonly logsDiService: LogsDiService,
     private readonly discordHookService: DiscordHookService,
+    private readonly diWorkflowService: DiWorkflowService,
   ) {}
 
   async generateClientId(): Promise<number> {
@@ -116,6 +118,7 @@ export class DiService {
 
       // 💾 Save
       const di = await new this.diModel(createDiInput).save();
+      await this.syncEmplacementStats(di.location_id as any);
 
       // 🔔 Notify (only if pending)
       if (di.status === 'PENDING1') {
@@ -174,6 +177,7 @@ export class DiService {
   }
 
   async deleteDi(_id: string) {
+    const existing = await this.diModel.findOne({ _id }).select('location_id');
     const result = await this.diModel.updateOne(
       { _id },
       {
@@ -187,6 +191,7 @@ export class DiService {
       throw new NotFoundException(`Unable to delete DI ${_id}`);
     }
     await this.statsService.deleteStat(_id);
+    await this.syncEmplacementStats(existing?.location_id as any);
     return await this.findbyId(_id);
   }
 
@@ -250,32 +255,70 @@ export class DiService {
       buffer,
     );
     const di = await this.diModel.findOne({ _id });
+    const fileName = `${randompdfFile}.${extension}`;
     if (di && di.ignoreCount && di.ignoreCount > 0) {
       let addbllogspdf = await this.logsDiService.addBLPDFLogs(
         di._id,
         di.ignoreCount,
-        `${randompdfFile}.${extension}`,
+        fileName,
       );
       this.notificationGateway.blAddedNotification({
         di,
         message: `A new BL has been added for DI ${di._idnum} with ignore count ${di.ignoreCount}`,
       });
+      // Also broadcast updateTicket so every ticket-list view triggers
+      // its standard requestRefresh/loadData pipeline. Without this, the
+      // BL flow only fires the bl-specific subject and depends solely on
+      // the in-place patchBlAddedRow patch. The server-driven refresh
+      // fetches the persisted state and lets the row's class binding
+      // pick up bon_de_livraison from the DI document.
+      this.notificationGateway.updateTicket({
+        action: 'updateState',
+        content: { result: di, states: di },
+        target: {},
+      });
+
+      try {
+        await this.discordHookService.sendDiBLUploaded({ di, fileName });
+      } catch (err) {
+        console.error('Discord notification failed:', err);
+      }
 
       return addbllogspdf;
     } else {
-      const addbl = await this.diModel.updateOne(
+      // Use findOneAndUpdate({ new: true }) so the post-update document
+      // (with bon_de_livraison populated) is what we both broadcast and
+      // return. The previous updateOne left `di` as the pre-update doc,
+      // so any consumer of the WS payload received stale data.
+      const updatedDi = await this.diModel.findOneAndUpdate(
         { _id },
-        { $set: { bon_de_livraison: `${randompdfFile}.${extension}` } },
+        { $set: { bon_de_livraison: fileName } },
+        { new: true },
       );
 
       this.notificationGateway.blAddedNotification({
-        di,
+        di: updatedDi,
         message: {
           role: 'MAGASIN',
           content: `A new BL has been added for DI ${di._idnum}`,
         },
       });
-      return addbl;
+      this.notificationGateway.updateTicket({
+        action: 'updateState',
+        content: { result: updatedDi, states: updatedDi },
+        target: {},
+      });
+
+      try {
+        await this.discordHookService.sendDiBLUploaded({
+          di: updatedDi,
+          fileName,
+        });
+      } catch (err) {
+        console.error('Discord notification failed:', err);
+      }
+
+      return updatedDi;
     }
   }
 
@@ -355,13 +398,58 @@ export class DiService {
 
   async updateDi(updateDi: UpdateDi) {
     const { _id, ...rest } = updateDi;
+    const previous = await this.diModel.findOne({ _id }).select('location_id');
     const update = await this.diModel.findOneAndUpdate(
       { _id },
       { $set: { ...rest } },
       { new: true },
     );
 
+    if (
+      update &&
+      previous?.location_id &&
+      String(previous.location_id) !== String(update.location_id)
+    ) {
+      await this.syncEmplacementStatsForChange(
+        previous.location_id as any,
+        update.location_id as any,
+      );
+    }
+
     return update;
+  }
+
+  private async syncEmplacementStats(emplacementId?: string): Promise<void> {
+    if (!emplacementId) {
+      return;
+    }
+
+    const storedDiCount = await this.diModel.countDocuments({
+      location_id: emplacementId,
+      isDeleted: false,
+    });
+
+    await this.locationModel.updateOne(
+      { _id: emplacementId },
+      {
+        $set: {
+          storedDiCount: Math.max(0, storedDiCount),
+          hasStoredDi: storedDiCount > 0,
+          current_item_stored: Math.max(0, storedDiCount),
+        },
+      },
+    );
+  }
+
+  private async syncEmplacementStatsForChange(
+    oldEmplacementId?: string,
+    newEmplacementId?: string,
+  ): Promise<void> {
+    const ids = Array.from(
+      new Set([oldEmplacementId, newEmplacementId].filter(Boolean)),
+    );
+
+    await Promise.all(ids.map((id) => this.syncEmplacementStats(id)));
   }
 
   async addPDFFile(_id: string, facture: string, bl: string) {
@@ -723,64 +811,58 @@ export class DiService {
   // from Created ==> PENDING1
   // from Manager => coordinator
   async manager_Pending1(_idDI: string): Promise<Di> {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: STATUS_DI.Pending1.role,
-            status: STATUS_DI.Pending1.status,
-          },
-        },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+    const result = await this.diWorkflowService.transition({
+      diId: _idDI,
+      transitionKey: 'MANAGER_TO_PENDING1',
+      skipFromValidation: true,
+      skipRoleValidation: true,
+    });
+
+    return result.di;
   }
 
   // InMagasin or InDiagnostic ==> PENDING2
   //from magasin or tech to coordinator
   async magasinTech_Pending2(_idDI: string): Promise<Di> {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: STATUS_DI.Pending2.role,
-            status: STATUS_DI.Pending2.status,
-          },
+    const result = await this.diWorkflowService.transition({
+      diId: _idDI,
+      transitionKey: 'MAGASIN_TECH_TO_PENDING2',
+      skipFromValidation: true,
+      skipRoleValidation: true,
+    });
+
+    // This is the real "Diagnostic Completed" event: the DI leaves the
+    // diagnostic phase for pricing. Diag form fields persisted earlier
+    // by tech_startDiagnostic are read off the DI document.
+    try {
+      await this.discordHookService.sendDiagnosticFinished({
+        di: result.di,
+        diag: {
+          can_be_repaired: (result.di as any)?.can_be_repaired,
+          contain_pdr: (result.di as any)?.contain_pdr,
+          isErrorFromFixtronix: (result.di as any)?.isErrorFromFixtronix,
+          remarque_tech_diagnostic: (result.di as any)
+            ?.remarque_tech_diagnostic,
         },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
       });
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
+
+    return result.di;
   }
   //TODO check if we need to delet this one
   // Negotiation1 or Negotiation2 ==> PENDING3
   // Admin or manager ==> coordinator
   async managerAdminManager_Pending3(_idDI: string): Promise<Di> {
-    return this.diModel
-      .updateOne(
-        { _id: _idDI },
-        {
-          $set: {
-            current_roles: STATUS_DI.Pending3.role,
-            status: STATUS_DI.Pending3.status,
-          },
-        },
-      )
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+    const result = await this.diWorkflowService.transition({
+      diId: _idDI,
+      transitionKey: 'MANAGER_ADMIN_TO_PENDING3',
+      skipFromValidation: true,
+      skipRoleValidation: true,
+    });
+
+    return result.di;
   }
   //New flow Nego1 & Nego2 sending DI to the INMagasin
 
@@ -837,6 +919,12 @@ export class DiService {
       );
     } else {
       await this.statsService.updateStatus(_idDI, STATUS_DI.Diagnostic.status);
+    }
+
+    try {
+      await this.discordHookService.sendDiagnosticAssigned(diagnostic);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
     }
 
     return diagnostic;
@@ -911,15 +999,11 @@ export class DiService {
       );
     }
 
-    // 🔔 Discord notification (diagnostic finished)
-    try {
-      await this.discordHookService.sendDiagnosticFinished({
-        di: updatedDi || didata,
-        diag,
-      });
-    } catch (err) {
-      console.error('Discord notification failed:', err);
-    }
+    // Note: this method only persists the diagnostic form values; it is
+    // also invoked by the pause flow on the frontend, so firing
+    // "Diagnostic Completed" here produced wrong notifications during
+    // pause. The real diagnostic-completed event is the transition to
+    // PENDING2 via magasinTech_Pending2 — that's where the embed lives.
 
     return updatedDi;
   }
@@ -1189,7 +1273,7 @@ export class DiService {
   //from manager or AdminsManager to annuler DI
   // Negotiation1 or Negotiation2 => Annuler
   async annulerDi(_idDI: string) {
-    const result = await this.diModel.updateOne(
+    const updated = await this.diModel.findOneAndUpdate(
       { _id: _idDI },
       {
         $set: {
@@ -1197,13 +1281,20 @@ export class DiService {
           status: STATUS_DI.Annuler.status,
         },
       },
+      { new: true },
     );
 
-    if (!result) {
+    if (!updated) {
       throw new Error('Issue in annulerDi ');
     }
 
-    return result;
+    try {
+      await this.discordHookService.sendDiCancelled(updated);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
+
+    return updated;
   }
   //if DI confirmer we sent to coordiantor
   // Negotiation1  => Pending3
@@ -1719,28 +1810,21 @@ export class DiService {
   }
 
   async changeStatusInDiagnostic(_id: any) {
-    const result = await this.diModel.findOneAndUpdate(
-      { _id },
-      {
-        $set: {
-          status: STATUS_DI.InDiagnostic.status,
-        },
-      },
-      { new: true },
-    );
+    const { di: result, previousStatus } =
+      await this.diWorkflowService.transition({
+        diId: _id,
+        transitionKey: 'CHANGE_STATUS_IN_DIAGNOSTIC',
+        skipRoleValidation: true,
+      });
 
-    if (!result) {
-      throw new Error('Error in update state in changeStatusInDiagnostic ');
-    }
-
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.InDiagnostic.status,
-        result.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.InDiagnostic.status);
+    try {
+      if (previousStatus === STATUS_DI.DiagnosticInPause.status) {
+        await this.discordHookService.sendDiagnosticResumed(result);
+      } else {
+        await this.discordHookService.sendDiagnosticStarted(result);
+      }
+    } catch (err) {
+      console.error('Discord notification failed:', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -1941,6 +2025,12 @@ export class DiService {
       await this.statsService.updateStatus(_id, STATUS_DI.Negotiation1.status);
     }
 
+    try {
+      await this.discordHookService.sendDiNegotiation1(result);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
+
     this.notificationGateway.updateTicket({
       action: 'updateState',
       content: { result, states: result },
@@ -1972,6 +2062,12 @@ export class DiService {
       );
     } else {
       await this.statsService.updateStatus(_id, STATUS_DI.Negotiation2.status);
+    }
+
+    try {
+      await this.discordHookService.sendDiNegotiation2(result);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -2066,6 +2162,12 @@ export class DiService {
   }
 
   async changeStatusInRepair(_id: string) {
+    // Capture the previous status BEFORE the update so we can choose the
+    // right embed (started vs resumed). findOneAndUpdate({new: true})
+    // would otherwise only return the post-update snapshot.
+    const previous = await this.diModel.findOne({ _id });
+    const previousStatus = previous?.status;
+
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
@@ -2088,6 +2190,16 @@ export class DiService {
       );
     } else {
       await this.statsService.updateStatus(_id, STATUS_DI.InReparation.status);
+    }
+
+    try {
+      if (previousStatus === STATUS_DI.ReparationInPause.status) {
+        await this.discordHookService.sendReparationResumed(result);
+      } else {
+        await this.discordHookService.sendReparationStarted(result);
+      }
+    } catch (err) {
+      console.error('Discord notification failed:', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -2122,6 +2234,17 @@ export class DiService {
       await this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
     }
 
+    try {
+      // Mongoose returns the pre-update doc when {new:true} is omitted, so
+      // build a finished-shape from the current data before broadcasting.
+      await this.discordHookService.sendDiFinished({
+        ...(result as any).toObject?.(),
+        status: STATUS_DI.Finished.status,
+      });
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
+
     const di = this.getDiById(_id);
 
     this.notificationGateway.updateTicket({
@@ -2133,52 +2256,67 @@ export class DiService {
   }
 
   async changeDiRetour1(_id: string) {
-    const retour = await this.diModel.updateOne(
+    const updated = await this.diModel.findOneAndUpdate(
       { _id },
       { $set: { status: STATUS_DI.Retour1.status } },
+      { new: true },
     );
 
-    const di = this.getDiById(_id);
+    try {
+      if (updated) await this.discordHookService.sendDiRetour(updated, 1);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { di: updated, states: updated },
       target: {},
     });
 
-    return retour;
+    return updated;
   }
   async changeDiRetour2(_id: string) {
-    const retour = await this.diModel.updateOne(
+    const updated = await this.diModel.findOneAndUpdate(
       { _id },
       { $set: { status: STATUS_DI.Retour2.status } },
+      { new: true },
     );
 
-    const di = this.getDiById(_id);
+    try {
+      if (updated) await this.discordHookService.sendDiRetour(updated, 2);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { di: updated, states: updated },
       target: {},
     });
 
-    return retour;
+    return updated;
   }
   async changeDiRetour3(_id: string) {
-    const retour = await this.diModel.updateOne(
+    const updated = await this.diModel.findOneAndUpdate(
       { _id },
       { $set: { status: STATUS_DI.Retour3.status } },
+      { new: true },
     );
 
-    const di = this.getDiById(_id);
+    try {
+      if (updated) await this.discordHookService.sendDiRetour(updated, 3);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { di: updated, states: updated },
       target: {},
     });
 
-    return retour;
+    return updated;
   }
   async changeToPending1(_id: string) {
     const pending1 = await this.diModel.updateOne(
@@ -2221,6 +2359,12 @@ export class DiService {
       );
     }
 
+    try {
+      await this.discordHookService.sendDiagnosticPaused(diStatus);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
+    }
+
     this.notificationGateway.updateTicket({
       action: 'updateState',
       content: { diStatus, states: diStatus },
@@ -2240,14 +2384,26 @@ export class DiService {
       throw new Error('Issue in ReparationInPause');
     }
 
+    // Stat must be updated before broadcasting; tech-side queries read
+    // Stat.status, so an unawaited update lets the WS-triggered refresh
+    // observe stale INREPARATION while the new value is still in flight.
     if (diStatus.ignoreCount > 0) {
-      this.statsService.updateStatus(
+      await this.statsService.updateStatus(
         _id,
         STATUS_DI.ReparationInPause.status,
         diStatus.ignoreCount,
       );
     } else {
-      this.statsService.updateStatus(_id, STATUS_DI.ReparationInPause.status);
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.ReparationInPause.status,
+      );
+    }
+
+    try {
+      await this.discordHookService.sendReparationPaused(diStatus);
+    } catch (err) {
+      console.error('Discord notification failed:', err);
     }
 
     this.notificationGateway.updateTicket({

@@ -15,6 +15,7 @@ export class ComposantCategoryDocumet extends Document {
 export const Composant_CategorySchema = SchemaFactory.createForClass(
   ComposantCategoryDocumet,
 );
+Composant_CategorySchema.index({ category_composant: 1, isDeleted: 1 });
 
 @ObjectType()
 export class Composant_Category {

@@ -14,6 +14,7 @@ export class DiCategoryDocument extends Document {
 }
 export const DiCategorySchema =
   SchemaFactory.createForClass(DiCategoryDocument);
+DiCategorySchema.index({ category: 1, isDeleted: 1 });
 
 @ObjectType()
 export class DiCategory {
