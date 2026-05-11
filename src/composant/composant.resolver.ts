@@ -5,6 +5,7 @@ import {
   CreateComposantInput,
   UpdateComposantResponse,
 } from './dto/create-composant.input';
+import { UpdateComposantInput } from './dto/update-composant.input';
 
 @Resolver(() => Composant)
 export class ComposantResolver {
@@ -28,6 +29,20 @@ export class ComposantResolver {
     @Args('updateComposant') updateComposant: CreateComposantInput,
   ): Promise<UpdateComposantResponse> {
     return await this.composantService.updateComposant(updateComposant);
+  }
+
+  /**
+   * Partial update — only `_id` is required, every other field is
+   * optional. Used by reassignment flows that need to change a single
+   * column (e.g. component category) without re-sending the full row.
+   */
+  @Mutation(() => UpdateComposantResponse)
+  async updateComposantPartial(
+    @Args('updateComposantInput') updateComposantInput: UpdateComposantInput,
+  ): Promise<UpdateComposantResponse> {
+    return (await this.composantService.updateComposantPartial(
+      updateComposantInput,
+    )) as unknown as UpdateComposantResponse;
   }
   @Mutation(() => UpdateComposantResponse)
   async addComposantInfo(

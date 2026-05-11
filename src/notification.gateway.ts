@@ -64,4 +64,16 @@ export class NotificationsGateway
   updateTicket(message: { action: string; content: any; target?: any }) {
     this.server.emit('updateTicket', message);
   }
+
+  // ---- Generic operational alerts (stagnation, future ops monitors) -------
+  // Two events keep the contract small: a new alert appeared, or an alert
+  // was resolved. Frontend routes by `type` to badge/toast/inbox views.
+
+  alertCreated(payload: any) {
+    this.server.emit('alert.created', payload);
+  }
+
+  alertResolved(payload: any) {
+    this.server.emit('alert.resolved', payload);
+  }
 }

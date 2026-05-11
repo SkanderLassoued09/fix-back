@@ -3,6 +3,7 @@ import {
   CreateComposantInput,
   UpdateComposantResponse,
 } from './dto/create-composant.input';
+import { UpdateComposantInput } from './dto/update-composant.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Composant } from './entities/composant.entity';
 import { Model } from 'mongoose';
@@ -127,6 +128,27 @@ export class ComposantService {
     return update;
   }
 
+  /**
+   * Partial update: persist only the fields explicitly supplied in the
+   * input. Used by reassignment flows (changing the category from the
+   * Relations & Structure modal) so the caller doesn't have to resend
+   * name/package/price/etc. just to change one field.
+   */
+  async updateComposantPartial(input: UpdateComposantInput) {
+    const { _id, ...rest } = input;
+    const updateSet: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(rest)) {
+      if (value !== undefined) {
+        updateSet[key] = value;
+      }
+    }
+    return await this.ComposantModel.findByIdAndUpdate(
+      _id,
+      { $set: updateSet },
+      { new: true },
+    );
+  }
+
   // this function after recieving ticket from tech
   async addComposantInfo(
     updateComposant: CreateComposantInput,
@@ -177,6 +199,7 @@ export class ComposantService {
         },
         { new: true },
       );
+
       return update;
     } catch (error) {
       throw new Error('Failed to update composant: ' + error.message);

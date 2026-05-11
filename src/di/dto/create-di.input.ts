@@ -139,14 +139,25 @@ export class DiagUpdate {
   array_composants: ComposantStructureInput[];
 }
 
+/**
+ * Partial-update DTO. Only `_id` is required; every other field is
+ * optional so reassignment flows (location, DI category) and the legacy
+ * full-edit flow share one mutation. The DI service strips `undefined`
+ * keys before `$set`, so a request that supplies only `_id + location_id`
+ * does NOT clear title/description/remarque.
+ */
 @InputType()
 export class UpdateDi {
   @Field()
   _id: string;
-  @Field()
-  title: string;
-  @Field()
-  description: string;
-  @Field()
-  remarque_manager: string;
+  @Field({ nullable: true })
+  title?: string;
+  @Field({ nullable: true })
+  description?: string;
+  @Field({ nullable: true })
+  remarque_manager?: string;
+  @Field({ nullable: true })
+  location_id?: string;
+  @Field({ nullable: true })
+  di_category_id?: string;
 }

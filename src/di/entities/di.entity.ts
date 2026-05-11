@@ -126,12 +126,64 @@ export class DiDocument extends Document {
   remarque_coordinator: string;
   @Prop({ nullable: true })
   confirmationComposant: string;
+
+  // ---- Stagnation tracking ------------------------------------------------
+  // Stamped every time `status` changes (via the pre-save / pre-update hooks
+  // below). Powers the generic stagnation monitor — `now - statusUpdatedAt`
+  // is all the detector needs.
+  @Prop({ default: null })
+  statusUpdatedAt: Date | null;
+  // ------------------------------------------------------------------------
+
   createdAt: Date;
   updatedAt: Date;
 }
 export const DiSchema = SchemaFactory.createForClass(DiDocument);
 DiSchema.index({ location_id: 1, isDeleted: 1 });
 DiSchema.index({ di_category_id: 1, isDeleted: 1 });
+// Dashboard analytics — status×createdAt and status×updatedAt cover the
+// volume/trend/category/finance aggregations.
+DiSchema.index({ status: 1, createdAt: -1 });
+DiSchema.index({ status: 1, updatedAt: -1 });
+DiSchema.index({ di_category_id: 1, createdAt: -1 });
+// Stagnation detector — bounded query against this index.
+DiSchema.index({ status: 1, statusUpdatedAt: 1 });
+DiSchema.index({ statusUpdatedAt: 1, isDeleted: 1 });
+
+// ---- statusUpdatedAt hooks ------------------------------------------------
+// Every path that changes `status` stamps the timestamp automatically so the
+// stagnation monitor stays correct without each call site remembering.
+DiSchema.pre('save', function (next) {
+  // `this` is the document; `isModified` covers creates and direct edits.
+  // For a brand-new doc we still want statusUpdatedAt populated.
+  if (this.isNew || this.isModified('status')) {
+    this.set('statusUpdatedAt', new Date());
+  }
+  next();
+});
+
+// `findOneAndUpdate` / `updateOne` / `updateMany` go through Query middleware.
+// We inspect the pending update payload — if `status` is being set, mirror a
+// `statusUpdatedAt` set on the same update so a single round-trip persists
+// both fields atomically.
+function stampStatusUpdatedAtOnQueryUpdate(this: any, next: () => void) {
+  const update = this.getUpdate?.();
+  if (!update) return next();
+  const set = update.$set ?? update;
+  if (set && Object.prototype.hasOwnProperty.call(set, 'status')) {
+    if (update.$set) {
+      update.$set.statusUpdatedAt = new Date();
+    } else {
+      update.statusUpdatedAt = new Date();
+    }
+    this.setUpdate(update);
+  }
+  next();
+}
+DiSchema.pre('findOneAndUpdate', stampStatusUpdatedAtOnQueryUpdate);
+DiSchema.pre('updateOne', stampStatusUpdatedAtOnQueryUpdate);
+DiSchema.pre('updateMany', stampStatusUpdatedAtOnQueryUpdate);
+// ------------------------------------------------------------------------
 
 @ObjectType()
 export class Di {
@@ -242,6 +294,10 @@ export class Di {
   handleSendingNotificationBetweenCoordinatorAndMagasin: string;
   @Field({ nullable: true })
   isErrorFromFixtronix: boolean;
+
+  // ---- Stagnation tracking ------------------------------------------------
+  @Field({ nullable: true })
+  statusUpdatedAt?: Date;
 }
 
 @ObjectType()
@@ -361,12 +417,18 @@ export class DiTable {
   ignoreCount: number;
   @Field({ nullable: true })
   location_id: string;
+  /** Display name of the linked emplacement, resolved server-side. */
+  @Field({ nullable: true })
+  location_name: string;
   @Field({ nullable: true })
   isSentToCoordinator: boolean;
   @Field({ nullable: true, defaultValue: false })
   isConfirmedComponentFromCoordinator: boolean;
   @Field({ nullable: true, defaultValue: false })
   di_category_id: string;
+  /** Display name of the linked DI category, resolved server-side. */
+  @Field({ nullable: true })
+  di_category_name: string;
   @Field(() => [ComposantStructure], { nullable: true })
   array_composants: ComposantStructure[];
   /** remarque section  */
@@ -394,6 +456,10 @@ export class DiTable {
   handleSendingNotificationBetweenCoordinatorAndMagasin: string;
   @Field({ nullable: true })
   final_price: number;
+
+  // ---- Stagnation tracking (surfaced on the table view) -------------------
+  @Field({ nullable: true })
+  statusUpdatedAt?: Date;
 }
 @ObjectType()
 export class DiTableData {

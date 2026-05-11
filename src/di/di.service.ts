@@ -398,10 +398,22 @@ export class DiService {
 
   async updateDi(updateDi: UpdateDi) {
     const { _id, ...rest } = updateDi;
+
+    // Defensive: drop undefined values so a partial-update payload that
+    // supplies only { _id, location_id } does not blank out other fields.
+    // Mongoose generally ignores undefined keys but being explicit keeps
+    // the behavior predictable across driver versions.
+    const updateSet: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(rest)) {
+      if (value !== undefined) {
+        updateSet[key] = value;
+      }
+    }
+
     const previous = await this.diModel.findOne({ _id }).select('location_id');
     const update = await this.diModel.findOneAndUpdate(
       { _id },
-      { $set: { ...rest } },
+      { $set: updateSet },
       { new: true },
     );
 
@@ -414,6 +426,17 @@ export class DiService {
         previous.location_id as any,
         update.location_id as any,
       );
+    }
+
+    if (update) {
+      // Broadcast the same updateTicket signal that every status mutation
+      // emits, so all subscribed lists/dashboards refresh and pick up the
+      // new location_id / di_category_id / etc. without manual reload.
+      this.notificationGateway.updateTicket({
+        action: 'updateState',
+        content: { result: update, states: update },
+        target: {},
+      });
     }
 
     return update;
@@ -624,8 +647,14 @@ export class DiService {
           current_roles: di.current_roles,
           array_composants: di.array_composants,
           isErrorFromFixtronix: di.isErrorFromFixtronix,
-          di_category_id: di.di_category_id?.category,
-          location_id: di.location_id?.location_name ?? 'N/A',
+          // Keep `*_id` as the actual referenced _id so the frontend can
+          // run lookups, drive dropdown ngModel values, and patch state
+          // immutably after a reassignment. The display strings live on
+          // dedicated `*_name` fields.
+          di_category_id: (di.di_category_id as any)?._id ?? null,
+          di_category_name: (di.di_category_id as any)?.category ?? 'N/A',
+          location_id: (di.location_id as any)?._id ?? null,
+          location_name: (di.location_id as any)?.location_name ?? 'N/A',
           status: di.status,
           price: di.price ?? 'N/A',
           final_price: di.final_price ?? 'N/A',
@@ -712,8 +741,12 @@ export class DiService {
           current_roles: di.current_roles,
           array_composants: di.array_composants,
           isErrorFromFixtronix: di.isErrorFromFixtronix,
-          di_category_id: di.di_category_id?.category,
-          location_id: di.location_id?.location_name ?? 'N/A',
+          // See the symmetric note in searchDi above — `*_id` carries
+          // the referenced _id, `*_name` carries the display string.
+          di_category_id: (di.di_category_id as any)?._id ?? null,
+          di_category_name: (di.di_category_id as any)?.category ?? 'N/A',
+          location_id: (di.location_id as any)?._id ?? null,
+          location_name: (di.location_id as any)?.location_name ?? 'N/A',
           status: di.status,
           price: di.price ?? 'N/A',
           final_price: di.final_price ?? 'N/A',
@@ -2637,4 +2670,5 @@ export class DiService {
       ...extra,
     };
   }
+
 }

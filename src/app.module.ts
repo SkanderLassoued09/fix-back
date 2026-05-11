@@ -22,6 +22,8 @@ import { AuditModule } from './audit/audit.module';
 import { LogsDiModule } from './logs-di/logs-di.module';
 import { DashboardKpiModule } from './dashboard-kpi/dashboard-kpi.module';
 import { DiscordHookModule } from './discord-hook/discord-hook.module';
+import { AlertsModule } from './alerts/alerts.module';
+import { StagnationModule } from './stagnation/stagnation.module';
 
 @Module({
   imports: [
@@ -56,6 +58,8 @@ import { DiscordHookModule } from './discord-hook/discord-hook.module';
     LogsDiModule,
     DashboardKpiModule,
     DiscordHookModule,
+    AlertsModule,
+    StagnationModule,
   ],
   controllers: [],
   providers: [],

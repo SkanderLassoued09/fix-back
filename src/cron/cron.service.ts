@@ -5,16 +5,33 @@ import { AuditService } from 'src/audit/audit.service';
 import { DiService } from 'src/di/di.service';
 import { Di } from 'src/di/entities/di.entity';
 import { NotificationsGateway } from 'src/notification.gateway';
+import { StagnationService } from 'src/stagnation/stagnation.service';
 
 @Injectable()
-export class CronService {
-  private readonly logger = new Logger(CronService.name);
+export class AppCronService {
+  private readonly logger = new Logger(AppCronService.name);
   pubSub = new PubSub();
   constructor(
     private readonly diService: DiService,
     private readonly notificationsGateway: NotificationsGateway,
     private readonly auditService: AuditService,
+    private readonly stagnationService: StagnationService,
   ) {}
+
+  /**
+   * Central ACTION dispatcher. main.ts boots an application context and
+   * delegates here — adding a new ACTION = one more case + one more trigger
+   * method on this service. No bootstrap file gets touched.
+   */
+  async runAction(action: string): Promise<void> {
+    switch (action) {
+      case 'DETECT_STAGNANT_DI':
+        await this.triggerStagnationDetection();
+        break;
+      default:
+        this.logger.error(`Unknown ACTION: ${action}`);
+    }
+  }
 
   @Cron(CronExpression.EVERY_10_HOURS)
   async emptyAudit() {
@@ -29,6 +46,23 @@ export class CronService {
     }
     this.logger.debug('cron start');
     // this.sendReminder(result); REMINDER
+  }
+
+  /**
+   * Trigger-only — every business decision lives in StagnationService so the
+   * same logic can run via cron, the ACTION runtime, or a future manual
+   * "run now" admin button. Errors are caught so a transient DB issue can't
+   * break the cron loop.
+   */
+  @Cron(CronExpression.EVERY_5_SECONDS)
+  async triggerStagnationDetection() {
+    try {
+      await this.stagnationService.detectStagnantDi();
+    } catch (err) {
+      this.logger.error(
+        `Stagnation cron failed: ${(err as Error).stack ?? err}`,
+      );
+    }
   }
 
   // dont create audit for ticket al ready exists

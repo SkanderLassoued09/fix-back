@@ -748,4 +748,74 @@ export class DiscordHookService {
       ],
     });
   }
+
+  /**
+   * Operational stagnation alert. Reads everything from the persisted
+   * alert document — no Di / Profile / Company lookups needed, so this
+   * works inside the ACTION runtime with the same fidelity as the
+   * realtime app.
+   */
+  async sendStagnationAlert(alert: {
+    _id: string;
+    diId: string;
+    type: string;
+    severity: string;
+    message: string;
+    metadata?: Record<string, any>;
+    createdAt?: Date;
+  }) {
+    if (!this.webhookUrl) {
+      throw new Error('DISCORD_WEBHOOK_URL is not defined');
+    }
+
+    const meta = alert.metadata ?? {};
+    const ageHours =
+      typeof meta.ageMs === 'number'
+        ? Math.round(meta.ageMs / (60 * 60 * 1000))
+        : null;
+    const statusLabel = meta.status
+      ? STATUS_LABELS[meta.status] ?? meta.status
+      : 'unknown';
+    const severityColor: Record<string, number> = {
+      CRITICAL: 15158332, // red
+      WARNING: 16289308, // orange
+      INFO: 3447003, // blue
+    };
+    const severityEmoji: Record<string, string> = {
+      CRITICAL: '🚨',
+      WARNING: '⚠️',
+      INFO: 'ℹ️',
+    };
+
+    await axios.post(this.webhookUrl, {
+      embeds: [
+        {
+          title: `${severityEmoji[alert.severity] ?? '⚠️'} FIXTRONIX Operational Alert`,
+          description:
+            'This DI has remained too long in the same status and requires operational review.',
+          color: severityColor[alert.severity] ?? severityColor.WARNING,
+          fields: [
+            { name: '🧾 DI', value: String(meta.diIdnum ?? alert.diId), inline: true },
+            { name: '📌 Status', value: statusLabel, inline: true },
+            { name: '🎚 Severity', value: alert.severity, inline: true },
+            {
+              name: '⏱ Stagnation Duration',
+              value: ageHours !== null ? `${ageHours}h` : 'n/a',
+              inline: true,
+            },
+            { name: '🪧 Threshold', value: alert.type, inline: true },
+            {
+              name: '🆔 Alert',
+              value: alert._id,
+              inline: true,
+            },
+          ],
+          footer: { text: 'Fixtronix Operations' },
+          timestamp: (alert.createdAt ?? new Date()).toISOString
+            ? (alert.createdAt as Date).toISOString()
+            : new Date().toISOString(),
+        },
+      ],
+    });
+  }
 }
