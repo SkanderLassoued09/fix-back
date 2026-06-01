@@ -24,6 +24,8 @@ import { DashboardKpiModule } from './dashboard-kpi/dashboard-kpi.module';
 import { DiscordHookModule } from './discord-hook/discord-hook.module';
 import { AlertsModule } from './alerts/alerts.module';
 import { StagnationModule } from './stagnation/stagnation.module';
+import { OperationalErrorModule } from './operational-error/operational-error.module';
+import { GoogleSheetsModule } from './google-sheets/google-sheets.module';
 
 @Module({
   imports: [
@@ -60,6 +62,8 @@ import { StagnationModule } from './stagnation/stagnation.module';
     DiscordHookModule,
     AlertsModule,
     StagnationModule,
+    OperationalErrorModule,
+    GoogleSheetsModule,
   ],
   controllers: [],
   providers: [],

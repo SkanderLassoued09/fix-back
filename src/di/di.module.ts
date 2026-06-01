@@ -29,6 +29,7 @@ import {
 } from 'src/location/entities/location.entity';
 import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
 import { DiWorkflowService } from './workflow/di-workflow.service';
+import { OperationalErrorModule } from 'src/operational-error/operational-error.module';
 
 @Module({
   providers: [
@@ -44,6 +45,7 @@ import { DiWorkflowService } from './workflow/di-workflow.service';
     PubSubModule,
     AuditModule,
     LogsDiModule,
+    OperationalErrorModule,
     MongooseModule.forFeature([
       {
         name: Di.name,

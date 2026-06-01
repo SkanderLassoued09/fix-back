@@ -750,6 +750,70 @@ export class DiscordHookService {
   }
 
   /**
+   * Operational error — generic structured-failure notification used by
+   * OperationalErrorService. Reuses the existing webhook (no new infra)
+   * and the same axios.post pattern as every other embed.
+   *
+   * Failure of THIS method is the caller's problem to swallow — the
+   * OperationalErrorService wraps the call in try/catch so a flaky
+   * webhook can never cascade.
+   */
+  async sendOperationalError(entry: {
+    timestamp: string;
+    module: string;
+    submodule: string;
+    method: string;
+    severity: string;
+    error: string;
+    message: string;
+    payload?: Record<string, any>;
+  }) {
+    if (!this.webhookUrl) {
+      throw new Error('DISCORD_WEBHOOK_URL is not defined');
+    }
+
+    const severityColor: Record<string, number> = {
+      CRITICAL: 15158332, // red
+      HIGH: 15158332, // red
+      MEDIUM: 16289308, // orange
+      LOW: 10070709, // grey
+    };
+    const severityEmoji: Record<string, string> = {
+      CRITICAL: '🛑',
+      HIGH: '🚨',
+      MEDIUM: '⚠️',
+      LOW: 'ℹ️',
+    };
+
+    // Keep payload compact for the embed — full payload is in the daily
+    // log file. Discord rejects fields > 1024 chars.
+    let payloadPreview = '_(empty)_';
+    if (entry.payload && Object.keys(entry.payload).length) {
+      const json = JSON.stringify(entry.payload, null, 0);
+      payloadPreview = '```json\n' + (json.length > 800 ? json.slice(0, 797) + '...' : json) + '\n```';
+    }
+
+    await axios.post(this.webhookUrl, {
+      embeds: [
+        {
+          title: `${severityEmoji[entry.severity] ?? '⚠️'} FIXTRONIX Operational Error`,
+          description: entry.error,
+          color: severityColor[entry.severity] ?? severityColor.MEDIUM,
+          fields: [
+            { name: '🧩 Module', value: `\`${entry.module}/${entry.submodule}\``, inline: true },
+            { name: '🛠 Method', value: `\`${entry.method}\``, inline: true },
+            { name: '🎚 Severity', value: entry.severity, inline: true },
+            { name: '💬 Message', value: entry.message?.slice(0, 1000) || '_(no message)_' },
+            { name: '📦 Payload', value: payloadPreview },
+          ],
+          footer: { text: 'Fixtronix Operations · Error capture' },
+          timestamp: entry.timestamp,
+        },
+      ],
+    });
+  }
+
+  /**
    * Operational stagnation alert. Reads everything from the persisted
    * alert document — no Di / Profile / Company lookups needed, so this
    * works inside the ACTION runtime with the same fidelity as the

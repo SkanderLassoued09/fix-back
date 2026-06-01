@@ -19,6 +19,7 @@ import { Profile } from 'src/profile/entities/profile.entity';
 import { Company } from 'src/company/entities/company.entity';
 import { Client } from 'src/clients/entities/client.entity';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
+import { OperationalErrorService } from 'src/operational-error/operational-error.service';
 import {
   DiStatConsistencyMismatch,
   DiStatConsistencyReport,
@@ -38,7 +39,30 @@ export class StatService {
     private readonly profileService: ProfileService,
     private readonly logsDiService: LogsDiService,
     private readonly discordHookService: DiscordHookService,
+    private readonly operationalErrorService: OperationalErrorService,
   ) {}
+
+  /**
+   * Tiny helper used at the single Discord-side-effect site (createStat).
+   * Routes Discord failures through the operational-error pipeline (daily
+   * log + Discord ops channel) without breaking the calling mutation.
+   * Same pattern as DiService.captureDiscordFailure.
+   */
+  private async captureDiscordFailure(
+    method: string,
+    err: unknown,
+    payload?: Record<string, any>,
+  ) {
+    await this.operationalErrorService.capture({
+      module: 'stat',
+      submodule: 'statService',
+      method,
+      severity: 'LOW',
+      error: 'Discord notification failed',
+      message: (err as Error)?.message ?? String(err),
+      payload,
+    });
+  }
 
   async generateStatId(): Promise<number> {
     let indexStat = 0;
@@ -58,53 +82,73 @@ export class StatService {
   }
 
   async createStat(createStatInput: CreateStatInput): Promise<Stat> {
-    const index = await this.generateStatId();
-
-    createStatInput._id = uuidv4();
-
-    const di = await this.diModel.findOne({ _id: createStatInput._idDi });
-
-    if (di.ignoreCount > 0) {
-      createStatInput.ignoreCount = di.ignoreCount;
-      await this.logsDiService.create(createStatInput._idDi, di.ignoreCount);
-    }
-
-    const result = await new this.StatModel(createStatInput).save();
-
-    if (!result) {
-      throw new InternalServerErrorException('Unable to create');
-    }
-
-    const statTech = await this.StatModel.findOne({ _id: result._id });
-
-    const statWithStatus = {
-      ...statTech.toObject(),
-      status: di?.status || null,
-    };
-
-    const profile = await this.profileService.findProlileById(
-      result.id_tech_diag,
-    );
-
-    // 🔔 Discord notification
     try {
-      await this.discordHookService.sendDiAssignedToTech({
-        di,
-        stat: statWithStatus,
-        technician: profile,
+      const index = await this.generateStatId();
+
+      createStatInput._id = uuidv4();
+
+      const di = await this.diModel.findOne({ _id: createStatInput._idDi });
+
+      if (di.ignoreCount > 0) {
+        createStatInput.ignoreCount = di.ignoreCount;
+        await this.logsDiService.create(createStatInput._idDi, di.ignoreCount);
+      }
+
+      const result = await new this.StatModel(createStatInput).save();
+
+      if (!result) {
+        throw new InternalServerErrorException('Unable to create');
+      }
+
+      const statTech = await this.StatModel.findOne({ _id: result._id });
+
+      const statWithStatus = {
+        ...statTech.toObject(),
+        status: di?.status || null,
+      };
+
+      const profile = await this.profileService.findProlileById(
+        result.id_tech_diag,
+      );
+
+      // 🔔 Discord notification — best-effort, routed through capture pipeline.
+      try {
+        await this.discordHookService.sendDiAssignedToTech({
+          di,
+          stat: statWithStatus,
+          technician: profile,
+        });
+      } catch (err) {
+        await this.captureDiscordFailure('createStat', err, {
+          diId: createStatInput._idDi,
+          techId: result.id_tech_diag,
+        });
+      }
+
+      // existing socket notification
+      this.notificationGateway.updateTicket({
+        action: 'updateState',
+        content: { di, states: statWithStatus },
+        target: profile,
       });
-    } catch (err) {
-      console.error('Discord notification failed:', err);
+
+      return statWithStatus;
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'stat',
+        submodule: 'statService',
+        method: 'CREATE_STAT',
+        severity: 'HIGH',
+        error: 'Failed to create Stat',
+        message: (error as Error)?.message ?? String(error),
+        payload: {
+          diId: createStatInput?._idDi,
+          techDiag: createStatInput?.id_tech_diag,
+          techRep: createStatInput?.id_tech_rep,
+        },
+      });
+      throw error;
     }
-
-    // existing socket notification
-    this.notificationGateway.updateTicket({
-      action: 'updateState',
-      content: { di, states: statWithStatus },
-      target: profile,
-    });
-
-    return statWithStatus;
   }
 
   async findUserLinkedToConcernedDi(_idDi: string) {
@@ -233,52 +277,65 @@ export class StatService {
   }
 
   async affectForRep(_idDi: string, _idTech: string) {
-    const di = await this.diModel.findOne({ _id: _idDi });
-    if (!di) {
-      throw new Error('Issue in finding di in send di to reparation');
-    }
+    try {
+      const di = await this.diModel.findOne({ _id: _idDi });
+      if (!di) {
+        throw new Error('Issue in finding di in send di to reparation');
+      }
 
-    let result;
-    if (di && di.ignoreCount && di.ignoreCount > 0) {
-      result = await this.StatModel.updateOne(
-        { _idDi, ignoreCount: di.ignoreCount },
-        {
-          $set: {
+      let result;
+      if (di && di.ignoreCount && di.ignoreCount > 0) {
+        result = await this.StatModel.updateOne(
+          { _idDi, ignoreCount: di.ignoreCount },
+          {
+            $set: {
+              id_tech_rep: _idTech,
+            },
+          },
+        );
+      } else {
+        result = await this.StatModel.updateOne(
+          { _idDi },
+          {
+            $set: {
+              id_tech_rep: _idTech,
+            },
+          },
+        );
+      }
+
+      const stat = await this.StatModel.findOne(
+        di.ignoreCount > 0 ? { _idDi, ignoreCount: di.ignoreCount } : { _idDi },
+      );
+      const profile = await this.profileService.findProlileById(_idTech);
+
+      this.notificationGateway.updateTicket({
+        action: 'updateState',
+        content: {
+          di,
+          states: {
+            ...(stat?.toObject?.() || {}),
+            _idDi,
             id_tech_rep: _idTech,
+            status: di.status,
           },
         },
-      );
-    } else {
-      result = await this.StatModel.updateOne(
-        { _idDi },
-        {
-          $set: {
-            id_tech_rep: _idTech,
-          },
-        },
-      );
+        target: profile,
+      });
+
+      return result;
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'stat',
+        submodule: 'statService',
+        method: 'AFFECT_FOR_REP',
+        severity: 'HIGH',
+        error: 'Failed to assign tech for repair',
+        message: (error as Error)?.message ?? String(error),
+        payload: { diId: _idDi, techId: _idTech },
+      });
+      throw error;
     }
-
-    const stat = await this.StatModel.findOne(
-      di.ignoreCount > 0 ? { _idDi, ignoreCount: di.ignoreCount } : { _idDi },
-    );
-    const profile = await this.profileService.findProlileById(_idTech);
-
-    this.notificationGateway.updateTicket({
-      action: 'updateState',
-      content: {
-        di,
-        states: {
-          ...(stat?.toObject?.() || {}),
-          _idDi,
-          id_tech_rep: _idTech,
-          status: di.status,
-        },
-      },
-      target: profile,
-    });
-
-    return result;
   }
 
   // Fiter tech data
@@ -665,33 +722,47 @@ export class StatService {
     return modifiedStatsRetour;
   }
   async lapTime(_id: string, diag_time: string) {
-    const stat = await this.StatModel.findOne({ _id });
+    try {
+      const stat = await this.StatModel.findOne({ _id });
 
-    if (!stat) {
-      throw new Error('Issue in lapTime');
-    }
-    if (stat.ignoreCount > 0) {
+      if (!stat) {
+        throw new Error('Issue in lapTime');
+      }
+      if (stat.ignoreCount > 0) {
+        return await this.StatModel.updateOne(
+          { _id, ignoreCount: stat.ignoreCount },
+          {
+            $set: {
+              diag_time,
+            },
+          },
+        );
+      }
+
       return await this.StatModel.updateOne(
-        { _id, ignoreCount: stat.ignoreCount },
+        { _id },
         {
           $set: {
             diag_time,
           },
         },
       );
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'stat',
+        submodule: 'statService',
+        method: 'LAP_TIME_DIAG',
+        severity: 'MEDIUM',
+        error: 'Failed to persist diag_time',
+        message: (error as Error)?.message ?? String(error),
+        payload: { statId: _id, diag_time },
+      });
+      throw error;
     }
-
-    return await this.StatModel.updateOne(
-      { _id },
-      {
-        $set: {
-          diag_time,
-        },
-      },
-    );
   }
 
   async lapTimeForReaparation(_id: string, rep_time: string) {
+    try {
     const stat = await this.StatModel.findOne({ _id });
     if (!stat) {
       throw new Error('Issue in lapTimeForReaparation');
@@ -715,6 +786,18 @@ export class StatService {
         },
       },
     );
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'stat',
+        submodule: 'statService',
+        method: 'LAP_TIME_REP',
+        severity: 'MEDIUM',
+        error: 'Failed to persist rep_time',
+        message: (error as Error)?.message ?? String(error),
+        payload: { statId: _id, rep_time },
+      });
+      throw error;
+    }
   }
 
   async getLastPauseTime(_id: string) {
@@ -765,42 +848,68 @@ export class StatService {
 
   // update status
   async updateStatus(_idDi: string, status: string, ignoreCount?: number) {
-    // Dynamically construct the query object
-    const query: Record<string, any> = { _idDi };
+    try {
+      // Dynamically construct the query object
+      const query: Record<string, any> = { _idDi };
 
-    if (ignoreCount !== undefined) {
-      query.ignoreCount = ignoreCount;
+      if (ignoreCount !== undefined) {
+        query.ignoreCount = ignoreCount;
+      }
+
+      // Add condition to ensure the current status is not equal to the provided status
+
+      const result = await this.StatModel.findOneAndUpdate(
+        query,
+        {
+          $set: { status },
+        },
+        { new: true }, // Return the updated document
+      );
+
+      if (!result) {
+        throw new Error('Issue in changing stats stattus');
+      }
+
+      return result;
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'stat',
+        submodule: 'statService',
+        method: 'UPDATE_STATUS',
+        severity: 'HIGH',
+        error: 'Failed to update Stat status',
+        message: (error as Error)?.message ?? String(error),
+        payload: { diId: _idDi, targetStatus: status, ignoreCount },
+      });
+      throw error;
     }
-
-    // Add condition to ensure the current status is not equal to the provided status
-
-    const result = await this.StatModel.findOneAndUpdate(
-      query,
-      {
-        $set: { status },
-      },
-      { new: true }, // Return the updated document
-    );
-
-    if (!result) {
-      throw new Error('Issue in changing stats stattus');
-    }
-
-    return result;
   }
 
   async changeStatToDiagnosticInPause(_idDi: string) {
-    const stat = await this.StatModel.findOneAndUpdate(
-      { _idDi },
-      { $set: { status: STATUS_DI.DiagnosticInPause.status } },
-      { new: true },
-    );
+    try {
+      const stat = await this.StatModel.findOneAndUpdate(
+        { _idDi },
+        { $set: { status: STATUS_DI.DiagnosticInPause.status } },
+        { new: true },
+      );
 
-    if (!stat) {
-      throw new Error('Error in update state in pause ');
+      if (!stat) {
+        throw new Error('Error in update state in pause ');
+      }
+
+      return stat;
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'stat',
+        submodule: 'statService',
+        method: 'CHANGE_STAT_TO_DIAGNOSTIC_IN_PAUSE',
+        severity: 'MEDIUM',
+        error: 'Failed to flip Stat to DiagnosticInPause',
+        message: (error as Error)?.message ?? String(error),
+        payload: { diId: _idDi },
+      });
+      throw error;
     }
-
-    return stat;
   }
 
   getStatById(_id: string) {
@@ -808,38 +917,64 @@ export class StatService {
   }
 
   async getStatByIdlogs(_id: string) {
-    const stat = await this.StatModel.findOne({ _idDi: _id });
-    if (!stat) {
-      throw new Error('Stat not found');
-    }
-    if (stat.pauseLogs.length === 0) {
-      throw new Error('No logs found');
-    }
-    if (stat.id_tech_diag) {
-      const techdiag = await this.profileService.getTech(stat.id_tech_diag);
-      stat.id_tech_diag = techdiag;
-    }
+    try {
+      const stat = await this.StatModel.findOne({ _idDi: _id });
+      if (!stat) {
+        throw new Error('Stat not found');
+      }
+      if (stat.pauseLogs.length === 0) {
+        throw new Error('No logs found');
+      }
+      if (stat.id_tech_diag) {
+        const techdiag = await this.profileService.getTech(stat.id_tech_diag);
+        stat.id_tech_diag = techdiag;
+      }
 
-    if (stat.id_tech_rep) {
-      const techrep = await this.profileService.getTech(stat.id_tech_rep);
-      stat.id_tech_rep = techrep;
-    }
+      if (stat.id_tech_rep) {
+        const techrep = await this.profileService.getTech(stat.id_tech_rep);
+        stat.id_tech_rep = techrep;
+      }
 
-    return stat;
+      return stat;
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'stat',
+        submodule: 'statService',
+        method: 'GET_STAT_BY_ID_LOGS',
+        severity: 'MEDIUM',
+        error: 'Failed to load Stat pause logs',
+        message: (error as Error)?.message ?? String(error),
+        payload: { diId: _id },
+      });
+      throw error;
+    }
   }
 
   async addPauseLog(statId: string, pauseLog: PauseLogInput): Promise<any> {
-    const stat = await this.getStatById(statId);
-    if (!stat) {
-      throw new Error('Stat not found');
-    }
+    try {
+      const stat = await this.getStatById(statId);
+      if (!stat) {
+        throw new Error('Stat not found');
+      }
 
-    if (!stat.pauseLogs) {
-      stat.pauseLogs = [];
-    }
+      if (!stat.pauseLogs) {
+        stat.pauseLogs = [];
+      }
 
-    stat.pauseLogs.push(pauseLog);
-    return stat.save();
+      stat.pauseLogs.push(pauseLog);
+      return stat.save();
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'stat',
+        submodule: 'statService',
+        method: 'ADD_PAUSE_LOG',
+        severity: 'MEDIUM',
+        error: 'Failed to append pause log',
+        message: (error as Error)?.message ?? String(error),
+        payload: { statId, pauseLog },
+      });
+      throw error;
+    }
   }
 
   async updatePauseTime(
@@ -847,30 +982,43 @@ export class StatService {
     pauseLogId: string,
     updatedPauseTime: Partial<PauseLogInput>,
   ): Promise<any> {
-    const stat = await this.getStatById(statId);
+    try {
+      const stat = await this.getStatById(statId);
 
-    if (!stat) {
-      throw new Error('Stat not found');
+      if (!stat) {
+        throw new Error('Stat not found');
+      }
+
+      if (!stat.pauseLogs || stat.pauseLogs.length === 0) {
+        throw new Error('No pause logs found for the specified Stat');
+      }
+
+      // Find the pause log by ID
+      const pauseLog = stat.pauseLogs.find((log) => {
+        return log._id.toString() === pauseLogId;
+      });
+
+      if (!pauseLog) {
+        throw new Error('Pause log not found');
+      }
+
+      // Update the pause log with the new data
+      Object.assign(pauseLog, updatedPauseTime);
+
+      // Save the updated Stat
+      return stat.save();
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'stat',
+        submodule: 'statService',
+        method: 'UPDATE_PAUSE_TIME',
+        severity: 'MEDIUM',
+        error: 'Failed to update pause log',
+        message: (error as Error)?.message ?? String(error),
+        payload: { statId, pauseLogId },
+      });
+      throw error;
     }
-
-    if (!stat.pauseLogs || stat.pauseLogs.length === 0) {
-      throw new Error('No pause logs found for the specified Stat');
-    }
-
-    // Find the pause log by ID
-    const pauseLog = stat.pauseLogs.find((log) => {
-      return log._id.toString() === pauseLogId;
-    });
-
-    if (!pauseLog) {
-      throw new Error('Pause log not found');
-    }
-
-    // Update the pause log with the new data
-    Object.assign(pauseLog, updatedPauseTime);
-
-    // Save the updated Stat
-    return stat.save();
   }
 
   //

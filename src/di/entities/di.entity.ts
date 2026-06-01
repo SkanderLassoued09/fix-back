@@ -127,6 +127,15 @@ export class DiDocument extends Document {
   @Prop({ nullable: true })
   confirmationComposant: string;
 
+  @Prop({ default: null })
+  pricingRequestSentAt: Date | null;
+  @Prop({ type: String, ref: 'Profile', default: null })
+  pricingRequestSentBy: string | null;
+  @Prop({ default: null })
+  componentsConfirmedAt: Date | null;
+  @Prop({ type: String, ref: 'Profile', default: null })
+  componentsConfirmedBy: string | null;
+
   // ---- Stagnation tracking ------------------------------------------------
   // Stamped every time `status` changes (via the pre-save / pre-update hooks
   // below). Powers the generic stagnation monitor — `now - statusUpdatedAt`
@@ -199,6 +208,14 @@ export class Di {
   nSerie: string;
   @Field({ nullable: true })
   confirmationComposant: string;
+  @Field({ nullable: true })
+  pricingRequestSentAt?: Date;
+  @Field({ nullable: true })
+  pricingRequestSentBy?: string;
+  @Field({ nullable: true })
+  componentsConfirmedAt?: Date;
+  @Field({ nullable: true })
+  componentsConfirmedBy?: string;
   @Field({ nullable: true })
   description: string;
 
@@ -454,6 +471,14 @@ export class DiTable {
   price: number;
   @Field({ nullable: true })
   handleSendingNotificationBetweenCoordinatorAndMagasin: string;
+  @Field({ nullable: true })
+  pricingRequestSentAt?: Date;
+  @Field({ nullable: true })
+  pricingRequestSentBy?: string;
+  @Field({ nullable: true })
+  componentsConfirmedAt?: Date;
+  @Field({ nullable: true })
+  componentsConfirmedBy?: string;
   @Field({ nullable: true })
   final_price: number;
 

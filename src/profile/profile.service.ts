@@ -8,24 +8,42 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Profile, ProfileDocument } from './entities/profile.entity';
 import { ROLE } from 'src/auth/roles';
+import { OperationalErrorService } from 'src/operational-error/operational-error.service';
 // import { STATUS_TICKET } from 'src/ticket/ticket';
 
 @Injectable()
 export class ProfileService {
   constructor(
     @InjectModel('Profile') private profileModel: Model<ProfileDocument>,
+    private readonly operationalErrorService: OperationalErrorService,
   ) {}
+
   async create(
     createProfileInput: CreateProfileInput,
   ): Promise<Profile | undefined> {
-    return (await this.profileModel.create(createProfileInput))
-      .save()
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
+    try {
+      const doc = await this.profileModel.create(createProfileInput);
+      return await doc.save();
+    } catch (error) {
+      // Previously a silent `.catch((err) => return err)` — the resolver
+      // returned an Error object as if it were a Profile. Now we capture
+      // and rethrow the original error so the auth/admin flows see the
+      // real Mongo cause (duplicate key, validation, etc.).
+      await this.operationalErrorService.capture({
+        module: 'profile',
+        submodule: 'profileService',
+        method: 'CREATE_PROFILE',
+        severity: 'HIGH',
+        error: 'Failed to create profile',
+        message: (error as Error)?.message ?? String(error),
+        payload: {
+          username: createProfileInput?.username,
+          email: createProfileInput?.email,
+          role: createProfileInput?.role,
+        },
       });
+      throw error;
+    }
   }
 
   deleteUser(_id: string) {
@@ -108,22 +126,59 @@ export class ProfileService {
   }
 
   async findOneForAuth(username: string): Promise<Profile | undefined> {
-    return await this.profileModel
-      .findOne({ username })
-      .then((res) => {
-        //
-        return res;
-      })
-      .catch((err) => {
-        //
-        return err;
+    try {
+      return await this.profileModel.findOne({ username });
+    } catch (error) {
+      // CRITICAL: previously a silent `.catch((err) => return err)` — login
+      // received an Error object instead of a Profile, with unknown
+      // downstream behavior. Now we capture and return null so the auth
+      // guard treats it as "user not found" rather than mistaking the
+      // Error object for a valid profile.
+      await this.operationalErrorService.capture({
+        module: 'profile',
+        submodule: 'profileService',
+        method: 'FIND_ONE_FOR_AUTH',
+        severity: 'CRITICAL',
+        error: 'Auth lookup failed',
+        message: (error as Error)?.message ?? String(error),
+        payload: { username },
       });
+      return null;
+    }
   }
 
   async getTech(_id: string) {
-    const tech = await this.profileModel.findOne({ _id }).exec();
-
-    return `${tech.firstName} ${tech.lastName}`;
+    try {
+      const tech = await this.profileModel.findOne({ _id }).exec();
+      if (!tech) {
+        // Was crashing with "Cannot read property 'firstName' of null"
+        // when a stat referenced a deleted profile. Now we capture +
+        // return a sentinel string so callers (StatService.getTech,
+        // getRetourDataStats, etc.) keep working with degraded data.
+        await this.operationalErrorService.capture({
+          module: 'profile',
+          submodule: 'profileService',
+          method: 'GET_TECH',
+          severity: 'MEDIUM',
+          error: 'Tech profile not found',
+          message: `No profile with _id=${_id}`,
+          payload: { _id },
+        });
+        return 'Unknown';
+      }
+      return `${tech.firstName} ${tech.lastName}`;
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'profile',
+        submodule: 'profileService',
+        method: 'GET_TECH',
+        severity: 'MEDIUM',
+        error: 'Failed to load tech profile',
+        message: (error as Error)?.message ?? String(error),
+        payload: { _id },
+      });
+      return 'Unknown';
+    }
   }
 
   async findProlileById(_id: string): Promise<Profile> {
@@ -182,22 +237,22 @@ export class ProfileService {
   }
 
   async getAllAdmins() {
-    return await this.profileModel
-      .find({ role: { $in: [ROLE.ADMIN_MANAGER, ROLE.ADMIN_TECH] } })
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
+    try {
+      return await this.profileModel.find({
+        role: { $in: [ROLE.ADMIN_MANAGER, ROLE.ADMIN_TECH] },
       });
+    } catch (error) {
+      await this.captureSilentFailure('GET_ALL_ADMINS', error);
+      return [];
+    }
   }
 
   //! Dashbord services
 
   // client by region
-  getClientByRegion() {
-    return this.profileModel
-      .aggregate([
+  async getClientByRegion() {
+    try {
+      return await this.profileModel.aggregate([
         {
           $group: {
             _id: '$role',
@@ -211,20 +266,16 @@ export class ProfileService {
             _id: 0,
           },
         },
-      ])
-      .then((res) => {
-        //
-        return res;
-      })
-      .catch((err) => {
-        //
-        return err;
-      });
+      ]);
+    } catch (error) {
+      await this.captureSilentFailure('GET_CLIENT_BY_REGION', error);
+      return [];
+    }
   }
 
-  getTicketByProfileDiag() {
-    return this.profileModel
-      .aggregate([
+  async getTicketByProfileDiag() {
+    try {
+      return await this.profileModel.aggregate([
         {
           $lookup: {
             from: 'tickets',
@@ -253,18 +304,16 @@ export class ProfileService {
             totalDiag: '$diagnostiqueTime',
           },
         },
-      ])
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      ]);
+    } catch (error) {
+      await this.captureSilentFailure('GET_TICKET_BY_PROFILE_DIAG', error);
+      return [];
+    }
   }
 
-  getTicketByProfileRep() {
-    return this.profileModel
-      .aggregate([
+  async getTicketByProfileRep() {
+    try {
+      return await this.profileModel.aggregate([
         {
           $lookup: {
             from: 'tickets',
@@ -291,13 +340,11 @@ export class ProfileService {
             totalRep: '$reparationTime',
           },
         },
-      ])
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
+      ]);
+    } catch (error) {
+      await this.captureSilentFailure('GET_TICKET_BY_PROFILE_REP', error);
+      return [];
+    }
   }
 
   update(id: number, updateProfileInput: UpdateProfileInput) {
@@ -313,9 +360,9 @@ export class ProfileService {
    * Update fields
    */
 
-  updateProfile(_id: string, updateProfileInput: UpdateProfileInput) {
-    return this.profileModel
-      .findOneAndUpdate(
+  async updateProfile(_id: string, updateProfileInput: UpdateProfileInput) {
+    try {
+      return await this.profileModel.findOneAndUpdate(
         { _id },
         {
           $set: {
@@ -326,14 +373,37 @@ export class ProfileService {
           },
         },
         { new: true }, // Return the updated document
-      )
-      .then((res) => {
-        //
-        return res;
-      })
-      .catch((err) => {
-        //
-        return err;
+      );
+    } catch (error) {
+      // Previously a silent `.catch((err) => return err)` — profile edit
+      // returned an Error object as if the update succeeded. Now capture
+      // and rethrow so the caller sees a real failure.
+      await this.operationalErrorService.capture({
+        module: 'profile',
+        submodule: 'profileService',
+        method: 'UPDATE_PROFILE',
+        severity: 'HIGH',
+        error: 'Failed to update profile',
+        message: (error as Error)?.message ?? String(error),
+        payload: { _id, fields: Object.keys(updateProfileInput ?? {}) },
       });
+      throw error;
+    }
+  }
+
+  /**
+   * Shared helper for the historically silent `.catch(err => err)` query
+   * sites. Captures with HIGH severity (these were data-returning bugs)
+   * and the caller returns a safe `[]` default.
+   */
+  private async captureSilentFailure(method: string, err: unknown) {
+    await this.operationalErrorService.capture({
+      module: 'profile',
+      submodule: 'profileService',
+      method,
+      severity: 'HIGH',
+      error: 'Query failed (was previously swallowed)',
+      message: (err as Error)?.message ?? String(err),
+    });
   }
 }

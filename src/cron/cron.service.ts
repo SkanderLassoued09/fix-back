@@ -6,6 +6,7 @@ import { DiService } from 'src/di/di.service';
 import { Di } from 'src/di/entities/di.entity';
 import { NotificationsGateway } from 'src/notification.gateway';
 import { StagnationService } from 'src/stagnation/stagnation.service';
+import { SheetSyncService } from 'src/google-sheets/sheet-sync.service';
 
 @Injectable()
 export class AppCronService {
@@ -16,6 +17,7 @@ export class AppCronService {
     private readonly notificationsGateway: NotificationsGateway,
     private readonly auditService: AuditService,
     private readonly stagnationService: StagnationService,
+    private readonly sheetSyncService: SheetSyncService,
   ) {}
 
   /**
@@ -28,8 +30,26 @@ export class AppCronService {
       case 'DETECT_STAGNANT_DI':
         await this.triggerStagnationDetection();
         break;
+      case 'SYNC_GOOGLE_SHEETS':
+        await this.triggerGoogleSheetsSync();
+        break;
       default:
         this.logger.error(`Unknown ACTION: ${action}`);
+    }
+  }
+
+  /**
+   * Trigger-only — every business decision lives in SheetSyncService so
+   * the same logic runs via the dedicated SheetSyncScheduler (daily 02:00)
+   * AND via `ACTION=SYNC_GOOGLE_SHEETS npm run start:dev`.
+   */
+  async triggerGoogleSheetsSync() {
+    try {
+      await this.sheetSyncService.syncAllEntities();
+    } catch (err) {
+      this.logger.error(
+        `Google Sheets sync cron failed: ${(err as Error).stack ?? err}`,
+      );
     }
   }
 
@@ -54,7 +74,7 @@ export class AppCronService {
    * "run now" admin button. Errors are caught so a transient DB issue can't
    * break the cron loop.
    */
-  @Cron(CronExpression.EVERY_5_SECONDS)
+  @Cron(CronExpression.EVERY_10_HOURS)
   async triggerStagnationDetection() {
     try {
       await this.stagnationService.detectStagnantDi();

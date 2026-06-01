@@ -1,3 +1,8 @@
+// Load .env BEFORE anything else imports a service that reads process.env
+// (Google Sheets client checks GOOGLE_SHEETS_ID; same bootstrap covers
+// both NORMAL and ACTION modes so one line keeps env-var setup uniform).
+import 'dotenv/config';
+
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import * as bodyParser from 'body-parser';

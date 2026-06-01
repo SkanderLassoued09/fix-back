@@ -7,9 +7,11 @@ import {
   Composant,
   ComposantSchema,
 } from 'src/composant/entities/composant.entity';
+import { OperationalErrorModule } from 'src/operational-error/operational-error.module';
 
 @Module({
   imports: [
+    OperationalErrorModule,
     MongooseModule.forFeature([
       { name: LogsDi.name, schema: DiLogsSchema },
       {

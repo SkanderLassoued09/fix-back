@@ -114,8 +114,39 @@ export class DiResolver {
   }
 
   @Mutation(() => Di)
-  async componentConfirmedFromCoordinator(@Args('_id') _id: string) {
-    return await this.diService.componentConfirmedFromCoordinator(_id);
+  @UseGuards(JwtAuthGuard)
+  async componentConfirmedFromCoordinator(
+    @Args('_id') _id: string,
+    @CurrentUser() profile: Profile,
+  ) {
+    return await this.diService.componentConfirmedFromCoordinator(
+      _id,
+      profile?._id ?? null,
+    );
+  }
+
+  @Mutation(() => Di)
+  @UseGuards(JwtAuthGuard)
+  async sendDiToAdminsForPricing(
+    @Args('diId') diId: string,
+    @CurrentUser() profile: Profile,
+  ) {
+    return await this.diService.sendDiToAdminsForPricing(
+      diId,
+      profile?._id ?? null,
+    );
+  }
+
+  @Mutation(() => Di)
+  @UseGuards(JwtAuthGuard)
+  async confirmDiComponents(
+    @Args('diId') diId: string,
+    @CurrentUser() profile: Profile,
+  ) {
+    return await this.diService.confirmDiComponents(
+      diId,
+      profile?._id ?? null,
+    );
   }
 
   @Mutation(() => Di)

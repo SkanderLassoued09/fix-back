@@ -11,10 +11,12 @@ import { join } from 'path';
 import * as fs from 'fs';
 import * as randomstring from 'randomstring';
 import { getFileExtension } from 'src/di/shared.files';
+import { OperationalErrorService } from 'src/operational-error/operational-error.service';
 @Injectable()
 export class ComposantService {
   constructor(
     @InjectModel('Composant') private ComposantModel: Model<Composant>,
+    private readonly operationalErrorService: OperationalErrorService,
   ) {}
 
   async generateComposantId(): Promise<number> {
@@ -35,47 +37,60 @@ export class ComposantService {
   async createComposant(
     createComposantInput: CreateComposantInput,
   ): Promise<Composant> {
-    // Check if the PDF is a valid base64 string
-    if (
-      createComposantInput.pdf &&
-      createComposantInput.pdf !== 'null' &&
-      createComposantInput.pdf.includes(',')
-    ) {
-      const extension = getFileExtension(createComposantInput.pdf);
-      const buffer = Buffer.from(
-        createComposantInput.pdf.split(',')[1], // Split base64 string to get the data
-        'base64',
-      );
+    try {
+      // Check if the PDF is a valid base64 string
+      if (
+        createComposantInput.pdf &&
+        createComposantInput.pdf !== 'null' &&
+        createComposantInput.pdf.includes(',')
+      ) {
+        const extension = getFileExtension(createComposantInput.pdf);
+        const buffer = Buffer.from(
+          createComposantInput.pdf.split(',')[1], // Split base64 string to get the data
+          'base64',
+        );
 
-      const randompdfFile = randomstring.generate({
-        length: 12,
-        charset: 'alphabetic',
+        const randompdfFile = randomstring.generate({
+          length: 12,
+          charset: 'alphabetic',
+        });
+
+        fs.writeFileSync(
+          join(__dirname, `../../docs/${randompdfFile}.${extension}`),
+          buffer,
+        );
+
+        createComposantInput.pdf = `${randompdfFile}.${extension}`;
+      } else {
+        // If the PDF is not valid, set it to null
+        createComposantInput.pdf = null;
+      }
+
+      // Generate a unique ID for the composant
+      const index = await this.generateComposantId();
+      createComposantInput._id = `Cmp${index}`;
+
+      // Save the new composant — the silent .catch returning err was a
+      // HIGH-severity bug (resolver returned an Error object that the FE
+      // rendered as a row). Direct await now; failure routes through capture
+      // and the original error rethrows so callers see the real cause.
+      return await new this.ComposantModel(createComposantInput).save();
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'composant',
+        submodule: 'composantService',
+        method: 'CREATE_COMPOSANT',
+        severity: 'HIGH',
+        error: 'Failed to create Composant',
+        message: (error as Error)?.message ?? String(error),
+        payload: {
+          name: createComposantInput?.name,
+          package: createComposantInput?.package,
+          categoryId: createComposantInput?.category_composant_id,
+        },
       });
-
-      fs.writeFileSync(
-        join(__dirname, `../../docs/${randompdfFile}.${extension}`),
-        buffer,
-      );
-
-      createComposantInput.pdf = `${randompdfFile}.${extension}`;
-    } else {
-      // If the PDF is not valid, set it to null
-      createComposantInput.pdf = null;
+      throw error;
     }
-
-    // Generate a unique ID for the composant
-    const index = await this.generateComposantId();
-    createComposantInput._id = `Cmp${index}`;
-
-    // Save the new composant
-    return await new this.ComposantModel(createComposantInput)
-      .save()
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
-      });
   }
 
   async removeComposant(_id: string): Promise<Composant> {
@@ -87,13 +102,25 @@ export class ComposantService {
   }
 
   async findAllComposants(): Promise<[Composant]> {
-    return await this.ComposantModel.find({ isDeleted: false })
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
+    try {
+      return (await this.ComposantModel.find({ isDeleted: false })) as [
+        Composant,
+      ];
+    } catch (err) {
+      // Previously a silent `.catch((err) => return err)` — the resolver
+      // received an Error object that the FE rendered as a row. Now we
+      // capture and return an empty list so the UI shows "no composants"
+      // instead of an exploded row.
+      await this.operationalErrorService.capture({
+        module: 'composant',
+        submodule: 'composantService',
+        method: 'FIND_ALL_COMPOSANTS',
+        severity: 'HIGH',
+        error: 'Query failed (was previously swallowed)',
+        message: (err as Error)?.message ?? String(err),
       });
+      return [] as unknown as [Composant];
+    }
   }
 
   async findOneComposant(name: string): Promise<Composant> {
@@ -202,7 +229,18 @@ export class ComposantService {
 
       return update;
     } catch (error) {
-      throw new Error('Failed to update composant: ' + error.message);
+      await this.operationalErrorService.capture({
+        module: 'composant',
+        submodule: 'composantService',
+        method: 'ADD_COMPOSANT_INFO',
+        severity: 'MEDIUM',
+        error: 'Failed to update composant',
+        message: (error as Error)?.message ?? String(error),
+        payload: { name: updateComposant?.name },
+      });
+      // Re-throw ORIGINAL error so callers see the real Mongo/FS cause
+      // instead of the historical generic wrap.
+      throw error;
     }
   }
   async searchComposants(name: string): Promise<any[]> {

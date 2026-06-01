@@ -16,7 +16,6 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Di, DiDocument, UpdateNego } from './entities/di.entity';
 import { Model } from 'mongoose';
 import {
-  COORDINATOR_STATUS_DI_VALUES,
   MAGASIN_STATUS_DI_VALUES,
   STATUS_DI,
   TECH_STATUS_DI_VALUES,
@@ -55,6 +54,7 @@ import {
 import { DiscordHook } from 'src/discord-hook/entities/discord-hook.entity';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { DiWorkflowService } from './workflow/di-workflow.service';
+import { OperationalErrorService } from 'src/operational-error/operational-error.service';
 @Injectable()
 export class DiService {
   constructor(
@@ -77,7 +77,52 @@ export class DiService {
     private readonly logsDiService: LogsDiService,
     private readonly discordHookService: DiscordHookService,
     private readonly diWorkflowService: DiWorkflowService,
+    private readonly operationalErrorService: OperationalErrorService,
   ) {}
+
+  /**
+   * Tiny helper used at every Discord-side-effect site. Discord failures
+   * are SWALLOWED (Discord is best-effort, never blocks a mutation) but
+   * routed through the OperationalErrorService so they land in the daily
+   * log file + the Discord ops channel. Keeps the 28 catch-Discord sites
+   * to a single readable line each.
+   */
+  private async captureDiscordFailure(
+    method: string,
+    err: unknown,
+    payload?: Record<string, any>,
+  ) {
+    await this.operationalErrorService.capture({
+      module: 'di',
+      submodule: 'diService',
+      method,
+      severity: 'LOW',
+      error: 'Discord notification failed',
+      message: (err as Error)?.message ?? String(err),
+      payload,
+    });
+  }
+
+  /**
+   * Helper for the historically silent `.catch(err => err)` sites. We now
+   * capture the failure and the caller returns a safe default (usually `[]`)
+   * so the resolver never returns an Error object to the FE.
+   */
+  private async captureSilentFailure(
+    method: string,
+    err: unknown,
+    payload?: Record<string, any>,
+  ) {
+    await this.operationalErrorService.capture({
+      module: 'di',
+      submodule: 'diService',
+      method,
+      severity: 'HIGH',
+      error: 'Query failed (was previously swallowed)',
+      message: (err as Error)?.message ?? String(err),
+      payload,
+    });
+  }
 
   async generateClientId(): Promise<number> {
     let indexClient = 0;
@@ -127,8 +172,23 @@ export class DiService {
 
       return di;
     } catch (error) {
-      console.error('createDi error:', error);
-      throw new Error('Failed to create DI');
+      await this.operationalErrorService.capture({
+        module: 'di',
+        submodule: 'diService',
+        method: 'CREATEDI',
+        severity: 'HIGH',
+        error: 'Failed to create DI',
+        message: (error as Error)?.message ?? String(error),
+        payload: {
+          clientId: createDiInput?.client_id,
+          companyId: createDiInput?.company_id,
+          createdBy: createDiInput?.createdBy,
+          title: createDiInput?.title,
+        },
+      });
+      // Re-throw ORIGINAL error so callers see the real underlying cause
+      // (Mongo write conflict, validation, etc.) instead of a generic wrap.
+      throw error;
     }
   }
 
@@ -200,6 +260,7 @@ export class DiService {
   }
 
   async addDevisPDF(_id: string, pdf: string) {
+    try {
     const extension = getFileExtension(pdf);
     const buffer = Buffer.from(pdf.split(',')[1], 'base64');
 
@@ -236,13 +297,26 @@ export class DiService {
         fileName,
       });
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('addDevisPDF', err, { diId: _id });
     }
 
     return result;
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'di',
+        submodule: 'diService',
+        method: 'ADD_DEVIS_PDF',
+        severity: 'HIGH',
+        error: 'Failed to add Devis PDF',
+        message: (error as Error)?.message ?? String(error),
+        payload: { diId: _id },
+      });
+      throw error;
+    }
   }
 
   async addBlPDF(_id: string, pdf: string) {
+    try {
     const extension = getFileExtension(pdf);
     const buffer = Buffer.from(pdf.split(',')[1], 'base64') as any;
 
@@ -281,7 +355,7 @@ export class DiService {
       try {
         await this.discordHookService.sendDiBLUploaded({ di, fileName });
       } catch (err) {
-        console.error('Discord notification failed:', err);
+        await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
       }
 
       return addbllogspdf;
@@ -315,14 +389,27 @@ export class DiService {
           fileName,
         });
       } catch (err) {
-        console.error('Discord notification failed:', err);
+        await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
       }
 
       return updatedDi;
     }
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'di',
+        submodule: 'diService',
+        method: 'ADD_BL_PDF',
+        severity: 'HIGH',
+        error: 'Failed to add BL PDF',
+        message: (error as Error)?.message ?? String(error),
+        payload: { diId: _id },
+      });
+      throw error;
+    }
   }
 
   async addFacturePDF(_id: string, pdf: string) {
+    try {
     const extension = getFileExtension(pdf);
     const buffer = Buffer.from(pdf.split(',')[1], 'base64') as any;
 
@@ -347,9 +434,22 @@ export class DiService {
         { $set: { facture: `${randompdfFile}.${extension}` } },
       );
     }
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'di',
+        submodule: 'diService',
+        method: 'ADD_FACTURE_PDF',
+        severity: 'HIGH',
+        error: 'Failed to add Facture PDF',
+        message: (error as Error)?.message ?? String(error),
+        payload: { diId: _id },
+      });
+      throw error;
+    }
   }
 
   async addBCPDF(_id: string, pdf: string) {
+    try {
     const extension = getFileExtension(pdf);
     const buffer = Buffer.from(pdf.split(',')[1], 'base64');
 
@@ -386,10 +486,22 @@ export class DiService {
         fileName,
       });
     } catch (err) {
-      console.error('Discord notification failed:', err.message);
+      await this.captureDiscordFailure('addBCPDF', err, { diId: _id });
     }
 
     return result;
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'di',
+        submodule: 'diService',
+        method: 'ADD_BC_PDF',
+        severity: 'MEDIUM',
+        error: 'Failed to add BC PDF',
+        message: (error as Error)?.message ?? String(error),
+        payload: { diId: _id },
+      });
+      throw error;
+    }
   }
 
   // async getDiById(_id:string){
@@ -656,6 +768,10 @@ export class DiService {
           location_id: (di.location_id as any)?._id ?? null,
           location_name: (di.location_id as any)?.location_name ?? 'N/A',
           status: di.status,
+          pricingRequestSentAt: di.pricingRequestSentAt,
+          pricingRequestSentBy: di.pricingRequestSentBy,
+          componentsConfirmedAt: di.componentsConfirmedAt,
+          componentsConfirmedBy: di.componentsConfirmedBy,
           price: di.price ?? 'N/A',
           final_price: di.final_price ?? 'N/A',
           createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
@@ -748,6 +864,10 @@ export class DiService {
           location_id: (di.location_id as any)?._id ?? null,
           location_name: (di.location_id as any)?.location_name ?? 'N/A',
           status: di.status,
+          pricingRequestSentAt: di.pricingRequestSentAt,
+          pricingRequestSentBy: di.pricingRequestSentBy,
+          componentsConfirmedAt: di.componentsConfirmedAt,
+          componentsConfirmedBy: di.componentsConfirmedBy,
           price: di.price ?? 'N/A',
           final_price: di.final_price ?? 'N/A',
           createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
@@ -879,7 +999,7 @@ export class DiService {
         },
       });
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     return result.di;
@@ -957,7 +1077,7 @@ export class DiService {
     try {
       await this.discordHookService.sendDiagnosticAssigned(diagnostic);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     return diagnostic;
@@ -1251,7 +1371,7 @@ export class DiService {
     try {
       await this.discordHookService.sendDiFinished(result);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     return result;
@@ -1324,7 +1444,7 @@ export class DiService {
     try {
       await this.discordHookService.sendDiCancelled(updated);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     return updated;
@@ -1431,9 +1551,9 @@ export class DiService {
     const { first, rows } = paginationConfig;
     const { field, value } = search;
 
-    // ✅ Coordinator base filter
+    // ✅ Coordinator base filter — full visibility (no status restriction).
+    //    Action-gating still happens per-mutation; this only widens the read.
     const filter: any = {
-      status: { $in: COORDINATOR_STATUS_DI_VALUES },
       isDeleted: false,
     };
 
@@ -1531,6 +1651,10 @@ export class DiService {
           _idnum: di._idnum,
           title: di.title,
           status: di.status,
+          pricingRequestSentAt: di.pricingRequestSentAt,
+          pricingRequestSentBy: di.pricingRequestSentBy,
+          componentsConfirmedAt: di.componentsConfirmedAt,
+          componentsConfirmedBy: di.componentsConfirmedBy,
           price: di.price ?? 'N/A',
           final_price: di.final_price ?? 'N/A',
           createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
@@ -1556,8 +1680,10 @@ export class DiService {
 
   // *Query For Coordinator
   async get_coordinatorDI(paginationConfig: PaginationConfigDi) {
+    // Coordinator now sees the full DI list (no status filter). Soft-deleted
+    // rows still excluded so the previous safety stays. Per-status actions
+    // remain gated in the FE / mutations — visibility ≠ ability to act.
     const queryCoordinator = {
-      status: { $in: COORDINATOR_STATUS_DI_VALUES },
       isDeleted: false,
     };
     const { first, rows } = paginationConfig;
@@ -1610,6 +1736,10 @@ export class DiService {
         updatedAt: di.updatedAt,
         location_id: di.location_id?.location_name ?? 'N/A',
         status: di.status,
+        pricingRequestSentAt: di.pricingRequestSentAt,
+        pricingRequestSentBy: di.pricingRequestSentBy,
+        componentsConfirmedAt: di.componentsConfirmedAt,
+        componentsConfirmedBy: di.componentsConfirmedBy,
         image: di.image,
         handleSendingNotificationBetweenCoordinatorAndMagasin:
           di.handleSendingNotificationBetweenCoordinatorAndMagasin,
@@ -1629,19 +1759,25 @@ export class DiService {
   }
   // Query For Tech
   async getAll_TechDI(tech_id: string) {
-    return await this.diModel
-      .find({
+    try {
+      return await this.diModel.find({
         current_workers_ids: tech_id,
-        status: {
-          $in: TECH_STATUS_DI_VALUES,
-        },
-      })
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
+        status: { $in: TECH_STATUS_DI_VALUES },
       });
+    } catch (err) {
+      await this.operationalErrorService.capture({
+        module: 'di',
+        submodule: 'diService',
+        method: 'GET_ALL_TECH_DI',
+        severity: 'HIGH',
+        error: 'Failed to load tech DI list',
+        message: (err as Error)?.message ?? String(err),
+        payload: { tech_id },
+      });
+      // Safe default — return empty list rather than the Error object,
+      // which previously got rendered as a row by the frontend.
+      return [];
+    }
   }
   //! working here
   async getDiForMagasin(paginationConfig: PaginationConfigDi) {
@@ -1765,7 +1901,7 @@ export class DiService {
         price,
       });
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     return updatedDi;
@@ -1797,7 +1933,7 @@ export class DiService {
     try {
       await this.discordHookService.sendDiIgnored(updated);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     return updated;
@@ -1830,7 +1966,7 @@ export class DiService {
     try {
       await this.discordHookService.sendDiStatusPending1(result);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -1857,7 +1993,7 @@ export class DiService {
         await this.discordHookService.sendDiagnosticStarted(result);
       }
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -1897,7 +2033,7 @@ export class DiService {
     try {
       await this.discordHookService.sendDiInMagasin(result);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -1974,7 +2110,7 @@ export class DiService {
     try {
       await this.discordHookService.sendDiStatusPending2(result);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     // existing socket notification
@@ -1987,12 +2123,15 @@ export class DiService {
     return result;
   }
 
-  async changeStatusPricing(_id: string) {
+  async changeStatusPricing(_id: string, pricingRequestSentBy?: string | null) {
+    const pricingRequestSentAt = new Date();
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
           status: STATUS_DI.Pricing.status,
+          pricingRequestSentAt,
+          pricingRequestSentBy: pricingRequestSentBy ?? null,
         },
       },
       { new: true },
@@ -2016,7 +2155,7 @@ export class DiService {
     try {
       await this.discordHookService.sendDiPricing(result);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     // existing notifications
@@ -2031,6 +2170,23 @@ export class DiService {
     });
 
     return result;
+  }
+
+  async sendDiToAdminsForPricing(
+    diId: string,
+    pricingRequestSentBy?: string | null,
+  ) {
+    const existing = await this.diModel.findOne({ _id: diId });
+
+    if (!existing) {
+      throw new NotFoundException(`DI ${diId} not found`);
+    }
+
+    if (existing.pricingRequestSentAt) {
+      return existing;
+    }
+
+    return this.changeStatusPricing(diId, pricingRequestSentBy);
   }
 
   async changeStatusNegociate1(_id: string) {
@@ -2061,7 +2217,7 @@ export class DiService {
     try {
       await this.discordHookService.sendDiNegotiation1(result);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -2100,7 +2256,7 @@ export class DiService {
     try {
       await this.discordHookService.sendDiNegotiation2(result);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -2140,7 +2296,7 @@ export class DiService {
     try {
       await this.discordHookService.sendDiStatusPending3(result);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     // existing socket notification
@@ -2182,7 +2338,7 @@ export class DiService {
     try {
       await this.discordHookService.sendDiInReparation(result);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -2232,7 +2388,7 @@ export class DiService {
         await this.discordHookService.sendReparationStarted(result);
       }
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -2275,7 +2431,7 @@ export class DiService {
         status: STATUS_DI.Finished.status,
       });
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     const di = this.getDiById(_id);
@@ -2298,7 +2454,7 @@ export class DiService {
     try {
       if (updated) await this.discordHookService.sendDiRetour(updated, 1);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -2319,7 +2475,7 @@ export class DiService {
     try {
       if (updated) await this.discordHookService.sendDiRetour(updated, 2);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -2340,7 +2496,7 @@ export class DiService {
     try {
       if (updated) await this.discordHookService.sendDiRetour(updated, 3);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -2395,7 +2551,7 @@ export class DiService {
     try {
       await this.discordHookService.sendDiagnosticPaused(diStatus);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -2436,7 +2592,7 @@ export class DiService {
     try {
       await this.discordHookService.sendReparationPaused(diStatus);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -2492,11 +2648,12 @@ export class DiService {
           ],
         },
       })
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
+      .catch(async (err) => {
+        // Silent .catch returning err was a HIGH-severity bug — the
+        // resolver returned an Error object that the FE rendered as a row.
+        // Now we capture + return a safe empty array.
+        await this.captureSilentFailure('tech-statistic-query', err);
+        return [] as any;
       });
   }
   //1.Duree Moyenne Diagnostique
@@ -2517,11 +2674,12 @@ export class DiService {
           ],
         },
       })
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
+      .catch(async (err) => {
+        // Silent .catch returning err was a HIGH-severity bug — the
+        // resolver returned an Error object that the FE rendered as a row.
+        // Now we capture + return a safe empty array.
+        await this.captureSilentFailure('tech-statistic-query', err);
+        return [] as any;
       });
   }
   //2. Taux de reperation reussie for Tech
@@ -2538,11 +2696,12 @@ export class DiService {
           ],
         },
       })
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
+      .catch(async (err) => {
+        // Silent .catch returning err was a HIGH-severity bug — the
+        // resolver returned an Error object that the FE rendered as a row.
+        // Now we capture + return a safe empty array.
+        await this.captureSilentFailure('tech-statistic-query', err);
+        return [] as any;
       });
   }
   //2. Taux de reperation for Tech
@@ -2551,11 +2710,12 @@ export class DiService {
       .find({
         id_tech_rep: techRep_id,
       })
-      .then((res) => {
-        return res;
-      })
-      .catch((err) => {
-        return err;
+      .catch(async (err) => {
+        // Silent .catch returning err was a HIGH-severity bug — the
+        // resolver returned an Error object that the FE rendered as a row.
+        // Now we capture + return a safe empty array.
+        await this.captureSilentFailure('tech-statistic-query', err);
+        return [] as any;
       });
   }
 
@@ -2609,7 +2769,7 @@ export class DiService {
     try {
       await this.discordHookService.sendComponentsSentToCoordinator(updated);
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     // existing socket notification
@@ -2618,16 +2778,30 @@ export class DiService {
     return updated;
   }
 
-  async componentConfirmedFromCoordinator(_id: string) {
+  async componentConfirmedFromCoordinator(
+    _id: string,
+    componentsConfirmedBy?: string | null,
+  ) {
     const di = await this.diModel.findOne({ _id });
     if (!di) return null;
 
     let updated;
+    const componentsConfirmedAt = new Date();
 
     if (di.ignoreCount && di.ignoreCount > 0) {
-      updated = await this.logsDiService.componentConfirmedFromCoordinator(
+      await this.logsDiService.componentConfirmedFromCoordinator(
         _id,
         di.ignoreCount,
+      );
+      updated = await this.diModel.findOneAndUpdate(
+        { _id },
+        {
+          $set: {
+            componentsConfirmedAt,
+            componentsConfirmedBy: componentsConfirmedBy ?? null,
+          },
+        },
+        { new: true },
       );
     } else {
       updated = await this.diModel.findOneAndUpdate(
@@ -2636,6 +2810,8 @@ export class DiService {
           $set: {
             isConfirmedComponentFromCoordinator: true,
             handleSendingNotificationBetweenCoordinatorAndMagasin: 'DEFAULT',
+            componentsConfirmedAt,
+            componentsConfirmedBy: componentsConfirmedBy ?? null,
           },
         },
         { new: true },
@@ -2655,7 +2831,7 @@ export class DiService {
         updated,
       );
     } catch (err) {
-      console.error('Discord notification failed:', err);
+      await this.captureDiscordFailure('discord-notification', err);
     }
 
     // existing socket notification
@@ -2663,6 +2839,27 @@ export class DiService {
 
     return updated;
   }
+
+  async confirmDiComponents(
+    diId: string,
+    componentsConfirmedBy?: string | null,
+  ) {
+    const di = await this.diModel.findOne({ _id: diId });
+
+    if (!di) {
+      throw new NotFoundException(`DI ${diId} not found`);
+    }
+
+    if (di.componentsConfirmedAt) {
+      return di;
+    }
+
+    return this.componentConfirmedFromCoordinator(
+      diId,
+      componentsConfirmedBy,
+    );
+  }
+
   private buildPayload(di: any, extra: any) {
     return {
       _id: di._idnum,

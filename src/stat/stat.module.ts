@@ -16,6 +16,7 @@ import {
 import { Company, CompanySchema } from 'src/company/entities/company.entity';
 import { Client, ClientSchema } from 'src/clients/entities/client.entity';
 import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
+import { OperationalErrorModule } from 'src/operational-error/operational-error.module';
 
 @Module({
   providers: [
@@ -26,6 +27,7 @@ import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
   ],
   imports: [
     DiscordHookModule,
+    OperationalErrorModule,
     LogsDiModule,
     PubSubModule,
     MongooseModule.forFeature([

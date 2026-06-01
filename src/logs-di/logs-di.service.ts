@@ -1,8 +1,4 @@
-import {
-  Injectable,
-  InternalServerErrorException,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { UpdateLogsDiInput } from './dto/update-logs-di.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -14,6 +10,7 @@ import {
   ComposantDocument,
 } from 'src/composant/entities/composant.entity';
 import { v4 as uuidv4 } from 'uuid';
+import { OperationalErrorService } from 'src/operational-error/operational-error.service';
 @Injectable()
 export class LogsDiService {
   constructor(
@@ -21,6 +18,7 @@ export class LogsDiService {
     private readonly logsDiModel: Model<DiLogsDocument>,
     @InjectModel(Composant.name)
     private composantModel: Model<ComposantDocument>,
+    private readonly operationalErrorService: OperationalErrorService,
   ) {}
 
   async generateDiId(): Promise<number> {
@@ -55,6 +53,17 @@ export class LogsDiService {
       // }
       return logsDi;
     } catch (error) {
+      // Was a no-op try/catch — captured now so Mongo failures land in
+      // the daily log file + Discord ops channel before rethrow.
+      await this.operationalErrorService.capture({
+        module: 'logs-di',
+        submodule: 'logsDiService',
+        method: 'GET_LOGS_BY_ID',
+        severity: 'MEDIUM',
+        error: 'Failed to load DI logs by id',
+        message: (error as Error)?.message ?? String(error),
+        payload: { _idDi, idIgnore },
+      });
       throw error;
     }
   }
@@ -89,6 +98,17 @@ export class LogsDiService {
 
       return result;
     } catch (error) {
+      // No-op rethrow was here previously — wired through capture now so
+      // operations can see when a tech's diagnostic save fails.
+      await this.operationalErrorService.capture({
+        module: 'logs-di',
+        submodule: 'logsDiService',
+        method: 'TECH_START_DIAGNOSTIC',
+        severity: 'HIGH',
+        error: 'Failed to persist tech diagnostic logs',
+        message: (error as Error)?.message ?? String(error),
+        payload: { _idDi, idIgnore },
+      });
       throw error;
     }
   }
@@ -98,29 +118,53 @@ export class LogsDiService {
     price: number,
     final_price?: number,
   ) {
-    if (final_price) {
-      return await this.logsDiModel
-        .findOneAndUpdate({ _idDi, idIgnore }, { $set: { price, final_price } })
-        .then((res) => {
-          return res;
-        })
-        .catch((err) => {
-          return err;
-        });
-    } else {
-      return await this.logsDiModel
-        .findOneAndUpdate({ _idDi, idIgnore }, { $set: { price } })
-        .then((res) => {
-          return res;
-        })
-        .catch((err) => {
-          return err;
-        });
+    try {
+      if (final_price) {
+        return await this.logsDiModel.findOneAndUpdate(
+          { _idDi, idIgnore },
+          { $set: { price, final_price } },
+        );
+      } else {
+        return await this.logsDiModel.findOneAndUpdate(
+          { _idDi, idIgnore },
+          { $set: { price } },
+        );
+      }
+    } catch (error) {
+      // Previously two silent `.catch((err) => return err)` — pricing
+      // flows received an Error object as if pricing succeeded. Now we
+      // capture (HIGH — financial fields) and rethrow the original so
+      // the caller sees the real Mongo cause.
+      await this.operationalErrorService.capture({
+        module: 'logs-di',
+        submodule: 'logsDiService',
+        method: 'SAVE_PRICING',
+        severity: 'HIGH',
+        error: 'Failed to persist pricing logs',
+        message: (error as Error)?.message ?? String(error),
+        payload: { _idDi, idIgnore, price, final_price },
+      });
+      throw error;
     }
   }
 
   async calculateComposantTicketPrice(_idDi: string, idIgnore: number) {
     const diLog = await this.logsDiModel.findOne({ _idDi, idIgnore });
+    if (!diLog || !Array.isArray(diLog.array_composants)) {
+      // Previously crashed with `Cannot read properties of null` if the
+      // log row was missing. Capture + return 0 so pricing flows degrade
+      // gracefully (caller sees "no priced components" rather than 500).
+      await this.operationalErrorService.capture({
+        module: 'logs-di',
+        submodule: 'logsDiService',
+        method: 'CALCULATE_COMPOSANT_TICKET_PRICE',
+        severity: 'MEDIUM',
+        error: 'DI log row missing or has no array_composants',
+        message: `No diLog for _idDi=${_idDi} idIgnore=${idIgnore}`,
+        payload: { _idDi, idIgnore, diLogExists: !!diLog },
+      });
+      return 0;
+    }
     const totalPrice = await Promise.all(
       diLog.array_composants.map(async (item) => {
         const composant = await this.composantModel.findOne({
@@ -167,6 +211,18 @@ export class LogsDiService {
 
   async calculateticketComposantPriceLogs(_id: string, idIgnore: number) {
     const ticket = await this.logsDiModel.findOne({ _id, idIgnore });
+    if (!ticket || !Array.isArray(ticket.array_composants)) {
+      await this.operationalErrorService.capture({
+        module: 'logs-di',
+        submodule: 'logsDiService',
+        method: 'CALCULATE_TICKET_COMPOSANT_PRICE_LOGS',
+        severity: 'MEDIUM',
+        error: 'Ticket log row missing or has no array_composants',
+        message: `No ticket for _id=${_id} idIgnore=${idIgnore}`,
+        payload: { _id, idIgnore, ticketExists: !!ticket },
+      });
+      return 0;
+    }
 
     const totalPrice = await Promise.all(
       ticket.array_composants.map(async (item) => {
@@ -244,7 +300,20 @@ export class LogsDiService {
 
       return updatedDocument;
     } catch (error) {
-      throw new InternalServerErrorException(error);
+      // Previously wrapped in `throw new InternalServerErrorException(error)`
+      // — lost the original Mongo / Nest exception class. Now we capture
+      // and rethrow the ORIGINAL so the caller (and the GraphQL pipeline)
+      // gets the right exception type (e.g. NotFoundException stays a 404).
+      await this.operationalErrorService.capture({
+        module: 'logs-di',
+        submodule: 'logsDiService',
+        method: 'SET_SELECTED_COMPONENT_AS_DONE_LOGS',
+        severity: 'MEDIUM',
+        error: 'Failed to mark component as done in logs',
+        message: (error as Error)?.message ?? String(error),
+        payload: { _idDi, diIgnore, nameComponent },
+      });
+      throw error;
     }
   }
 
@@ -257,6 +326,20 @@ export class LogsDiService {
       }
       return logs;
     } catch (error) {
+      // ⚠️ The catch body was EMPTY — Mongo errors disappeared AND the
+      // method returned `undefined` to callers expecting an array,
+      // crashing downstream with "cannot read length of undefined".
+      // Now we capture + return [] so downstream stays safe.
+      await this.operationalErrorService.capture({
+        module: 'logs-di',
+        submodule: 'logsDiService',
+        method: 'GET_ALL_LOGS_BY_DI',
+        severity: 'HIGH',
+        error: 'Query failed (was previously swallowed by empty catch)',
+        message: (error as Error)?.message ?? String(error),
+        payload: { _idDi },
+      });
+      return [];
     }
   }
 
