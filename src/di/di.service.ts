@@ -2350,36 +2350,72 @@ export class DiService {
     return result;
   }
 
-  async changeStatusInRepair(_id: string) {
-    // Capture the previous status BEFORE the update so we can choose the
-    // right embed (started vs resumed). findOneAndUpdate({new: true})
-    // would otherwise only return the post-update snapshot.
-    const previous = await this.diModel.findOne({ _id });
-    const previousStatus = previous?.status;
+  /**
+   * Build + emit the WebSocket `updateTicket` event for a DI status change.
+   *
+   * Frontend filters (e.g. `tech-di-list.handleTechRealtimeMessage`) look
+   * for `id_tech_diag` / `id_tech_rep` somewhere in the payload to decide
+   * whether the connected tech should refresh. The Di entity does NOT
+   * carry those fields — they live on the Stat — so we fetch the matching
+   * Stat first and stitch its tech ids into `content.states` and `target`.
+   *
+   * Without this enrichment, the broadcast is delivered but every tech
+   * client discards it as irrelevant, breaking real-time list/badge sync.
+   */
+  private async broadcastDiStatusChange(
+    diId: string,
+    diStatus: any,
+  ): Promise<void> {
+    const ignoreCount = (diStatus as any)?.ignoreCount ?? 0;
+    const stat = await this.statModel
+      .findOne(
+        ignoreCount > 0
+          ? { _idDi: diId, ignoreCount }
+          : { _idDi: diId },
+      )
+      .lean()
+      .exec();
 
-    const result = await this.diModel.findOneAndUpdate(
-      { _id },
-      {
-        $set: {
-          status: STATUS_DI.InReparation.status,
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: {
+        diStatus,
+        states: {
+          ...(stat ?? {}),
+          _id: diId,
+          _idDi: diId,
+          status: diStatus?.status,
+          id_tech_diag: stat?.id_tech_diag,
+          id_tech_rep: stat?.id_tech_rep,
         },
       },
-      { new: true },
+      target: {
+        id_tech_diag: stat?.id_tech_diag,
+        id_tech_rep: stat?.id_tech_rep,
+      },
+    });
+  }
+
+  async changeStatusInRepair(_id: string) {
+    console.log('[changeStatusInRepair][service] start _id=', _id);
+
+    // Mirror `changeStatusInDiagnostic` exactly: delegate to the workflow
+    // service so the transition uses the same validated path the diagnostic
+    // flow uses. CHANGE_STATUS_IN_REPAIR transitions the DI and the matching
+    // Stat in one awaited unit; failures surface synchronously instead of
+    // being swallowed by an unhandled rejection.
+    const { di: result, previousStatus } =
+      await this.diWorkflowService.transition({
+        diId: _id,
+        transitionKey: 'CHANGE_STATUS_IN_REPAIR',
+        skipRoleValidation: true,
+      });
+    console.log(
+      '[changeStatusInRepair][service] transition result=',
+      result ? { _id: result._id, status: result.status } : null,
+      'previousStatus=',
+      previousStatus,
     );
-
-    if (!result) {
-      throw new Error('Issue in changeStatusInRepair');
-    }
-
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.InReparation.status,
-        result.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.InReparation.status);
-    }
 
     try {
       if (previousStatus === STATUS_DI.ReparationInPause.status) {
@@ -2391,11 +2427,7 @@ export class DiService {
       await this.captureDiscordFailure('discord-notification', err);
     }
 
-    this.notificationGateway.updateTicket({
-      action: 'updateState',
-      content: { result, states: result },
-      target: {},
-    });
+    await this.broadcastDiStatusChange(_id, result);
     return result;
   }
 
@@ -2554,11 +2586,7 @@ export class DiService {
       await this.captureDiscordFailure('discord-notification', err);
     }
 
-    this.notificationGateway.updateTicket({
-      action: 'updateState',
-      content: { diStatus, states: diStatus },
-      target: {},
-    });
+    await this.broadcastDiStatusChange(_id, diStatus);
     return diStatus;
   }
 
@@ -2595,11 +2623,7 @@ export class DiService {
       await this.captureDiscordFailure('discord-notification', err);
     }
 
-    this.notificationGateway.updateTicket({
-      action: 'updateState',
-      content: { diStatus, states: diStatus },
-      target: {},
-    });
+    await this.broadcastDiStatusChange(_id, diStatus);
 
     return diStatus;
   }
@@ -2624,11 +2648,7 @@ export class DiService {
       this.statsService.updateStatus(_id, STATUS_DI.ReparationInPause.status);
     }
 
-    this.notificationGateway.updateTicket({
-      action: 'updateState',
-      content: { repInPause, states: repInPause },
-      target: {},
-    });
+    await this.broadcastDiStatusChange(_id, repInPause);
 
     return repInPause;
   }

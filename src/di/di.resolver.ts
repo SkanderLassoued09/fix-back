@@ -420,12 +420,23 @@ export class DiResolver {
   }
 
   @Mutation(() => Boolean)
-  changeStatusInRepair(@Args('_id') _id: string) {
-    const isPending = this.diService.changeStatusInRepair(_id);
-    if (isPending) {
-      return true;
-    } else {
-      return false;
+  async changeStatusInRepair(@Args('_id') _id: string) {
+    // TEMP-LOG: trace resume mutation entry to confirm the resolver fires
+    // and that the `_id` arrived intact from the GraphQL query.
+    console.log('[changeStatusInRepair][resolver] called with _id=', _id);
+    try {
+      // Properly await the service so any error surfaces to the GraphQL
+      // response instead of being swallowed. The previous fire-and-forget
+      // shape returned `true` immediately even when the service threw.
+      const result = await this.diService.changeStatusInRepair(_id);
+      console.log(
+        '[changeStatusInRepair][resolver] success status=',
+        (result as any)?.status,
+      );
+      return !!result;
+    } catch (err) {
+      console.error('[changeStatusInRepair][resolver] error:', err);
+      throw err;
     }
   }
   @Mutation(() => Boolean)

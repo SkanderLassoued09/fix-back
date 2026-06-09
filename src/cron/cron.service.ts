@@ -42,6 +42,7 @@ export class AppCronService {
    * Trigger-only — every business decision lives in SheetSyncService so
    * the same logic runs via the dedicated SheetSyncScheduler (daily 02:00)
    * AND via `ACTION=SYNC_GOOGLE_SHEETS npm run start:dev`.
+   * 
    */
   async triggerGoogleSheetsSync() {
     try {

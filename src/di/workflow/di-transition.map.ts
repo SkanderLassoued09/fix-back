@@ -74,6 +74,27 @@ export const DI_TRANSITIONS = {
     strictFrom: false,
     strictRole: false,
   },
+  /**
+   * Mutation: changeStatusInRepair
+   * Behavior mirror of CHANGE_STATUS_IN_DIAGNOSTIC for the repair flow:
+   * Reparation / ReparationInPause / Pending3 → InReparation, both DI and
+   * the matching Stat. Same updateStatStatus + soft validation defaults so
+   * the rep resume goes through the exact same code path the diag resume
+   * uses (which the user verified is working in production).
+   */
+  CHANGE_STATUS_IN_REPAIR: {
+    key: 'CHANGE_STATUS_IN_REPAIR',
+    from: [
+      STATUS_DI.Reparation.status,
+      STATUS_DI.ReparationInPause.status,
+      STATUS_DI.Pending3.status,
+    ],
+    to: STATUS_DI.InReparation.status,
+    allowedActorRoles: [Role.TECH],
+    updateStatStatus: true,
+    strictFrom: false,
+    strictRole: false,
+  },
 } satisfies Record<string, DiTransitionConfig>;
 
 export type DiTransitionKey = keyof typeof DI_TRANSITIONS;
