@@ -18,6 +18,12 @@ export class StatDocument extends Document {
   id_tech_rep: string;
   @Prop()
   rep_time: string;
+  // Wall-clock at which the CURRENT repair run leg started. Set on a real
+  // start/resume into INREPARATION (never on pause or a no-op modal re-open),
+  // so the UI derives elapsed = rep_time + (now - repRunStartedAt) and the
+  // repair timer survives refresh/tabs/devices without localStorage.
+  @Prop({ type: Date, default: null })
+  repRunStartedAt: Date;
   @Prop()
   status: string;
   @Prop({ type: String, ref: 'Location' })
@@ -122,6 +128,8 @@ export class Stat {
   id_tech_rep: string;
   @Field({ nullable: true })
   rep_time: string;
+  @Field({ nullable: true })
+  repRunStartedAt?: Date;
   @Field({ nullable: true })
   id_tech_retour: string;
   @Field({ nullable: true })

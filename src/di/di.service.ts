@@ -261,46 +261,46 @@ export class DiService {
 
   async addDevisPDF(_id: string, pdf: string) {
     try {
-    const extension = getFileExtension(pdf);
-    const buffer = Buffer.from(pdf.split(',')[1], 'base64');
+      const extension = getFileExtension(pdf);
+      const buffer = Buffer.from(pdf.split(',')[1], 'base64');
 
-    const randompdfFile = randomstring.generate({
-      length: 12,
-      charset: 'alphabetic',
-    });
-
-    const fileName = `${randompdfFile}.${extension}`;
-
-    fs.writeFileSync(join(__dirname, `../../docs/${fileName}`), buffer);
-
-    const di = await this.diModel.findOne({ _id });
-
-    let result;
-
-    if (di && di.ignoreCount && di.ignoreCount > 0) {
-      result = await this.logsDiService.addDevisPDFLogs(
-        di._id,
-        di.ignoreCount,
-        fileName,
-      );
-    } else {
-      result = await this.diModel.updateOne(
-        { _id },
-        { $set: { devis: fileName } },
-      );
-    }
-
-    // 🔔 Discord notification (Devis uploaded)
-    try {
-      await this.discordHookService.sendDiDevisUploaded({
-        di,
-        fileName,
+      const randompdfFile = randomstring.generate({
+        length: 12,
+        charset: 'alphabetic',
       });
-    } catch (err) {
-      await this.captureDiscordFailure('addDevisPDF', err, { diId: _id });
-    }
 
-    return result;
+      const fileName = `${randompdfFile}.${extension}`;
+
+      fs.writeFileSync(join(__dirname, `../../docs/${fileName}`), buffer);
+
+      const di = await this.diModel.findOne({ _id });
+
+      let result;
+
+      if (di && di.ignoreCount && di.ignoreCount > 0) {
+        result = await this.logsDiService.addDevisPDFLogs(
+          di._id,
+          di.ignoreCount,
+          fileName,
+        );
+      } else {
+        result = await this.diModel.updateOne(
+          { _id },
+          { $set: { devis: fileName } },
+        );
+      }
+
+      // 🔔 Discord notification (Devis uploaded)
+      try {
+        await this.discordHookService.sendDiDevisUploaded({
+          di,
+          fileName,
+        });
+      } catch (err) {
+        await this.captureDiscordFailure('addDevisPDF', err, { diId: _id });
+      }
+
+      return result;
     } catch (error) {
       await this.operationalErrorService.capture({
         module: 'di',
@@ -317,83 +317,83 @@ export class DiService {
 
   async addBlPDF(_id: string, pdf: string) {
     try {
-    const extension = getFileExtension(pdf);
-    const buffer = Buffer.from(pdf.split(',')[1], 'base64') as any;
+      const extension = getFileExtension(pdf);
+      const buffer = Buffer.from(pdf.split(',')[1], 'base64') as any;
 
-    const randompdfFile = randomstring.generate({
-      length: 12,
-      charset: 'alphabetic',
-    });
-    fs.writeFileSync(
-      join(__dirname, `../../docs/${randompdfFile}.${extension}`),
-      buffer,
-    );
-    const di = await this.diModel.findOne({ _id });
-    const fileName = `${randompdfFile}.${extension}`;
-    if (di && di.ignoreCount && di.ignoreCount > 0) {
-      let addbllogspdf = await this.logsDiService.addBLPDFLogs(
-        di._id,
-        di.ignoreCount,
-        fileName,
+      const randompdfFile = randomstring.generate({
+        length: 12,
+        charset: 'alphabetic',
+      });
+      fs.writeFileSync(
+        join(__dirname, `../../docs/${randompdfFile}.${extension}`),
+        buffer,
       );
-      this.notificationGateway.blAddedNotification({
-        di,
-        message: `A new BL has been added for DI ${di._idnum} with ignore count ${di.ignoreCount}`,
-      });
-      // Also broadcast updateTicket so every ticket-list view triggers
-      // its standard requestRefresh/loadData pipeline. Without this, the
-      // BL flow only fires the bl-specific subject and depends solely on
-      // the in-place patchBlAddedRow patch. The server-driven refresh
-      // fetches the persisted state and lets the row's class binding
-      // pick up bon_de_livraison from the DI document.
-      this.notificationGateway.updateTicket({
-        action: 'updateState',
-        content: { result: di, states: di },
-        target: {},
-      });
-
-      try {
-        await this.discordHookService.sendDiBLUploaded({ di, fileName });
-      } catch (err) {
-        await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
-      }
-
-      return addbllogspdf;
-    } else {
-      // Use findOneAndUpdate({ new: true }) so the post-update document
-      // (with bon_de_livraison populated) is what we both broadcast and
-      // return. The previous updateOne left `di` as the pre-update doc,
-      // so any consumer of the WS payload received stale data.
-      const updatedDi = await this.diModel.findOneAndUpdate(
-        { _id },
-        { $set: { bon_de_livraison: fileName } },
-        { new: true },
-      );
-
-      this.notificationGateway.blAddedNotification({
-        di: updatedDi,
-        message: {
-          role: 'MAGASIN',
-          content: `A new BL has been added for DI ${di._idnum}`,
-        },
-      });
-      this.notificationGateway.updateTicket({
-        action: 'updateState',
-        content: { result: updatedDi, states: updatedDi },
-        target: {},
-      });
-
-      try {
-        await this.discordHookService.sendDiBLUploaded({
-          di: updatedDi,
+      const di = await this.diModel.findOne({ _id });
+      const fileName = `${randompdfFile}.${extension}`;
+      if (di && di.ignoreCount && di.ignoreCount > 0) {
+        let addbllogspdf = await this.logsDiService.addBLPDFLogs(
+          di._id,
+          di.ignoreCount,
           fileName,
+        );
+        this.notificationGateway.blAddedNotification({
+          di,
+          message: `A new BL has been added for DI ${di._idnum} with ignore count ${di.ignoreCount}`,
         });
-      } catch (err) {
-        await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
-      }
+        // Also broadcast updateTicket so every ticket-list view triggers
+        // its standard requestRefresh/loadData pipeline. Without this, the
+        // BL flow only fires the bl-specific subject and depends solely on
+        // the in-place patchBlAddedRow patch. The server-driven refresh
+        // fetches the persisted state and lets the row's class binding
+        // pick up bon_de_livraison from the DI document.
+        this.notificationGateway.updateTicket({
+          action: 'updateState',
+          content: { result: di, states: di },
+          target: {},
+        });
 
-      return updatedDi;
-    }
+        try {
+          await this.discordHookService.sendDiBLUploaded({ di, fileName });
+        } catch (err) {
+          await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
+        }
+
+        return addbllogspdf;
+      } else {
+        // Use findOneAndUpdate({ new: true }) so the post-update document
+        // (with bon_de_livraison populated) is what we both broadcast and
+        // return. The previous updateOne left `di` as the pre-update doc,
+        // so any consumer of the WS payload received stale data.
+        const updatedDi = await this.diModel.findOneAndUpdate(
+          { _id },
+          { $set: { bon_de_livraison: fileName } },
+          { new: true },
+        );
+
+        this.notificationGateway.blAddedNotification({
+          di: updatedDi,
+          message: {
+            role: 'MAGASIN',
+            content: `A new BL has been added for DI ${di._idnum}`,
+          },
+        });
+        this.notificationGateway.updateTicket({
+          action: 'updateState',
+          content: { result: updatedDi, states: updatedDi },
+          target: {},
+        });
+
+        try {
+          await this.discordHookService.sendDiBLUploaded({
+            di: updatedDi,
+            fileName,
+          });
+        } catch (err) {
+          await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
+        }
+
+        return updatedDi;
+      }
     } catch (error) {
       await this.operationalErrorService.capture({
         module: 'di',
@@ -410,30 +410,30 @@ export class DiService {
 
   async addFacturePDF(_id: string, pdf: string) {
     try {
-    const extension = getFileExtension(pdf);
-    const buffer = Buffer.from(pdf.split(',')[1], 'base64') as any;
+      const extension = getFileExtension(pdf);
+      const buffer = Buffer.from(pdf.split(',')[1], 'base64') as any;
 
-    const randompdfFile = randomstring.generate({
-      length: 12,
-      charset: 'alphabetic',
-    });
-    fs.writeFileSync(
-      join(__dirname, `../../docs/${randompdfFile}.${extension}`),
-      buffer,
-    );
-    const di = await this.diModel.findOne({ _id });
-    if (di && di.ignoreCount && di.ignoreCount > 0) {
-      return await this.logsDiService.addFacturePDFLogs(
-        di._id,
-        di.ignoreCount,
-        `${randompdfFile}.${extension}`,
+      const randompdfFile = randomstring.generate({
+        length: 12,
+        charset: 'alphabetic',
+      });
+      fs.writeFileSync(
+        join(__dirname, `../../docs/${randompdfFile}.${extension}`),
+        buffer,
       );
-    } else {
-      return await this.diModel.updateOne(
-        { _id },
-        { $set: { facture: `${randompdfFile}.${extension}` } },
-      );
-    }
+      const di = await this.diModel.findOne({ _id });
+      if (di && di.ignoreCount && di.ignoreCount > 0) {
+        return await this.logsDiService.addFacturePDFLogs(
+          di._id,
+          di.ignoreCount,
+          `${randompdfFile}.${extension}`,
+        );
+      } else {
+        return await this.diModel.updateOne(
+          { _id },
+          { $set: { facture: `${randompdfFile}.${extension}` } },
+        );
+      }
     } catch (error) {
       await this.operationalErrorService.capture({
         module: 'di',
@@ -450,46 +450,46 @@ export class DiService {
 
   async addBCPDF(_id: string, pdf: string) {
     try {
-    const extension = getFileExtension(pdf);
-    const buffer = Buffer.from(pdf.split(',')[1], 'base64');
+      const extension = getFileExtension(pdf);
+      const buffer = Buffer.from(pdf.split(',')[1], 'base64');
 
-    const randompdfFile = randomstring.generate({
-      length: 12,
-      charset: 'alphabetic',
-    });
-
-    const fileName = `${randompdfFile}.${extension}`;
-
-    fs.writeFileSync(join(__dirname, `../../docs/${fileName}`), buffer);
-
-    const di = await this.diModel.findOne({ _id });
-
-    let result;
-
-    if (di && di.ignoreCount && di.ignoreCount > 0) {
-      result = await this.logsDiService.addBCPDFLogs(
-        di._id,
-        di.ignoreCount,
-        fileName,
-      );
-    } else {
-      result = await this.diModel.updateOne(
-        { _id },
-        { $set: { bon_de_commande: fileName } },
-      );
-    }
-
-    // 🔔 Discord notification (BC uploaded)
-    try {
-      await this.discordHookService.sendDiBCUploaded({
-        di,
-        fileName,
+      const randompdfFile = randomstring.generate({
+        length: 12,
+        charset: 'alphabetic',
       });
-    } catch (err) {
-      await this.captureDiscordFailure('addBCPDF', err, { diId: _id });
-    }
 
-    return result;
+      const fileName = `${randompdfFile}.${extension}`;
+
+      fs.writeFileSync(join(__dirname, `../../docs/${fileName}`), buffer);
+
+      const di = await this.diModel.findOne({ _id });
+
+      let result;
+
+      if (di && di.ignoreCount && di.ignoreCount > 0) {
+        result = await this.logsDiService.addBCPDFLogs(
+          di._id,
+          di.ignoreCount,
+          fileName,
+        );
+      } else {
+        result = await this.diModel.updateOne(
+          { _id },
+          { $set: { bon_de_commande: fileName } },
+        );
+      }
+
+      // 🔔 Discord notification (BC uploaded)
+      try {
+        await this.discordHookService.sendDiBCUploaded({
+          di,
+          fileName,
+        });
+      } catch (err) {
+        await this.captureDiscordFailure('addBCPDF', err, { diId: _id });
+      }
+
+      return result;
     } catch (error) {
       await this.operationalErrorService.capture({
         module: 'di',
@@ -2368,11 +2368,7 @@ export class DiService {
   ): Promise<void> {
     const ignoreCount = (diStatus as any)?.ignoreCount ?? 0;
     const stat = await this.statModel
-      .findOne(
-        ignoreCount > 0
-          ? { _idDi: diId, ignoreCount }
-          : { _idDi: diId },
-      )
+      .findOne(ignoreCount > 0 ? { _idDi: diId, ignoreCount } : { _idDi: diId })
       .lean()
       .exec();
 
@@ -2425,6 +2421,19 @@ export class DiService {
       }
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
+    }
+
+    // Stamp the START of the current repair run leg — ONLY on a genuine
+    // start/resume, i.e. when the previous status was NOT already INREPARATION.
+    // A no-op modal re-open (INREPARATION → INREPARATION) must NOT move it, or
+    // the elapsed anchor would reset on every refresh. The UI reads this as
+    // `elapsed = rep_time + (now - repRunStartedAt)` while running.
+    if (previousStatus !== STATUS_DI.InReparation.status) {
+      const ignoreCount = (result as any)?.ignoreCount ?? 0;
+      await this.statModel.updateOne(
+        ignoreCount > 0 ? { _idDi: _id, ignoreCount } : { _idDi: _id },
+        { $set: { repRunStartedAt: new Date() } },
+      );
     }
 
     await this.broadcastDiStatusChange(_id, result);
@@ -2874,10 +2883,7 @@ export class DiService {
       return di;
     }
 
-    return this.componentConfirmedFromCoordinator(
-      diId,
-      componentsConfirmedBy,
-    );
+    return this.componentConfirmedFromCoordinator(diId, componentsConfirmedBy);
   }
 
   private buildPayload(di: any, extra: any) {
@@ -2887,5 +2893,4 @@ export class DiService {
       ...extra,
     };
   }
-
 }
