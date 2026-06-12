@@ -3,7 +3,7 @@
 // both NORMAL and ACTION modes so one line keeps env-var setup uniform).
 import 'dotenv/config';
 
-import { Logger } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import * as bodyParser from 'body-parser';
 import { AppModule } from './app.module';
@@ -46,11 +46,35 @@ async function bootstrap() {
   }
 
   const app = await NestFactory.create(AppModule);
-  app.enableCors();
-  app.use(bodyParser.json({ limit: '5gb' }));
-  app.use(bodyParser.urlencoded({ limit: '5gb', extended: true }));
+  // Activate class-validator on all GraphQL/REST inputs. `transform: true`
+  // runs the validators (and class-transformer decorators like @Trim/@Type).
+  // We deliberately DO NOT set `forbidNonWhitelisted`: the GraphQL schema is
+  // already the whitelist, and forbidding would risk breaking unrelated
+  // mutations that were never validated before.
+  app.useGlobalPipes(new ValidationPipe({ transform: true }));
 
-  await app.listen(3000);
+  // CORS: an explicit allow-list from CORS_ORIGIN (comma-separated), or — when
+  // unset (dev) — reflect the caller's Origin. `origin: true` echoes the
+  // request Origin back, which (unlike '*') is compatible with credentialed
+  // requests; `methods`/`allowedHeaders` cover the preflight for the Apollo
+  // client (Content-Type + Authorization) and the QA `x-test-run` marker.
+  const corsOrigin = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim())
+    : true;
+  app.enableCors({
+    origin: corsOrigin,
+    credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'x-test-run'],
+  });
+
+  const bodyLimit = process.env.BODY_LIMIT || '5gb';
+  app.use(bodyParser.json({ limit: bodyLimit }));
+  app.use(bodyParser.urlencoded({ limit: bodyLimit, extended: true }));
+
+  const port = process.env.PORT ?? 3000;
+  await app.listen(port);
+  new Logger('Bootstrap').log(`Fixtronix API listening on port ${port}`);
 }
 
 bootstrap();

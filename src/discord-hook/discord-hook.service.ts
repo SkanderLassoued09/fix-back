@@ -44,8 +44,8 @@ interface EmbedContext {
 
 @Injectable()
 export class DiscordHookService {
-  private readonly webhookUrl =
-    'https://discord.com/api/webhooks/1501210507581984859/EgrS4cT9DrGOnzrJcAJmZWelTKB0Iw-Gi7PVl7Z1hOrkQ4XEWGbk2A4V6l0-3AKZJhB1';
+  // Critical operational-alerts webhook — now read from env (was hardcoded).
+  private readonly webhookUrl = process.env.DISCORD_WEBHOOK_URL ?? '';
 
   constructor(
     @InjectModel(Client.name) private readonly clientModel: Model<any>,
@@ -808,6 +808,56 @@ export class DiscordHookService {
           ],
           footer: { text: 'Fixtronix Operations · Error capture' },
           timestamp: entry.timestamp,
+        },
+      ],
+    });
+  }
+
+  /**
+   * Validation-failure notification → a SEPARATE webhook
+   * (`DISCORD_VALIDATION_WEBHOOK_URL`), kept OFF the critical operational
+   * channel. Dev-only drift visibility. Contains ONLY field+rule messages —
+   * never the submitted values / PII. Gating + dedup live in
+   * OperationalErrorService.captureValidation().
+   */
+  async sendValidationError(entry: {
+    operation: string;
+    env: string;
+    correlationId: string;
+    messages: { message: string; drift: boolean }[];
+    suppressed?: number;
+  }) {
+    const url = process.env.DISCORD_VALIDATION_WEBHOOK_URL;
+    if (!url) {
+      throw new Error('DISCORD_VALIDATION_WEBHOOK_URL is not defined');
+    }
+    const hasDrift = entry.messages.some((m) => m.drift);
+    const lines = entry.messages
+      .map((m) => `${m.drift ? '⚠ ' : '• '}${m.message}`)
+      .join('\n')
+      .slice(0, 1000);
+    const description =
+      (hasDrift ? '⚠ **Drift front↔back probable**\n' : '') +
+      (entry.suppressed
+        ? `_(+${entry.suppressed} occurrence(s) regroupée(s) depuis le dernier envoi)_`
+        : '');
+
+    await axios.post(url, {
+      embeds: [
+        {
+          title: `🧪 Validation échouée · ${entry.operation}`,
+          description: description || undefined,
+          color: 16289308, // orange
+          fields: [
+            { name: '🌐 Env', value: `\`${entry.env}\``, inline: true },
+            {
+              name: '🔗 Correlation',
+              value: `\`${entry.correlationId}\``,
+              inline: true,
+            },
+            { name: '📋 Messages', value: lines || '_(none)_' },
+          ],
+          footer: { text: 'Fixtronix · Validation drift watch (dev)' },
         },
       ],
     });

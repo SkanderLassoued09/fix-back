@@ -49,6 +49,9 @@ export class CompanyDocument extends Document {
   fax: string;
   @Prop()
   @IsString()
+  phone: string;
+  @Prop()
+  @IsString()
   webSiteLink: string;
   @Prop()
   @IsString()
@@ -62,6 +65,13 @@ export class CompanyDocument extends Document {
   serviceAchat: ServiceContactSchema;
   @Prop({ type: ServiceContactSchema })
   serviceTechnique: ServiceContactSchema;
+  // Google Drive client folder auto-created on company creation.
+  @Prop()
+  @IsString()
+  driveFolderId: string;
+  @Prop()
+  @IsString()
+  driveFolderUrl: string;
   @Prop()
   @IsString()
   isDeleted: boolean;
@@ -87,15 +97,17 @@ export class Company extends Document {
   @Field()
   @IsString()
   name: string;
-  @Field()
+  // Optional on input (only name/raisonSociale required) ⇒ nullable on output,
+  // else reading a company that lacks one of these throws a non-null error.
+  @Field({ nullable: true })
   @IsString()
   region: string;
-  @Field()
+  @Field({ nullable: true })
   address: string;
   @Field({ nullable: true })
   @IsEmail()
   email: string;
-  @Field()
+  @Field({ nullable: true })
   @IsString()
   activitePrincipale: string;
   @Field({ nullable: true })
@@ -108,6 +120,8 @@ export class Company extends Document {
   @IsPhoneNumber()
   fax: string;
   @Field({ nullable: true })
+  phone: string;
+  @Field({ nullable: true })
   webSiteLink: string;
   @Field(() => ServiceContact, { nullable: true })
   serviceAchat: ServiceContact;
@@ -115,10 +129,14 @@ export class Company extends Document {
   serviceFinancier: ServiceContact;
   @Field(() => ServiceContact, { nullable: true })
   serviceTechnique: ServiceContact;
-  @Field()
-  mf:string;
-  @Field()
-  rne:string;
+  @Field({ nullable: true })
+  mf: string;
+  @Field({ nullable: true })
+  rne: string;
+  @Field({ nullable: true })
+  driveFolderId: string;
+  @Field({ nullable: true })
+  driveFolderUrl: string;
   @Field({ defaultValue: false })
   @IsBoolean()
   isDeleted: boolean;

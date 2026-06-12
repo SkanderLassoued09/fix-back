@@ -8,6 +8,8 @@ import {
 } from './dto/create-company.input';
 import { SearchInput } from 'src/stat/dto/create-stat.input';
 
+// Validation hardening: inputs are validated via class-validator on the
+// company InputTypes once the global ValidationPipe is active (see main.ts).
 @Resolver(() => Company)
 export class CompanysResolver {
   constructor(private readonly companysService: CompanysService) {}
@@ -21,12 +23,10 @@ export class CompanysResolver {
 
   @Mutation(() => Company)
   removeCompany(@Args('_id') _id: string): Promise<Company> {
-    try {
-      return this.companysService.removeCompany(_id);
-    } catch (error) {
-      console.error(error);
-      throw new Error('Failed to delete Company');
-    }
+    // Let the service's NotFoundException propagate (NestJS maps it to a clean
+    // GraphQL error). The old try/catch never caught the async rejection AND
+    // would have masked a 404 as a generic 500.
+    return this.companysService.removeCompany(_id);
   }
 
   @Query(() => Company)
@@ -62,5 +62,14 @@ export class CompanysResolver {
   @Query(() => [Company])
   async searchCompanies(@Args('name') name: string): Promise<Company[]> {
     return this.companysService.searchCompanies(name);
+  }
+
+  /**
+   * Repair: (re)create the client's Google Drive folder when it has none.
+   * Idempotent — returns the company unchanged if `driveFolderId` is already set.
+   */
+  @Mutation(() => Company)
+  ensureClientFolder(@Args('companyId') companyId: string): Promise<Company> {
+    return this.companysService.ensureClientFolder(companyId);
   }
 }
