@@ -1,0 +1,23 @@
+{
+  "name": "fixtronix-qa",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright QA harness for Fixtronix ERP. Vendored under fix-back/qa so a clone has the full test suite. Runs against a dev-managed backend (:3000) + frontend (:4200).",
+  "scripts": {
+    "verify:auth": "playwright test --project=setup",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report test-results/html-report",
+    "codegen": "playwright codegen http://localhost:4200",
+    "list": "playwright test --list",
+    "e2e": "playwright test --config=playwright.e2e.config.ts",
+    "e2e:api": "playwright test --config=playwright.e2e.config.ts company.api",
+    "e2e:ui": "playwright test --config=playwright.e2e.config.ts company-list"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@types/node": "^20.11.0",
+    "mongodb": "^6.3.0"
+  }
+}

@@ -2,6 +2,7 @@
 # Dependencies
 # =============================================================================
 /node_modules
+qa/node_modules
 jspm_packages/
 .pnp.*
 
@@ -42,8 +43,8 @@ lerna-debug.log*
 /.nyc_output
 
 # =============================================================================
-# Environment files
-# (NEVER commit secrets — pin a `.env.example` if you need a template)
+# Environment files — NEVER commit secrets. Templates (.env.example /
+# .env.template) ARE committed; real .env files are not.
 # =============================================================================
 .env
 .env.*
@@ -51,14 +52,23 @@ lerna-debug.log*
 !.env.template
 
 # =============================================================================
+# QA audit logs — generated, machine-local, never tracked
+# =============================================================================
+_audit_logs/
+
+# =============================================================================
 # Uploads / runtime documents
 # `docs/` is the NestJS static-serve root for user-uploaded files
-# (see ServeStaticModule in src/app.module.ts). The folder itself
-# must exist at runtime, so a `.gitkeep` is committed and everything
-# else inside is ignored.
+# (see ServeStaticModule in src/app.module.ts). Keep the folder, ignore contents.
 # =============================================================================
 /docs/*
 !/docs/.gitkeep
+
+# =============================================================================
+# Versioned context + QA suite (vendored so a clone has everything ready).
+# `.project-context` is a dotfolder — keep it tracked explicitly.
+# =============================================================================
+!.project-context/
 
 # =============================================================================
 # IDE / Editor — JetBrains
@@ -67,7 +77,7 @@ lerna-debug.log*
 *.iml
 
 # =============================================================================
-# IDE / Editor — VSCode (machine-specific; do not share)
+# IDE / Editor — VSCode / history (machine-specific; do not share)
 # =============================================================================
 .vscode/
 .history/

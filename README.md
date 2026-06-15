@@ -1,73 +1,89 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="200" alt="Nest Logo" /></a>
-</p>
+# Fixtronix ERP — Backend (`fix-back`)
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+NestJS 9 + GraphQL (code-first) + MongoDB. Repair-ticket management (French:
+*Demande d'Intervention*, **DI**).
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+This repo also **vendors** everything a new machine needs to be productive:
 
-## Description
+| Path | What |
+|------|------|
+| [`.project-context/`](.project-context/) | Verified source-of-truth docs (read first). |
+| [`AGENTS.md`](AGENTS.md) | Legacy agent guide. |
+| [`TESTING_STRATEGY.md`](TESTING_STRATEGY.md) | QA strategy. |
+| [`qa/`](qa/) | Playwright e2e/API suite (runs against the running stack). |
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+> The frontend lives in a **sibling repo** `fix-front`. Clone the two **side by
+> side** (same parent folder).
 
-## Installation
+---
 
-```bash
-$ npm install
-```
+## Prerequisites
+- **Node 18+** and npm.
+- **MongoDB** reachable at `mongodb://localhost:27017` (the app + tests use the
+  `fixtronix` database). The e2e suite assumes the usual seed data (the six role
+  accounts, clients) already exists in that DB.
 
-## Running the app
+---
+
+## Setup from a clean clone
 
 ```bash
-# development
-$ npm run start
+# 1. Clone BOTH repos side by side
+git clone https://github.com/SkanderLassoued09/fix-back.git
+git clone https://github.com/SkanderLassoued09/fix-front.git
+#   parent/
+#   ├── fix-back/
+#   └── fix-front/
 
-# watch mode
-$ npm run start:dev
+# 2. Environment files (copy the templates, then fill values)
+cd fix-back
+cp .env.example .env          # fill MONGODB_URI etc. (works empty for local dev)
+cp qa/.env.example qa/.env    # optional — defaults target localhost
+cd ..
 
-# production mode
-$ npm run start:prod
+# 3. Install (three packages)
+cd fix-back && npm ci && cd ..
+cd fix-front && npm ci && cd ..
+cd fix-back/qa && npm ci && npx playwright install chromium && cd ../..
+
+# 4. Run the stack (two terminals)
+cd fix-back  && npm run start:dev   # backend  → http://localhost:3000/graphql
+cd fix-front && npm start           # frontend → http://localhost:4200
+
+# 5. Run the e2e suite (third terminal)
+cd fix-back/qa
+npm run verify:auth   # one-time: logs in the 6 roles → writes qa/.auth/*.json
+npm run e2e           # the company/DI feature e2e (UI + API)
+npm test              # the full Playwright suite (incl. regression)
 ```
 
-## Test
+Notes:
+- `.env` and `qa/.env` are **gitignored** — only the `.env.example` templates are
+  committed. The app boots with an empty/partial `.env` (sane fallbacks; Google
+  Sheets/Drive + Discord degrade gracefully when their keys are absent).
+- `qa/.auth/` (login tokens) is generated by `verify:auth` and gitignored.
+- The QA configs use **no `webServer`** on purpose — start the backend + frontend
+  yourself first (override `API_URL` / `UI_URL` / `MONGO_URL` if not on the
+  default localhost ports).
+
+---
+
+## Common scripts
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npm run start:dev     # watch-mode backend
+npm run build         # nest build → dist/
+npm run start:prod    # node dist/main
+npm test              # backend unit tests (jest)
 ```
 
-## Support
+QA (in `qa/`): `npm run e2e`, `npm run e2e:api`, `npm run e2e:ui`, `npm test`,
+`npm run verify:auth`, `npm run report`.
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+---
 
-## Stay in touch
+## Architecture
 
-- Author - [Kamil Myśliwiec](https://kamilmysliwiec.com)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](LICENSE).
+See [`.project-context/`](.project-context/) — start with
+[`.project-context/README.md`](.project-context/README.md), then `overview/`,
+`architecture/`, `modules/`, and `decisions/01-known-issues.md`.
