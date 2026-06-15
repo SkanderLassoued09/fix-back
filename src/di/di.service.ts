@@ -20,6 +20,8 @@ import {
   STATUS_DI,
   TECH_STATUS_DI_VALUES,
 } from './di.status';
+import { GraphQLError } from 'graphql';
+import { assertDiTransition } from './workflow/di-transition-guard';
 import { Role } from 'src/auth/roles';
 import {
   Composant,
@@ -961,9 +963,29 @@ export class DiService {
     }
   }
 
+  /**
+   * M1 guard — load the DI, fail with a clean NOT_FOUND if it's missing, then
+   * reject an illegal status transition (BAD_REQUEST) BEFORE any write. Call at
+   * the very top of every status-transition method so an out-of-sequence jump
+   * (e.g. CREATED → FINISHED) can never mutate the DI.
+   */
+  private async assertTransitionAllowed(
+    _id: string,
+    targetStatus: string,
+  ): Promise<void> {
+    const di = await this.diModel.findOne({ _id }).select('status').lean();
+    if (!di) {
+      throw new GraphQLError(`DI '${_id}' introuvable.`, {
+        extensions: { code: 'NOT_FOUND' },
+      });
+    }
+    assertDiTransition((di as any).status, targetStatus);
+  }
+
   // from Created ==> PENDING1
   // from Manager => coordinator
   async manager_Pending1(_idDI: string): Promise<Di> {
+    await this.assertTransitionAllowed(_idDI, STATUS_DI.Pending1.status);
     const result = await this.diWorkflowService.transition({
       diId: _idDI,
       transitionKey: 'MANAGER_TO_PENDING1',
@@ -977,6 +999,7 @@ export class DiService {
   // InMagasin or InDiagnostic ==> PENDING2
   //from magasin or tech to coordinator
   async magasinTech_Pending2(_idDI: string): Promise<Di> {
+    await this.assertTransitionAllowed(_idDI, STATUS_DI.Pending2.status);
     const result = await this.diWorkflowService.transition({
       diId: _idDI,
       transitionKey: 'MAGASIN_TECH_TO_PENDING2',
@@ -1008,6 +1031,7 @@ export class DiService {
   // Negotiation1 or Negotiation2 ==> PENDING3
   // Admin or manager ==> coordinator
   async managerAdminManager_Pending3(_idDI: string): Promise<Di> {
+    await this.assertTransitionAllowed(_idDI, STATUS_DI.Pending3.status);
     const result = await this.diWorkflowService.transition({
       diId: _idDI,
       transitionKey: 'MANAGER_ADMIN_TO_PENDING3',
@@ -1048,6 +1072,7 @@ export class DiService {
 
   //coordinator sending to tech for  diagnostic
   async coordinator_ToDiag(_idDI: string) {
+    await this.assertTransitionAllowed(_idDI, STATUS_DI.Diagnostic.status);
     const diagnostic = await this.diModel.findOneAndUpdate(
       { _id: _idDI },
       {
@@ -1346,6 +1371,7 @@ export class DiService {
   }
 
   async changeStatusTofinsh(_id: string) {
+    await this.assertTransitionAllowed(_id, STATUS_DI.Finished.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       { $set: { status: STATUS_DI.Finished.status } },
@@ -1946,6 +1972,7 @@ export class DiService {
    * Changing status di section
    */
   async changeStatusPending1(_id: string) {
+    await this.assertTransitionAllowed(_id, STATUS_DI.Pending1.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
@@ -1979,6 +2006,7 @@ export class DiService {
   }
 
   async changeStatusInDiagnostic(_id: any) {
+    await this.assertTransitionAllowed(_id, STATUS_DI.InDiagnostic.status);
     const { di: result, previousStatus } =
       await this.diWorkflowService.transition({
         diId: _id,
@@ -2005,6 +2033,7 @@ export class DiService {
   }
 
   async changeStatusInMagasin(_id: string) {
+    await this.assertTransitionAllowed(_id, STATUS_DI.InMagasin.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
@@ -2046,6 +2075,7 @@ export class DiService {
   }
 
   async changeStatusMagasinEstimation(_id: string) {
+    await this.assertTransitionAllowed(_id, STATUS_DI.MagasinEstimation.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
@@ -2082,6 +2112,7 @@ export class DiService {
   }
 
   async changeStatusPending2(_id: string) {
+    await this.assertTransitionAllowed(_id, STATUS_DI.Pending2.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
@@ -2124,6 +2155,7 @@ export class DiService {
   }
 
   async changeStatusPricing(_id: string, pricingRequestSentBy?: string | null) {
+    await this.assertTransitionAllowed(_id, STATUS_DI.Pricing.status);
     const pricingRequestSentAt = new Date();
     const result = await this.diModel.findOneAndUpdate(
       { _id },
@@ -2190,6 +2222,7 @@ export class DiService {
   }
 
   async changeStatusNegociate1(_id: string) {
+    await this.assertTransitionAllowed(_id, STATUS_DI.Negotiation1.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
@@ -2229,6 +2262,7 @@ export class DiService {
   }
 
   async changeStatusNegociate2(_id: string) {
+    await this.assertTransitionAllowed(_id, STATUS_DI.Negotiation2.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
@@ -2268,6 +2302,7 @@ export class DiService {
   }
 
   async changeStatusPending3(_id: string) {
+    await this.assertTransitionAllowed(_id, STATUS_DI.Pending3.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
@@ -2310,6 +2345,7 @@ export class DiService {
   }
 
   async changeStatusRepaire(_id: string) {
+    await this.assertTransitionAllowed(_id, STATUS_DI.Reparation.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
@@ -2394,6 +2430,7 @@ export class DiService {
 
   async changeStatusInRepair(_id: string) {
     console.log('[changeStatusInRepair][service] start _id=', _id);
+    await this.assertTransitionAllowed(_id, STATUS_DI.InReparation.status);
 
     // Mirror `changeStatusInDiagnostic` exactly: delegate to the workflow
     // service so the transition uses the same validated path the diagnostic

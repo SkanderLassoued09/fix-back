@@ -326,97 +326,62 @@ export class DiResolver {
   /**
    * Changing status section
    */
+  // NOTE: these previously did `const x = this.diService.changeStatusX(_id)`
+  // (a Promise, always truthy) and returned `true` WITHOUT awaiting — so the
+  // service ran fire-and-forget. With the M1 transition guard a rejected
+  // service promise became an UNHANDLED rejection that crashed the process.
+  // Awaiting lets a guard refusal surface as a clean GraphQL BAD_REQUEST.
   @Mutation(() => Boolean)
-  changeStatusPending1(@Args('_id') _id: string) {
-    const isPending = this.diService.changeStatusPending1(_id);
-    if (isPending) {
-      return true;
-    } else {
-      return false;
-    }
+  async changeStatusPending1(@Args('_id') _id: string) {
+    await this.diService.changeStatusPending1(_id);
+    return true;
   }
   @Mutation(() => Boolean)
-  changeStatusInDiagnostic(@Args('_id') _id: string) {
-    const isPending = this.diService.changeStatusInDiagnostic(_id);
-    if (isPending) {
-      return true;
-    } else {
-      return false;
-    }
+  async changeStatusInDiagnostic(@Args('_id') _id: string) {
+    await this.diService.changeStatusInDiagnostic(_id);
+    return true;
   }
   @Mutation(() => Boolean)
-  changeStatusInMagasin(@Args('_id') _id: string) {
-    const isPending = this.diService.changeStatusInMagasin(_id);
-    if (isPending) {
-      return true;
-    } else {
-      return false;
-    }
+  async changeStatusInMagasin(@Args('_id') _id: string) {
+    await this.diService.changeStatusInMagasin(_id);
+    return true;
   }
   @Mutation(() => Boolean)
-  changeStatusMagasinEstimation(@Args('_id') _id: string) {
-    const result = this.diService.changeStatusMagasinEstimation(_id);
-    if (result) {
-      return true;
-    } else {
-      return false;
-    }
+  async changeStatusMagasinEstimation(@Args('_id') _id: string) {
+    await this.diService.changeStatusMagasinEstimation(_id);
+    return true;
   }
 
   @Mutation(() => Boolean)
-  changeStatusPending2(@Args('_id') _id: string) {
-    const isPending = this.diService.changeStatusPending2(_id);
-    if (isPending) {
-      return true;
-    } else {
-      return false;
-    }
+  async changeStatusPending2(@Args('_id') _id: string) {
+    await this.diService.changeStatusPending2(_id);
+    return true;
   }
   @Mutation(() => Boolean)
-  changeStatusPricing(@Args('_id') _id: string) {
-    const isPending = this.diService.changeStatusPricing(_id);
-    if (isPending) {
-      return true;
-    } else {
-      return false;
-    }
+  async changeStatusPricing(@Args('_id') _id: string) {
+    await this.diService.changeStatusPricing(_id);
+    return true;
   }
   @Mutation(() => Boolean)
-  changeStatusNegociate1(@Args('_id') _id: string) {
-    const isPending = this.diService.changeStatusNegociate1(_id);
-    if (isPending) {
-      return true;
-    } else {
-      return false;
-    }
+  async changeStatusNegociate1(@Args('_id') _id: string) {
+    await this.diService.changeStatusNegociate1(_id);
+    return true;
   }
   @Mutation(() => Boolean)
-  changeStatusNegociate2(@Args('_id') _id: string) {
-    const isPending = this.diService.changeStatusNegociate2(_id);
-    if (isPending) {
-      return true;
-    } else {
-      return false;
-    }
+  async changeStatusNegociate2(@Args('_id') _id: string) {
+    await this.diService.changeStatusNegociate2(_id);
+    return true;
   }
   @Mutation(() => Boolean)
-  changeStatusPending3(@Args('_id') _id: string) {
-    const isPending = this.diService.changeStatusPending3(_id);
-    if (isPending) {
-      return true;
-    } else {
-      return false;
-    }
+  async changeStatusPending3(@Args('_id') _id: string) {
+    await this.diService.changeStatusPending3(_id);
+    return true;
   }
 
   @Mutation(() => Boolean)
-  changeStatusRepaire(@Args('_id') _id: string) {
-    const isPending = this.diService.changeStatusRepaire(_id);
-    if (isPending) {
-      return true;
-    } else {
-      return false;
-    }
+  async changeStatusRepaire(@Args('_id') _id: string) {
+    await this.diService.changeStatusRepaire(_id);
+    return true;
   }
 
   @Mutation(() => Boolean)

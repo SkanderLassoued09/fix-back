@@ -12,10 +12,14 @@ import * as fs from 'fs';
 import * as randomstring from 'randomstring';
 import { getFileExtension } from 'src/di/shared.files';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
+import { GraphQLError } from 'graphql';
 @Injectable()
 export class ComposantService {
   constructor(
     @InjectModel('Composant') private ComposantModel: Model<Composant>,
+    // Used only to cascade a composant rename onto the DI linkage
+    // (`array_composants[].nameComposant`), which references parts by name.
+    @InjectModel('Di') private diModel: Model<any>,
     private readonly operationalErrorService: OperationalErrorService,
   ) {}
 
@@ -181,54 +185,105 @@ export class ComposantService {
     updateComposant: CreateComposantInput,
   ): Promise<UpdateComposantResponse> {
     try {
-      // Check if the PDF is a valid base64 string
+      // Match by `_id` when the caller provides one (the magasin form does —
+      // this is what lets the « Nom » edit persist: matching by the *new* name
+      // would never find the row). Fall back to `name` for legacy callers that
+      // don't send `_id`.
+      const hasId =
+        updateComposant._id &&
+        updateComposant._id !== 'null' &&
+        updateComposant._id !== 'undefined';
+      const filter = hasId
+        ? { _id: updateComposant._id }
+        : { name: updateComposant.name };
+
+      // Load the current row first — for the NOT_FOUND check and so we know the
+      // OLD name (to cascade a rename onto the DI linkage below).
+      const existing: any = await this.ComposantModel.findOne(filter).lean();
+      if (!existing) {
+        throw new GraphQLError(
+          `Composant '${
+            hasId ? updateComposant._id : updateComposant.name
+          }' introuvable.`,
+          { extensions: { code: 'NOT_FOUND' } },
+        );
+      }
+
+      // PARTIAL update: only write fields the caller actually provided. An
+      // absent / empty (null/undefined/"") field MUST keep its stored value —
+      // never overwrite it (that erased Package/Prix/etc. on a name-only edit).
+      // `0` and other real values ARE written.
+      const set: Record<string, unknown> = {};
+      const assign = (key: string, value: unknown) => {
+        if (value === undefined || value === null || value === '') return;
+        set[key] = value;
+      };
+      assign('name', updateComposant.name);
+      assign('package', updateComposant.package);
+      assign('prix_achat', updateComposant.prix_achat);
+      assign('prix_vente', updateComposant.prix_vente);
+      assign('coming_date', updateComposant.coming_date);
+      assign('link', updateComposant.link);
+      assign('quantity_stocked', updateComposant.quantity_stocked);
+      assign('status_composant', updateComposant.status_composant);
+      assign('category_composant_id', updateComposant.category_composant_id);
+
+      // PDF: only touch it when a NEW file (base64 data URL) is supplied. When
+      // the form re-sends the existing file name (or nothing), leave the stored
+      // pdf untouched — re-nulling it on every save was wiping the datasheet.
       if (
         updateComposant.pdf &&
         updateComposant.pdf !== 'null' &&
         updateComposant.pdf.includes(',')
       ) {
         const extension = getFileExtension(updateComposant.pdf);
-        const buffer = Buffer.from(
-          updateComposant.pdf.split(',')[1], // Split base64 string to get the data
-          'base64',
-        );
-
+        const buffer = Buffer.from(updateComposant.pdf.split(',')[1], 'base64');
         const randompdfFile = randomstring.generate({
           length: 12,
           charset: 'alphabetic',
         });
-
         fs.writeFileSync(
           join(__dirname, `../../docs/${randompdfFile}.${extension}`),
           buffer,
         );
-
-        updateComposant.pdf = `${randompdfFile}.${extension}`;
-      } else {
-        // If the PDF is not valid, set it to null
-        updateComposant.pdf = null;
+        set.pdf = `${randompdfFile}.${extension}`;
       }
-      // Perform the update operation
+
       const update = await this.ComposantModel.findOneAndUpdate(
-        { name: updateComposant.name },
-        {
-          $set: {
-            package: updateComposant.package,
-            prix_achat: updateComposant.prix_achat,
-            prix_vente: updateComposant.prix_vente,
-            coming_date: updateComposant.coming_date,
-            link: updateComposant.link,
-            quantity_stocked: updateComposant.quantity_stocked,
-            pdf: updateComposant.pdf,
-            status_composant: updateComposant.status_composant,
-            category_composant_id: updateComposant.category_composant_id,
-          },
-        },
+        filter,
+        { $set: set },
         { new: true },
       );
+      if (!update) {
+        throw new GraphQLError(
+          `Composant '${
+            hasId ? updateComposant._id : updateComposant.name
+          }' introuvable.`,
+          { extensions: { code: 'NOT_FOUND' } },
+        );
+      }
+
+      // Renaming the catalog part must follow its references: DIs link to a
+      // composant BY NAME (`array_composants[].nameComposant`). Without this,
+      // a rename orphaned the line — reopening the magasin modal looked up the
+      // OLD name, found nothing, and showed every field empty / stock 0.
+      const newName = set.name as string | undefined;
+      if (newName && newName !== existing.name) {
+        await this.diModel.updateMany(
+          { 'array_composants.nameComposant': existing.name },
+          { $set: { 'array_composants.$[elem].nameComposant': newName } },
+          { arrayFilters: [{ 'elem.nameComposant': existing.name }] },
+        );
+      }
 
       return update;
     } catch (error) {
+      // Expected errors (NOT_FOUND) are not operational — let them propagate
+      // for the global filter to log (LOW, no Discord); only real failures
+      // (Mongo/FS) are captured here.
+      if (error instanceof GraphQLError) {
+        throw error;
+      }
       await this.operationalErrorService.capture({
         module: 'composant',
         submodule: 'composantService',

@@ -48,16 +48,11 @@ export class ComposantResolver {
   async addComposantInfo(
     @Args('updateComposant') updateComposant: CreateComposantInput,
   ): Promise<UpdateComposantResponse> {
-    try {
-      const updatedEntity = await this.composantService.addComposantInfo(
-        updateComposant,
-      );
-      if (updatedEntity) {
-        return updatedEntity;
-      }
-    } catch (error) {
-      throw new Error('Failed to update composant: ' + error.message);
-    }
+    // The service always returns the updated doc or throws a clean error
+    // (NOT_FOUND when no row matches). Don't wrap it in a generic Error — that
+    // erased the code and turned an expected 404 into a 500. Don't return
+    // undefined either: the field is non-nullable.
+    return await this.composantService.addComposantInfo(updateComposant);
   }
 
   @Query(() => Composant)
