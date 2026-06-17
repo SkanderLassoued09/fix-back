@@ -9,11 +9,16 @@ import { STATUS_DI } from '../di.status';
  * FINISHED) is refused with a clean BAD_REQUEST *before any write*, instead of
  * silently mutating (and 500-ing downstream on the missing Stat).
  *
- * Source lists are derived from the documented workflow sequence + the existing
- * `DI_TRANSITIONS` map:
+ * Source lists are derived from the REAL workflow — every mutation that targets
+ * a status and the source states it is legitimately fired from — NOT only the
+ * idealized linear sequence:
  *   PENDING1 → DIAGNOSTIC → INDIAGNOSTIC → PENDING2 → PRICING → NEGOTIATION1
  *   → PENDING3 → REPARATION → INREPARATION → FINISHED
- * (plus the documented branches: magasin estimation, negotiation2, pauses).
+ * A target can have MULTIPLE legitimate sources (e.g. PENDING3 is reached both
+ * directly from negotiation and from INMAGASIN after the magasin sources spare
+ * parts). Seeding the table from the linear sequence alone dropped those real
+ * branches and produced false BAD_REQUESTs — the arcs below are reconciled
+ * against the actual mutations (di.service.ts) and the proven UI flows.
  */
 export const ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {
   [STATUS_DI.Pending1.status]: [STATUS_DI.Created.status],
@@ -48,8 +53,17 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = 
   ],
   [STATUS_DI.Negotiation2.status]: [STATUS_DI.Negotiation1.status],
   [STATUS_DI.Pending3.status]: [
+    // B1 — negotiation done, no spare parts needed → straight to repair
+    // (managerAdminManager_Pending3 + the changeStatusPending3 "!contain_pdr"
+    // branch in the negotiation-confirm modal).
     STATUS_DI.Negotiation1.status,
     STATUS_DI.Negotiation2.status,
+    // B3 — negotiation done WITH spare parts: the DI is routed to the magasin
+    // (INMAGASIN) to source them, then the magasin's "Fin liste composants"
+    // (changeStatusPending3) sends it back to the coordinator for repair.
+    // This real branch was absent from the linear sequence the table was
+    // seeded from, which is why INMAGASIN → PENDING3 was wrongly refused.
+    STATUS_DI.InMagasin.status,
   ],
   [STATUS_DI.Reparation.status]: [STATUS_DI.Pending3.status],
   [STATUS_DI.InReparation.status]: [

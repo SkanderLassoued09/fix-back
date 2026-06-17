@@ -186,7 +186,73 @@ const ILLEGAL: Array<{ label: string; from: string; mutation: (id: string) => st
         from: 'CREATED',
         mutation: (id) => `mutation { changeStatusPricing(_id: "${id}") }`,
     },
+    {
+        // Proves adding INMAGASIN as a PENDING3 source did NOT open PENDING3 to
+        // arbitrary states — CREATED → PENDING3 is still an illegal pipeline skip.
+        label: 'CREATED → PENDING3',
+        from: 'CREATED',
+        mutation: (id) => `mutation { changeStatusPending3(_id: "${id}") }`,
+    },
 ];
+
+// REGRESSION (legal-arc companion to the GUARD cases) — the magasin-sourcing
+// branch INMAGASIN → PENDING3 is LEGAL: after negotiation a repairable DI that
+// needs spare parts is routed to the magasin (INMAGASIN); the magasin's
+// "Fin liste composants" (changeStatusPending3) sends it back to the
+// coordinator for repair. The guard table was seeded from the linear sequence
+// only, so it wrongly refused this arc with BAD_REQUEST. This locks it open.
+test('LEGAL: INMAGASIN → PENDING3 (magasin sourcing branch) is accepted', async ({ request }) => {
+    const tmpId = `DI_inmag_${TAG}`;
+    const tmpStat = `STAT_inmag_${TAG}`;
+    await withDb(async (db) => {
+        await db.collection('dis').insertOne({
+            _id: tmpId,
+            _idnum: `INMAG-${TAG}`,
+            title: 'QA inmagasin→pending3',
+            status: 'INMAGASIN',
+            can_be_repaired: true,
+            contain_pdr: true,
+            isDeleted: false,
+            array_composants: [],
+            current_roles: ['Magasin'],
+            ignoreCount: 0,
+            statusUpdatedAt: new Date(),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        });
+        await db.collection('stats').insertOne({
+            _id: tmpStat,
+            _idDi: tmpId,
+            diRef: tmpId,
+            id_tech_rep: TECH_ID,
+            id_tech_diag: TECH_ID,
+            status: 'INMAGASIN',
+            ignoreCount: 0,
+            retour_count: 0,
+            pauseLogs: [],
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        });
+    });
+
+    const r = await gqlPost(request, `mutation { changeStatusPending3(_id: "${tmpId}") }`, token);
+    const after = (
+        await gqlPost(request, `{ getDiById(_id: "${tmpId}") { di { status } } }`, token)
+    ).data?.getDiById?.di?.status;
+    const code = r.errors?.[0]?.extensions?.code;
+
+    await withDb(async (db) => {
+        await db.collection('dis').deleteOne({ _id: tmpId });
+        await db.collection('stats').deleteOne({ _id: tmpStat });
+    });
+
+    expect(
+        r.errors ?? [],
+        `INMAGASIN → PENDING3 must NOT error: ${JSON.stringify(r.errors)}`,
+    ).toHaveLength(0);
+    expect(code, 'no false BAD_REQUEST on a legal arc').not.toBe('BAD_REQUEST');
+    expect(after, 'INMAGASIN → PENDING3 must move the DI to PENDING3').toBe('PENDING3');
+});
 
 for (const c of ILLEGAL) {
     test(`GUARD: ${c.label} is refused (BAD_REQUEST, DI unchanged, no 500)`, async ({ request }) => {
