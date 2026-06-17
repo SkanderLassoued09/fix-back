@@ -1058,6 +1058,11 @@ export class DiService {
         final_price,
       );
     } else {
+      // `{ new: true }` returns the POST-update document. Without it Mongoose
+      // returns the pre-update doc, where `final_price` is still the previous
+      // value (null on first save) — GraphQL then rejects the response because
+      // `UpdateNego.final_price` is non-nullable, the cascade aborts on step 1,
+      // and the DI never advances. Surfaced by the P4 happy-path UI e2e.
       return await this.diModel.findOneAndUpdate(
         { _id: _idDi },
         {
@@ -1066,6 +1071,7 @@ export class DiService {
             final_price,
           },
         },
+        { new: true },
       );
     }
   }

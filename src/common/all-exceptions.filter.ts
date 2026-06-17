@@ -85,6 +85,26 @@ export class AllExceptionsFilter implements ExceptionFilter {
       });
     }
 
+    // M1 transition-refusal channel — same dev-only Discord webhook, gated +
+    // deduped. The guard `assertDiTransition` decorates its GraphQLError with
+    // `extensions.currentStatus` / `extensions.targetStatus`; we use that as
+    // the recognition signal so plain BAD_REQUESTs from other sources don't
+    // pollute this stream. PII is excluded — only mutation, statuses, diId.
+    if (isGraphql) {
+      const transition = this.transitionExtensions(exception);
+      if (transition) {
+        const diId = this.gqlDiIdArg(host);
+        void this.opError.captureTransitionRefusal({
+          operation,
+          currentStatus: transition.currentStatus,
+          targetStatus: transition.targetStatus,
+          diId,
+          correlationId,
+          notify: !isTest,
+        });
+      }
+    }
+
     if (isGraphql) {
       // Re-propagate so the normal GraphQL error flow + Apollo formatError
       // produce the client response. Returning the error = NestJS gql rethrow.
@@ -152,6 +172,43 @@ export class AllExceptionsFilter implements ExceptionFilter {
   private messageOf(exception: unknown): string {
     if (exception instanceof Error) return exception.message;
     return typeof exception === 'string' ? exception : 'Unknown error';
+  }
+
+  /**
+   * Detect a transition-guard refusal: the M1 `assertDiTransition` throws a
+   * `GraphQLError` whose extensions include `currentStatus` AND `targetStatus`.
+   * Plain BAD_REQUESTs from other sources lack that shape, so this check
+   * cleanly isolates the transition stream. Returns null when the error is
+   * not a transition refusal.
+   */
+  private transitionExtensions(
+    exception: unknown,
+  ): { currentStatus: string | null; targetStatus: string } | null {
+    const ext: any = (exception as any)?.extensions;
+    if (!ext || typeof ext !== 'object') return null;
+    if (typeof ext.targetStatus !== 'string') return null;
+    return {
+      currentStatus:
+        typeof ext.currentStatus === 'string' ? ext.currentStatus : null,
+      targetStatus: ext.targetStatus,
+    };
+  }
+
+  /**
+   * Best-effort extraction of the DI id from the GraphQL arguments. Mutations
+   * across the codebase use `_id` or `_idDI` (legacy capitalization). Returns
+   * null if we can't read either — the alert still goes out, just without the
+   * diId payload (still actionable for the dev: status pair + mutation name).
+   */
+  private gqlDiIdArg(host: ArgumentsHost): string | null {
+    try {
+      const args: any = GqlArgumentsHost.create(host).getArgs();
+      if (!args || typeof args !== 'object') return null;
+      const candidate = args._id ?? args._idDI ?? args._idDi ?? args.diId;
+      return typeof candidate === 'string' ? candidate : null;
+    } catch {
+      return null;
+    }
   }
 
   private opName(host: ArgumentsHost, isGraphql: boolean): string {

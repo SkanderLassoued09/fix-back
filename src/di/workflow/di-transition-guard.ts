@@ -19,6 +19,19 @@ import { STATUS_DI } from '../di.status';
  * parts). Seeding the table from the linear sequence alone dropped those real
  * branches and produced false BAD_REQUESTs — the arcs below are reconciled
  * against the actual mutations (di.service.ts) and the proven UI flows.
+ *
+ * `_Pause` rule. A DI in a `*_Pause` state is functionally equivalent to its
+ * active sibling for the purpose of FORWARD transitions: a tech who paused mid-
+ * diagnostic and then sends the DI to the magasin must not be refused just
+ * because the row sits in `DIAGNOSTIC_Pause` rather than `INDIAGNOSTIC`. The
+ * pairs are:
+ *   - `INDIAGNOSTIC` ↔ `DIAGNOSTIC_Pause` — same exits (MagasinEstimation,
+ *     InMagasin, Pending2, …).
+ *   - `INREPARATION` ↔ `REPARATION_Pause` — same exits (Finished, etc.).
+ * Earlier the table only listed the active source, so any forward move from a
+ * paused DI was refused. The `_Pause` entries below mirror their active sibling
+ * verbatim. This neither opens a new arc nor weakens any guard — it just
+ * completes the equivalence class.
  */
 export const ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {
   [STATUS_DI.Pending1.status]: [STATUS_DI.Created.status],
@@ -32,10 +45,19 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = 
     STATUS_DI.Diagnostic.status,
     STATUS_DI.InDiagnostic.status,
   ],
-  [STATUS_DI.MagasinEstimation.status]: [STATUS_DI.InDiagnostic.status],
+  [STATUS_DI.MagasinEstimation.status]: [
+    STATUS_DI.InDiagnostic.status,
+    // `_Pause` rule: a tech who paused mid-diagnostic must still be allowed to
+    // route the DI to the magasin estimation. This was the original M1 false
+    // positive (`changeStatusMagasinEstimation` refused with
+    // `DIAGNOSTIC_Pause → MagasinEstimation`).
+    STATUS_DI.DiagnosticInPause.status,
+  ],
   [STATUS_DI.InMagasin.status]: [
     STATUS_DI.MagasinEstimation.status,
     STATUS_DI.InDiagnostic.status,
+    // `_Pause` rule: mirror of InDiagnostic — same exits while paused.
+    STATUS_DI.DiagnosticInPause.status,
     // Post-negotiation: a repairable DI that needs spare parts is sent to the
     // magasin to source them (`nego1nego2_InMagasin` flow) before repair.
     STATUS_DI.Negotiation1.status,
@@ -44,6 +66,8 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = 
   [STATUS_DI.Pending2.status]: [
     STATUS_DI.InMagasin.status,
     STATUS_DI.InDiagnostic.status,
+    // `_Pause` rule: mirror of InDiagnostic.
+    STATUS_DI.DiagnosticInPause.status,
     STATUS_DI.MagasinEstimation.status,
   ],
   [STATUS_DI.Pricing.status]: [STATUS_DI.Pending2.status],
@@ -77,6 +101,10 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = 
   ],
   [STATUS_DI.Finished.status]: [
     STATUS_DI.InReparation.status,
+    // `_Pause` rule: a tech can finish a repair from the paused state directly
+    // (UI flow: pause repair → click "Fin réparation"). Without this entry the
+    // finish mutation refuses REPARATION_Pause → FINISHED.
+    STATUS_DI.ReparationInPause.status,
     STATUS_DI.Reparation.status,
     // Non-repairable DI: finished right after pricing/negotiation, no repair.
     STATUS_DI.Negotiation1.status,

@@ -222,6 +222,125 @@ export class OperationalErrorService {
     }
   }
 
+  // ── Transition-refusal channel (dev-only, gated, anti-storm) ─────────────
+  // The M1 guard (`assertDiTransition`) refuses jumps through the workflow
+  // (e.g. CREATED → FINISHED). Most refusals are real protections, but a few
+  // surface a *table-completeness* drift — a legitimate UI arc that was never
+  // added to ALLOWED_TRANSITIONS. We push those refusals to the same dev-only
+  // validation webhook so the table can be completed as drift is detected,
+  // rather than waiting for a user to be blocked. Critical alert stream
+  // (operational errors) is untouched.
+  private readonly transitionLastAt = new Map<string, number>();
+  private transitionWindowStart = 0;
+  private transitionSentInWindow = 0;
+  private transitionSuppressed = 0;
+
+  private get transitionDedupMs(): number {
+    return (
+      Number(process.env.DISCORD_VALIDATION_DEDUP_MS) || 10 * 60 * 1000
+    );
+  }
+  private get transitionCapPerHour(): number {
+    return (
+      Number(process.env.DISCORD_VALIDATION_CAP_PER_HOUR) || 20
+    );
+  }
+
+  /**
+   * Notify Discord (dev validation channel) of a refused workflow transition.
+   * Mirrors `captureValidation`'s gating model:
+   *   - only when `DISCORD_NOTIFY_VALIDATION=true` AND not production,
+   *   - per-arc dedup window (`source→target::operation`),
+   *   - global hourly cap; excess folded into a "+N" suppressed counter,
+   *   - test traffic (`x-test-run`) → skipped entirely (no Discord).
+   * Never throws (fire-and-forget from the global filter). Sends NO PII —
+   * only mutation name, source/target statuses, diId, correlationId.
+   */
+  async captureTransitionRefusal(input: {
+    operation: string;
+    currentStatus: string | null;
+    targetStatus: string;
+    diId: string | null;
+    correlationId: string;
+    /** false for test traffic (x-test-run) → skip Discord entirely. */
+    notify?: boolean;
+  }): Promise<void> {
+    try {
+      if (input.notify === false) return; // test traffic — log only, no Discord
+      if (!this.validationEnabled) return;
+      if (!input.targetStatus) return;
+
+      const now = Date.now();
+
+      // Reset the hourly cap window.
+      if (now - this.transitionWindowStart >= 60 * 60 * 1000) {
+        this.transitionWindowStart = now;
+        this.transitionSentInWindow = 0;
+      }
+
+      // Per-arc dedup: the same (source → target, mutation) tuple is alerted at
+      // most once per window. Avoids flooding when a buggy client retries.
+      const key = `${input.operation}::${
+        input.currentStatus ?? 'INCONNU'
+      }->${input.targetStatus}`;
+      if (
+        now - (this.transitionLastAt.get(key) ?? 0) <
+        this.transitionDedupMs
+      ) {
+        this.logger.debug(
+          `[transition-notify] deduped · ${input.operation} · ${input.currentStatus} → ${input.targetStatus}`,
+        );
+        return;
+      }
+
+      // Hourly cap — beyond it, aggregate into the suppressed counter.
+      if (this.transitionSentInWindow >= this.transitionCapPerHour) {
+        this.transitionSuppressed++;
+        this.logger.debug(
+          `[transition-notify] capped (${this.transitionCapPerHour}/h) · aggregating`,
+        );
+        return;
+      }
+
+      this.transitionLastAt.set(key, now);
+      if (this.transitionLastAt.size > 500) this.transitionLastAt.clear();
+      this.transitionSentInWindow++;
+      const suppressed = this.transitionSuppressed;
+      this.transitionSuppressed = 0;
+
+      this.logger.log(
+        `[transition-notify] op=${input.operation} ${input.currentStatus} → ${input.targetStatus} diId=${input.diId ?? 'n/a'} corr=${input.correlationId}`,
+      );
+
+      // Surface as a synthesized "validation"-shaped message so the existing
+      // Discord embed (sendValidationError) renders it correctly — no new
+      // template needed, drift flag set so dev sees it stands out.
+      const message = `Transition non autorisée: ${
+        input.currentStatus ?? 'INCONNU'
+      } → ${input.targetStatus} (diId=${input.diId ?? 'n/a'})`;
+
+      try {
+        await this.discordHookService.sendValidationError({
+          operation: `transition/${input.operation}`,
+          env: process.env.NODE_ENV ?? 'dev',
+          correlationId: input.correlationId,
+          messages: [{ message, drift: true }],
+          suppressed,
+        });
+      } catch (err) {
+        this.logger.error(
+          `Transition refusal Discord notify failed (${input.operation}): ${
+            (err as Error).message ?? err
+          }`,
+        );
+      }
+    } catch (outer) {
+      this.logger.error(
+        `captureTransitionRefusal failed: ${(outer as Error).message ?? outer}`,
+      );
+    }
+  }
+
   /** Dedup gate: true at most once per DEDUP_WINDOW_MS per (module/method/error). */
   private shouldNotify(input: OperationalErrorInput): boolean {
     const key = `${input.module}/${input.method}/${input.error}`;
