@@ -50,6 +50,9 @@ lerna-debug.log*
 .env.*
 !.env.example
 !.env.template
+# Google OAuth client secret downloaded from the Cloud console — NEVER commit.
+client_secret*.json
+*oauth*credential*.json
 
 # =============================================================================
 # QA audit logs — generated, machine-local, never tracked

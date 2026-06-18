@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Readable } from 'stream';
 import { google, drive_v3 } from 'googleapis';
 
 export interface DriveFolder {
@@ -6,76 +7,201 @@ export interface DriveFolder {
   webViewLink: string;
 }
 
+export interface DriveFile {
+  id: string;
+  webViewLink: string;
+  name: string;
+}
+
+/** The two kinds of entity a DI can target. */
+export type DriveEntityType = 'company' | 'client';
+
+/** Document categories — same naming scheme for every upload, images included. */
+export type DriveDocType =
+  | 'BC'
+  | 'Devis'
+  | 'BL'
+  | 'Facture'
+  | 'FicheTechnique'
+  | 'Image';
+
 /**
- * Thin Google Drive v3 client — reuses the SAME service-account credentials as
- * the Sheets integration (`GOOGLE_SERVICE_ACCOUNT_EMAIL` + `GOOGLE_PRIVATE_KEY`),
- * just with the Drive scope added.
+ * Google Drive v3 client — authenticated via **OAuth 2.0** as a REAL Google
+ * account (the one that owns the storage quota), NOT a service account.
  *
- * ⚠️ A service account has **no personal Drive quota**, so folders MUST be
- * created inside a **Shared Drive** the SA is a member of (Content manager),
- * via `GOOGLE_DRIVE_PARENT_FOLDER_ID` (+ `supportsAllDrives: true`). Otherwise
- * `files.create` fails with `storageQuotaExceeded`. See
- * `.project-context/decisions/04-google-drive-client-folders.md`.
+ * Why OAuth and not the service account: a service account has **no storage
+ * quota**, so uploading a file fails with `storageQuotaExceeded` unless the
+ * parent lives in a Shared Drive (a Workspace-only feature). The project's
+ * Drive lives in a personal account, so we authenticate AS that account: files
+ * are then owned by it and billed to its quota.
+ *
+ * Flow (one-time dev setup): `GET /auth/google` → consent (scope `drive.file`,
+ * `access_type=offline`, `prompt=consent`) with the quota-owning account →
+ * `GET /oauth/callback` returns a **refresh token** → paste it into
+ * `GOOGLE_OAUTH_REFRESH_TOKEN`. At runtime the OAuth2 client refreshes the
+ * access token automatically from that refresh token.
+ *
+ * Folder layout (unchanged — stable, idempotent, all files of an entity in the
+ * SAME folder):
+ *   {GOOGLE_DRIVE_PARENT_FOLDER_ID}        ← the "CLIENTS" parent
+ *     ├── company/{Name}_{date}_{heure}/
+ *     └── client/{Name}_{date}_{heure}/
+ *
+ * `supportsAllDrives: true` is kept on every call so a Shared-Drive parent also
+ * works if the account is later moved to Workspace.
+ * See `.project-context/decisions/04-google-drive-client-folders.md`.
  */
 @Injectable()
 export class GoogleDriveService {
   private readonly logger = new Logger(GoogleDriveService.name);
   private drive: drive_v3.Drive | null = null;
+  /** Cache of resolved container folder ids (`company`, `client`) keyed by type. */
+  private readonly containerCache = new Map<string, string>();
+
+  /** Drive scope: `drive.file` = only files/folders this app creates or opens.
+   *  Enough for the CLIENTS tree + uploads, and the least-privilege choice. */
+  private static readonly OAUTH_SCOPES = [
+    'https://www.googleapis.com/auth/drive.file',
+  ];
+
+  /** True when Drive is configured: OAuth client + refresh token. The parent
+   *  folder is OPTIONAL — when empty, the app creates its own `CLIENTS` folder
+   *  (visible under `drive.file`). The refresh token comes from the consent flow. */
+  isConfigured(): boolean {
+    return (
+      !!process.env.GOOGLE_OAUTH_CLIENT_ID &&
+      !!process.env.GOOGLE_OAUTH_CLIENT_SECRET &&
+      !!process.env.GOOGLE_OAUTH_REFRESH_TOKEN
+    );
+  }
+
+  /** Build a bare OAuth2 client from `.env` (no tokens set yet). Used by both
+   *  the consent flow and the runtime client. */
+  private buildOAuthClient() {
+    const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+    const redirectUri =
+      process.env.GOOGLE_OAUTH_REDIRECT_URI ||
+      'http://localhost:3000/oauth/callback';
+    if (!clientId || !clientSecret) {
+      throw new Error(
+        'Google OAuth credentials missing — set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in .env',
+      );
+    }
+    return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+  }
+
+  /** Consent URL for the one-time setup (`GET /auth/google` redirects here).
+   *  `offline` + `consent` guarantee a refresh token is returned. */
+  generateAuthUrl(): string {
+    return this.buildOAuthClient().generateAuthUrl({
+      access_type: 'offline',
+      prompt: 'consent',
+      scope: GoogleDriveService.OAUTH_SCOPES,
+    });
+  }
+
+  /** Exchange the `code` from the OAuth callback for tokens (incl. the refresh
+   *  token to paste into `.env`). */
+  async exchangeCodeForTokens(code: string) {
+    const { tokens } = await this.buildOAuthClient().getToken(code);
+    return tokens;
+  }
 
   private async ensureClient(): Promise<drive_v3.Drive> {
     if (this.drive) return this.drive;
 
-    const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-    // GOOGLE_PRIVATE_KEY stores newlines as literal `\n` in .env (single line);
-    // restore real newlines before the JWT signer sees the PEM (same as Sheets).
-    const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-
-    if (!clientEmail || !privateKey) {
+    const refreshToken = process.env.GOOGLE_OAUTH_REFRESH_TOKEN;
+    if (!refreshToken) {
       throw new Error(
-        'Google credentials missing — set GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY in .env',
+        'Google OAuth refresh token missing — run the consent flow (GET /auth/google) ' +
+          'with the quota-owning account and set GOOGLE_OAUTH_REFRESH_TOKEN in .env',
       );
     }
 
-    const auth = new google.auth.GoogleAuth({
-      credentials: { client_email: clientEmail, private_key: privateKey },
-      scopes: ['https://www.googleapis.com/auth/drive'],
-    });
+    const oauth2 = this.buildOAuthClient();
+    // Only the refresh token is needed; the library mints + refreshes the
+    // access token on demand for every API call.
+    oauth2.setCredentials({ refresh_token: refreshToken });
 
-    this.drive = google.drive({ version: 'v3', auth });
+    this.drive = google.drive({ version: 'v3', auth: oauth2 });
     return this.drive;
   }
 
+  // ───────────────────────────────────────────────────────────────────────
+  // Name sanitization
+  // ───────────────────────────────────────────────────────────────────────
+
   /**
-   * Build the folder name: `{client} {DD/MM/YYYY HH:mm:ss}` in the configured
-   * timezone (default `Africa/Tunis`). The date format is configurable via
-   * `DRIVE_FOLDER_DATE_FORMAT` (e.g. `YYYY-MM-DD_HH-mm-ss` for desktop-sync
-   * safety — `/` and `:` are illegal filename chars on Windows/macOS, though
-   * the Drive API itself accepts them). Only the client-name part is sanitized.
-   *
-   * → `Skander LASSOUED 11/06/2026 15:16:20`
+   * Folder-name sanitizer: keep the name readable & STABLE (spaces + accents
+   * preserved) but strip control chars and the characters illegal on
+   * desktop-sync filesystems (`/ \ : * ? " < > |`). Collapses whitespace.
    */
-  buildFolderName(clientName: string, createdAt: Date): string {
-    const tz = process.env.APP_TIMEZONE || 'Africa/Tunis';
-    const fmt = process.env.DRIVE_FOLDER_DATE_FORMAT || 'DD/MM/YYYY HH:mm:ss';
-    return `${this.sanitizeName(clientName)} ${this.formatTimestamp(
-      createdAt,
-      tz,
-      fmt,
-    )}`;
+  sanitizeFolderName(name: string): string {
+    const cleaned = (name || '')
+      .replace(/[\/\\:*?"<>|]/g, '')
+      .replace(/[\x00-\x1f\x7f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return cleaned || 'Entity';
   }
 
-  /** Trim, collapse whitespace, drop control chars (codepoints < 32 and 127). */
-  private sanitizeName(clientName: string): string {
-    const cleaned = (clientName || '')
+  /**
+   * File-name part sanitizer for `{Name}`: strip diacritics, drop spaces and
+   * illegal chars — Drive- and desktop-safe, without distorting the name.
+   * e.g. `Excubia Skandér` → `ExcubiaSkander`.
+   */
+  sanitizeFileNamePart(name: string): string {
+    // NFD decomposes accents into base char + combining mark; drop the marks
+    // (U+0300–U+036F) by codepoint so the source stays plain-ASCII.
+    const noAccents = (name || '')
+      .normalize('NFD')
       .split('')
       .filter((ch) => {
         const code = ch.charCodeAt(0);
-        return code >= 32 && code !== 127;
+        return code < 0x0300 || code > 0x036f;
       })
-      .join('')
-      .replace(/\s+/g, ' ')
+      .join('');
+    const cleaned = noAccents
+      .replace(/[\/\\:*?"<>|]/g, '')
+      .replace(/[\x00-\x1f\x7f]/g, '')
+      .replace(/\s+/g, '')
       .trim();
-    return cleaned || 'Client';
+    return cleaned || 'Doc';
+  }
+
+  /**
+   * Build the standardized upload file name:
+   *   `{Name}_{DocType}_{DD-MM-YYYY}_{HH-mm-ss}.{ext}`
+   * Timezone `APP_TIMEZONE` (default `Africa/Tunis`), 24h, `-` separators.
+   * The real extension is preserved (lower-cased, alnum only).
+   *   → `ExcubiaSkander_BL_18-06-2026_11-30-45.pdf`
+   */
+  buildDocFileName(
+    name: string,
+    docType: DriveDocType,
+    ext: string,
+    createdAt: Date = new Date(),
+  ): string {
+    const tz = process.env.APP_TIMEZONE || 'Africa/Tunis';
+    const stamp = this.formatTimestamp(createdAt, tz, 'DD-MM-YYYY_HH-mm-ss');
+    const cleanName = this.sanitizeFileNamePart(name);
+    const cleanExt = (ext || 'bin').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    return `${cleanName}_${docType}_${stamp}.${cleanExt || 'bin'}`;
+  }
+
+  /**
+   * Build the entity folder name with the entity's creation timestamp, FROZEN
+   * forever (the folder is created once and reused by `driveFolderId`):
+   *   `{Name}_{DD-MM-YYYY}_{HH-mm-ss}`  (Africa/Tunis, 24h, underscores)
+   *   → `ExcubiaSkander_18-06-2026_11-30-45`
+   * The name part is sanitized the same way as file names (accents/spaces/illegal
+   * chars dropped) so it stays Drive- and desktop-safe.
+   */
+  buildEntityFolderName(name: string, createdAt: Date = new Date()): string {
+    const tz = process.env.APP_TIMEZONE || 'Africa/Tunis';
+    const stamp = this.formatTimestamp(createdAt, tz, 'DD-MM-YYYY_HH-mm-ss');
+    return `${this.sanitizeFileNamePart(name)}_${stamp}`;
   }
 
   private formatTimestamp(date: Date, tz: string, fmt: string): string {
@@ -102,41 +228,242 @@ export class GoogleDriveService {
       .replace(/ss/g, parts.second);
   }
 
-  /**
-   * Create the client folder under the configured parent (Shared-Drive aware).
-   * Throws on misconfiguration / API error — callers treat Drive as best-effort
-   * and must NOT let a failure block the business flow.
-   */
-  async createClientFolder(
-    clientName: string,
-    createdAt: Date,
+  // ───────────────────────────────────────────────────────────────────────
+  // Folder management (idempotent find-or-create)
+  // ───────────────────────────────────────────────────────────────────────
+
+  /** Find a non-trashed sub-folder by exact name under `parentId`, or null. */
+  private async findFolder(
+    drive: drive_v3.Drive,
+    name: string,
+    parentId: string,
+  ): Promise<DriveFolder | null> {
+    const escaped = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const q = [
+      `name = '${escaped}'`,
+      `'${parentId}' in parents`,
+      `mimeType = 'application/vnd.google-apps.folder'`,
+      'trashed = false',
+    ].join(' and ');
+    const res = await drive.files.list({
+      q,
+      fields: 'files(id, webViewLink)',
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+      pageSize: 1,
+    });
+    const f = res.data.files?.[0];
+    return f?.id ? { id: f.id, webViewLink: f.webViewLink ?? '' } : null;
+  }
+
+  /** Create a sub-folder by name under `parentId` (no find — always creates). */
+  private async createSubFolder(
+    drive: drive_v3.Drive,
+    name: string,
+    parentId: string,
   ): Promise<DriveFolder> {
-    const parent = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
-    if (!parent) {
-      throw new Error(
-        'GOOGLE_DRIVE_PARENT_FOLDER_ID is required to create client folders',
-      );
-    }
-
-    const drive = await this.ensureClient();
-    const name = this.buildFolderName(clientName, createdAt);
-
     const res = await drive.files.create({
       requestBody: {
         name,
         mimeType: 'application/vnd.google-apps.folder',
-        parents: [parent],
+        parents: [parentId],
       },
       fields: 'id, webViewLink',
-      // Required whenever the parent lives in a Shared Drive.
       supportsAllDrives: true,
     });
+    if (!res.data.id) throw new Error('Drive folder create returned no id');
+    return { id: res.data.id, webViewLink: res.data.webViewLink ?? '' };
+  }
 
-    const id = res.data.id;
-    if (!id) {
-      throw new Error('Drive folder create returned no id');
+  /** Find-or-create a sub-folder by name under `parentId` (idempotent). Used for
+   *  the STABLE container folders (company / client / composants) only. */
+  private async ensureFolder(
+    drive: drive_v3.Drive,
+    name: string,
+    parentId: string,
+  ): Promise<DriveFolder> {
+    const existing = await this.findFolder(drive, name, parentId);
+    if (existing) return existing;
+    return this.createSubFolder(drive, name, parentId);
+  }
+
+  /**
+   * Find-or-create the `CLIENTS` parent folder, CREATED BY THIS OAUTH APP at the
+   * Drive root — so it is visible under the `drive.file` scope (which only sees
+   * what the app created). The whole `CLIENTS/...` subtree then lives under it.
+   * Cached; the id is logged so it can optionally be frozen in
+   * `GOOGLE_DRIVE_PARENT_FOLDER_ID`.
+   */
+  private async ensureRootClientsFolder(drive: drive_v3.Drive): Promise<string> {
+    const cacheKey = '__rootClients';
+    const cached = this.containerCache.get(cacheKey);
+    if (cached) return cached;
+    const folder = await this.ensureFolder(drive, 'CLIENTS', 'root');
+    this.containerCache.set(cacheKey, folder.id);
+    this.logger.log(
+      `CLIENTS parent folder ready (id=${folder.id}). ` +
+        `Set GOOGLE_DRIVE_PARENT_FOLDER_ID=${folder.id} to freeze it.`,
+    );
+    return folder.id;
+  }
+
+  /**
+   * Resolve the parent folder for the CLIENTS subtree:
+   *   - `GOOGLE_DRIVE_PARENT_FOLDER_ID` set → use it (the app must be able to
+   *     see it — i.e. it created it, or the broader `drive` scope is used).
+   *   - empty → the app find-or-creates its own `CLIENTS` at the root, which is
+   *     always visible under `drive.file`.
+   */
+  private async resolveParentId(drive: drive_v3.Drive): Promise<string> {
+    const configured = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID?.trim();
+    if (configured) return configured;
+    return this.ensureRootClientsFolder(drive);
+  }
+
+  /** Resolve (create if missing) the `company`/`client` container under the
+   *  CLIENTS parent. Cached for the process lifetime. */
+  private async ensureTypeContainer(
+    drive: drive_v3.Drive,
+    type: DriveEntityType,
+  ): Promise<string> {
+    const cached = this.containerCache.get(type);
+    if (cached) return cached;
+    const parent = await this.resolveParentId(drive);
+    const container = await this.ensureFolder(drive, type, parent);
+    this.containerCache.set(type, container.id);
+    return container.id;
+  }
+
+  /**
+   * Create the entity folder `{type}/{Name}_{DD-MM-YYYY}_{HH-mm-ss}` under the
+   * parent and return its id + url. The name carries the entity's creation
+   * timestamp (frozen), so it CANNOT be looked up by name — this CREATES a new
+   * folder every time it's called. Idempotence is the CALLER's job: it must only
+   * call this when the entity has no `driveFolderId` yet, then store the returned
+   * id and resolve by id forever after (see company/client hooks +
+   * `resolveDiDriveTarget`). One folder per entity, reused for all its uploads.
+   *
+   * Used by BOTH company and client. `createdAt` = the entity's creation time.
+   */
+  async ensureEntityFolder(
+    type: DriveEntityType,
+    name: string,
+    createdAt: Date = new Date(),
+  ): Promise<DriveFolder> {
+    const drive = await this.ensureClient();
+    const containerId = await this.ensureTypeContainer(drive, type);
+    const folderName = this.buildEntityFolderName(name, createdAt);
+    const folder = await this.createSubFolder(drive, folderName, containerId);
+    this.logger.log(
+      `Entity Drive folder created: ${type}/${folderName} (${folder.id})`,
+    );
+    return folder;
+  }
+
+  /**
+   * Ensure (create if missing) a top-level container folder by name directly
+   * under the configured parent — e.g. `composants` for catalog datasheets that
+   * aren't tied to a company/client. Cached. Idempotent.
+   */
+  async ensureNamedContainer(name: string): Promise<string> {
+    const cacheKey = `__container:${name}`;
+    const cached = this.containerCache.get(cacheKey);
+    if (cached) return cached;
+    const drive = await this.ensureClient();
+    const parent = await this.resolveParentId(drive);
+    const folder = await this.ensureFolder(drive, name, parent);
+    this.containerCache.set(cacheKey, folder.id);
+    return folder.id;
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Upload
+  // ───────────────────────────────────────────────────────────────────────
+
+  /**
+   * Upload a file (buffer) into `folderId` under `fileName`. Returns the Drive
+   * file id + webViewLink. Throws on misconfiguration / API error — callers
+   * treat Drive as best-effort and must surface a clear error, never a fake
+   * success.
+   */
+  async uploadFile(
+    folderId: string,
+    fileName: string,
+    buffer: Buffer,
+    mimeType?: string,
+  ): Promise<DriveFile> {
+    const drive = await this.ensureClient();
+    let res;
+    try {
+      res = await drive.files.create({
+        requestBody: { name: fileName, parents: [folderId] },
+        media: {
+          mimeType: mimeType || 'application/octet-stream',
+          body: Readable.from(buffer),
+        },
+        fields: 'id, webViewLink, name',
+        supportsAllDrives: true,
+      });
+      console.log('🦀res', res);
+    } catch (err) {
+      console.log('🌮[err]:', err);
+      // A service account has NO storage quota, so it can CREATE folders (0
+      // bytes) but cannot STORE a file unless the parent lives in a Shared
+      // Drive (storage billed to the Workspace org). If the parent is in a
+      // personal My Drive, the upload is billed to the SA → this error. Turn
+      // Google's cryptic message into an actionable one.
+      // if (this.isQuotaError(err)) {
+      //   throw new Error(
+      //     'Upload Drive refusé : le compte de service n’a pas de quota de stockage. ' +
+      //       'Le dossier parent (GOOGLE_DRIVE_PARENT_FOLDER_ID) doit être DANS un Shared Drive ' +
+      //       'dont le service account est membre (Content Manager) — pas un My Drive personnel. ' +
+      //       `Détail Google : ${(err as Error)?.message ?? String(err)}`,
+      //   );
+      // }
+      throw err;
     }
-    this.logger.log(`Created client Drive folder "${name}" (${id})`);
-    return { id, webViewLink: res.data.webViewLink ?? '' };
+    const id = res.data.id;
+    if (!id) throw new Error('Drive file create returned no id');
+    this.logger.log(`Uploaded "${fileName}" to folder ${folderId} (${id})`);
+    return {
+      id,
+      webViewLink: res.data.webViewLink ?? '',
+      name: res.data.name ?? fileName,
+    };
+  }
+
+  /** Recognize the service-account "no storage quota" failure (any of the shapes
+   *  googleapis surfaces it as). */
+  private isQuotaError(err: unknown): boolean {
+    const reason = (err as any)?.errors?.[0]?.reason ?? (err as any)?.reason;
+    const message =
+      (err as any)?.errors?.[0]?.message ??
+      (err as any)?.response?.data?.error?.message ??
+      (err as any)?.message ??
+      '';
+    return (
+      reason === 'storageQuotaExceeded' ||
+      /storage quota|do not have storage/i.test(String(message))
+    );
+  }
+
+  /**
+   * Recognize a Drive "file/folder not found" (404). Used to auto-repair a
+   * stale stored `driveFolderId` (e.g. a folder created by the old service
+   * account, invisible to the OAuth account, or deleted).
+   */
+  isNotFoundError(err: unknown): boolean {
+    const code = (err as any)?.code ?? (err as any)?.response?.status;
+    const reason = (err as any)?.errors?.[0]?.reason ?? (err as any)?.reason;
+    const message =
+      (err as any)?.errors?.[0]?.message ??
+      (err as any)?.response?.data?.error?.message ??
+      (err as any)?.message ??
+      '';
+    return (
+      code === 404 ||
+      reason === 'notFound' ||
+      /file not found|not found/i.test(String(message))
+    );
   }
 }

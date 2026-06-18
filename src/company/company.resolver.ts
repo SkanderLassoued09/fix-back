@@ -72,4 +72,13 @@ export class CompanysResolver {
   ensureClientFolder(@Args('companyId') companyId: string): Promise<Company> {
     return this.companysService.ensureClientFolder(companyId);
   }
+
+  /** Force-recreate a company's Drive folder (clears the stale id then recreates
+   *  under the current OAuth account). For the SA→OAuth migration. */
+  @Mutation(() => Company)
+  resetCompanyDriveFolder(
+    @Args('companyId') companyId: string,
+  ): Promise<Company> {
+    return this.companysService.resetDriveFolder(companyId);
+  }
 }

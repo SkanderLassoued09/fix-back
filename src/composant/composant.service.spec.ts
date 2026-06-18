@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { GraphQLError } from 'graphql';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
 import { ComposantService } from './composant.service';
+import { GoogleDriveService } from 'src/google-drive/google-drive.service';
 
 /**
  * Unit tests for the « Enregistrer » save path (`addComposantInfo`).
@@ -57,6 +58,14 @@ describe('ComposantService.addComposantInfo', () => {
         { provide: getModelToken('Composant'), useValue: model },
         { provide: getModelToken('Di'), useValue: di },
         { provide: OperationalErrorService, useValue: { capture: jest.fn() } },
+        {
+          provide: GoogleDriveService,
+          useValue: {
+            ensureNamedContainer: jest.fn(),
+            buildDocFileName: jest.fn(),
+            uploadFile: jest.fn(),
+          },
+        },
       ],
     }).compile();
     service = moduleRef.get(ComposantService);

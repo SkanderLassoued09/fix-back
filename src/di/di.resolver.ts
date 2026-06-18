@@ -78,6 +78,17 @@ export class DiResolver {
     return this.diService.addBCPDF(_id, pdf);
   }
 
+  /**
+   * Migration: wipe stale `driveFolderId` on every company + client so their
+   * Drive folders are recreated (under the new OAuth account) on the next
+   * upload. Run once after switching Drive auth from service account → OAuth.
+   */
+  @Mutation(() => String)
+  async resetAllDriveFolders() {
+    const r = await this.diService.resetAllDriveFolders();
+    return `Drive folders reset — companies: ${r.companies}, clients: ${r.clients}`;
+  }
+
   @Query(() => DiTableData)
   async getAllDi(
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,

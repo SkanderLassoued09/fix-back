@@ -7,12 +7,10 @@ import { UpdateComposantInput } from './dto/update-composant.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Composant } from './entities/composant.entity';
 import { Model } from 'mongoose';
-import { join } from 'path';
-import * as fs from 'fs';
-import * as randomstring from 'randomstring';
 import { getFileExtension } from 'src/di/shared.files';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
 import { GraphQLError } from 'graphql';
+import { GoogleDriveService } from 'src/google-drive/google-drive.service';
 @Injectable()
 export class ComposantService {
   constructor(
@@ -21,7 +19,51 @@ export class ComposantService {
     // (`array_composants[].nameComposant`), which references parts by name.
     @InjectModel('Di') private diModel: Model<any>,
     private readonly operationalErrorService: OperationalErrorService,
+    private readonly googleDriveService: GoogleDriveService,
   ) {}
+
+  /**
+   * Upload a composant datasheet (fiche technique) to Drive — Drive-only, no
+   * local docs/. Catalog parts aren't tied to a company/client, so they live in
+   * a dedicated `composants` container, named
+   * `{ComposantName}_FicheTechnique_{date}_{heure}.{ext}`. BEST-EFFORT: returns
+   * null on failure (the catalog save is not blocked) and logs it.
+   */
+  private async uploadDatasheet(
+    name: string,
+    base64: string,
+  ): Promise<string | null> {
+    try {
+      const ext = getFileExtension(base64);
+      const buffer = Buffer.from(base64.split(',')[1], 'base64');
+      const containerId =
+        await this.googleDriveService.ensureNamedContainer('composants');
+      const fileName = this.googleDriveService.buildDocFileName(
+        name || 'Composant',
+        'FicheTechnique',
+        ext,
+      );
+      const mime = base64.split(',')[0]?.split(':')[1]?.split(';')[0];
+      const uploaded = await this.googleDriveService.uploadFile(
+        containerId,
+        fileName,
+        buffer,
+        mime,
+      );
+      return uploaded.webViewLink;
+    } catch (err) {
+      await this.operationalErrorService.capture({
+        module: 'composant',
+        submodule: 'drive',
+        method: 'UPLOAD_DATASHEET',
+        severity: 'MEDIUM',
+        error: 'Composant datasheet Drive upload failed',
+        message: (err as Error)?.message ?? String(err),
+        payload: { composantName: name },
+      });
+      return null;
+    }
+  }
 
   async generateComposantId(): Promise<number> {
     let indexComposant = 0;
@@ -48,23 +90,10 @@ export class ComposantService {
         createComposantInput.pdf !== 'null' &&
         createComposantInput.pdf.includes(',')
       ) {
-        const extension = getFileExtension(createComposantInput.pdf);
-        const buffer = Buffer.from(
-          createComposantInput.pdf.split(',')[1], // Split base64 string to get the data
-          'base64',
+        createComposantInput.pdf = await this.uploadDatasheet(
+          createComposantInput.name,
+          createComposantInput.pdf,
         );
-
-        const randompdfFile = randomstring.generate({
-          length: 12,
-          charset: 'alphabetic',
-        });
-
-        fs.writeFileSync(
-          join(__dirname, `../../docs/${randompdfFile}.${extension}`),
-          buffer,
-        );
-
-        createComposantInput.pdf = `${randompdfFile}.${extension}`;
       } else {
         // If the PDF is not valid, set it to null
         createComposantInput.pdf = null;
@@ -236,17 +265,10 @@ export class ComposantService {
         updateComposant.pdf !== 'null' &&
         updateComposant.pdf.includes(',')
       ) {
-        const extension = getFileExtension(updateComposant.pdf);
-        const buffer = Buffer.from(updateComposant.pdf.split(',')[1], 'base64');
-        const randompdfFile = randomstring.generate({
-          length: 12,
-          charset: 'alphabetic',
-        });
-        fs.writeFileSync(
-          join(__dirname, `../../docs/${randompdfFile}.${extension}`),
-          buffer,
+        set.pdf = await this.uploadDatasheet(
+          updateComposant.name,
+          updateComposant.pdf,
         );
-        set.pdf = `${randompdfFile}.${extension}`;
       }
 
       const update = await this.ComposantModel.findOneAndUpdate(

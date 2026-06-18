@@ -1,12 +1,14 @@
 import { Module } from '@nestjs/common';
 import { GoogleDriveService } from './google-drive.service';
+import { GoogleDriveController } from './google-drive.controller';
 
 /**
- * Google Drive integration. Exposes `GoogleDriveService` (folder creation,
- * Shared-Drive aware) for other modules — currently the company module, which
- * auto-creates a client folder on company creation.
+ * Google Drive integration (OAuth 2.0). Exposes `GoogleDriveService` (folder
+ * creation + uploads) for other modules, and the OAuth consent-flow endpoints
+ * (`/auth/google`, `/oauth/callback`) via the controller.
  */
 @Module({
+  controllers: [GoogleDriveController],
   providers: [GoogleDriveService],
   exports: [GoogleDriveService],
 })

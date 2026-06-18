@@ -65,4 +65,17 @@ export class ClientsResolver {
   ): Promise<ClientTableData> {
     return await this.clientsService.searchClient(paginationConfig, search);
   }
+
+  /** (Re)create the client's Drive folder when it has none. Idempotent. */
+  @Mutation(() => Client)
+  ensureClientDriveFolder(@Args('clientId') clientId: string): Promise<Client> {
+    return this.clientsService.ensureClientDriveFolder(clientId);
+  }
+
+  /** Force-recreate a client's Drive folder (clears the stale id then recreates
+   *  under the current OAuth account). For the SA→OAuth migration. */
+  @Mutation(() => Client)
+  resetClientDriveFolder(@Args('clientId') clientId: string): Promise<Client> {
+    return this.clientsService.resetClientDriveFolder(clientId);
+  }
 }

@@ -10,7 +10,7 @@ import { withDb } from '../utils/mongo';
  *  B2: the used parts + repair remark persist (via updateDi) — survive in DB.
  *  B3: the form opens pre-filled — the category is pre-filled from the DI, so
  *      the finish gate is satisfied WITHOUT the test ever touching the category
- *      dropdown (only repairPlan / worksDone / the two toggles are entered).
+ *      dropdown (the 2-step wizard only collects worksDone + the two toggles).
  *
  * Staged in Mongo (test DB), hard-deleted after.
  */
@@ -100,15 +100,11 @@ test('« Fin réparation » → DI FINISHED, parts persist, category pre-filled'
     await row.locator('button:has(.pi-wrench)').click();
     await expect(page.locator('.sav-diag-header')).toBeVisible({ timeout: 10000 });
 
-    // info → plan : fill the repair plan (category is PRE-FILLED — never touched).
-    await next(page);
-    await page
-        .locator('textarea[formcontrolname="repairPlan"]')
-        .fill('Remplacement du composant défectueux.');
-
-    // plan → parts → works
-    await next(page);
-    await next(page);
+    // The wizard now opens directly on « Travaux & tests » (step 1/2): the
+    // former « Informations générales », « Plan d'intervention » and « Pièces
+    // utilisées » steps were removed. Category + parts are pre-filled from the
+    // DI (B3) and are display-only — they no longer gate closure, so the test
+    // never touches them.
     await page
         .locator('textarea[formcontrolname="worksDone"]')
         .fill('Soudure refaite, composant remplacé, nettoyage carte.');
@@ -119,11 +115,12 @@ test('« Fin réparation » → DI FINISHED, parts persist, category pre-filled'
         .locator('[aria-label="Tests validés"] button:has-text("Oui")')
         .click();
 
-    // works → summary
+    // works → summary (step 2/2)
     await next(page);
     const finishBtn = page.locator('.cta__btn');
-    // B3 proof: finish is ENABLED although we never set the category (pre-filled).
-    await expect(finishBtn, 'finish enabled via pre-filled category').toBeEnabled({
+    // Finish is ENABLED from worksDone + the two toggles alone — the category /
+    // plan / parts are pre-filled and no longer required by the gate (B3).
+    await expect(finishBtn, 'finish enabled on the 2-step wizard').toBeEnabled({
         timeout: 8000,
     });
     await finishBtn.click();

@@ -62,6 +62,15 @@ export class DiDocument extends Document {
   @Prop()
   // pdf file
   bon_de_livraison: string;
+  // Drive references keyed by DocType (BC/Devis/BL/Facture/Image):
+  // { driveFileId, webViewLink, name }. The webViewLink is also mirrored into
+  // the scalar fields above (devis/bon_de_commande/…) so the FE "Voir" link
+  // opens Drive directly. Mongo-only (not exposed to GraphQL).
+  @Prop({ type: Object, default: {} })
+  driveDocs: Record<
+    string,
+    { driveFileId: string; webViewLink: string; name: string }
+  >;
   @Prop()
   // affected by magasin
   price: number;

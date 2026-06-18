@@ -5,11 +5,13 @@ import { ComposantSchema } from './entities/composant.entity';
 import { MongooseModule } from '@nestjs/mongoose';
 import { OperationalErrorModule } from 'src/operational-error/operational-error.module';
 import { DiSchema } from 'src/di/entities/di.entity';
+import { GoogleDriveModule } from 'src/google-drive/google-drive.module';
 
 @Module({
   providers: [ComposantResolver, ComposantService],
   imports: [
     OperationalErrorModule,
+    GoogleDriveModule,
     MongooseModule.forFeature([
       {
         name: 'Composant',

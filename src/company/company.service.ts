@@ -51,7 +51,11 @@ export class CompanysService {
   private async attachDriveFolder(society: any): Promise<void> {
     if (!society || society.driveFolderId) return;
     try {
-      const folder = await this.driveService.createClientFolder(
+      // Folder name = {Name}_{date}_{heure} with the company's creation time
+      // (frozen). Created ONCE here; reused for every future upload via the
+      // stored driveFolderId (idempotent by id — see the guard above).
+      const folder = await this.driveService.ensureEntityFolder(
+        'company',
         society.raisonSociale || society.name,
         society.createdAt ?? new Date(),
       );
@@ -94,6 +98,23 @@ export class CompanysService {
     if ((company as any).driveFolderId) {
       return company; // idempotent — already has a folder
     }
+    await this.attachDriveFolder(company);
+    return company;
+  }
+
+  /**
+   * Force-recreate the Drive folder: clear the (stale) id/url then re-attach.
+   * Used after the service-account → OAuth migration, where folders created by
+   * the old SA are unreachable (`File not found`) under the new OAuth account.
+   */
+  async resetDriveFolder(companyId: string): Promise<Company> {
+    const company = await this.CompanyModel.findById(companyId);
+    if (!company) {
+      throw notFound(companyId);
+    }
+    (company as any).driveFolderId = null;
+    (company as any).driveFolderUrl = null;
+    await company.save();
     await this.attachDriveFolder(company);
     return company;
   }

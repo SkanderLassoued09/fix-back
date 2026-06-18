@@ -113,7 +113,7 @@ async function openNego(page: Page, idnum: string) {
     const row = page.locator('tr', { hasText: idnum });
     await expect(row).toBeVisible({ timeout: 20000 });
     await row.locator('button:has(.pi-dollar)').click();
-    await expect(page.locator('.sav-price-grid')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('.pricing-modal')).toBeVisible({ timeout: 10000 });
 }
 
 async function clickConfirmer(page: Page) {
@@ -215,5 +215,5 @@ test('price step fails → transition NOT fired, status unchanged, modal open', 
     await page.waitForTimeout(1000);
     expect(transition, 'transition must NOT fire after a failed price step').toBe(0);
     expect(await dbStatus(s.diId), 'status unchanged').toBe('NEGOTIATION1');
-    await expect(page.locator('.sav-price-grid')).toBeVisible();
+    await expect(page.locator('.pricing-modal')).toBeVisible();
 });

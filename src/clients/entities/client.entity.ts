@@ -19,6 +19,12 @@ export class ClientDocument extends Document {
   email: string;
   @Prop()
   phone: string;
+  // Google Drive folder for this client's documents (CLIENTS/client/{name}).
+  // Mirrors the company hook; set best-effort on creation, idempotent.
+  @Prop()
+  driveFolderId: string;
+  @Prop()
+  driveFolderUrl: string;
   @Prop({ default: false })
   isDeleted: boolean;
 }
@@ -40,6 +46,10 @@ export class Client {
   email: string;
   @Field({ nullable: true })
   phone: string;
+  @Field({ nullable: true })
+  driveFolderId: string;
+  @Field({ nullable: true })
+  driveFolderUrl: string;
   @Field({ defaultValue: false })
   isDeleted: boolean;
 }

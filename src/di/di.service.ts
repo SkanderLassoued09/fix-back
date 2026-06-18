@@ -57,6 +57,10 @@ import { DiscordHook } from 'src/discord-hook/entities/discord-hook.entity';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { DiWorkflowService } from './workflow/di-workflow.service';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
+import {
+  GoogleDriveService,
+  DriveDocType,
+} from 'src/google-drive/google-drive.service';
 @Injectable()
 export class DiService {
   constructor(
@@ -80,7 +84,191 @@ export class DiService {
     private readonly discordHookService: DiscordHookService,
     private readonly diWorkflowService: DiWorkflowService,
     private readonly operationalErrorService: OperationalErrorService,
+    private readonly googleDriveService: GoogleDriveService,
   ) {}
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Drive uploads — every DI document (image, BC, Devis, BL, Facture) is
+  // renamed to a standard scheme and stored in the DI's entity folder
+  // (CLIENTS/company/{name} or CLIENTS/client/{name}). Drive is the single
+  // source — no local docs/ storage.
+  // ───────────────────────────────────────────────────────────────────────
+
+  /**
+   * Resolve the target Drive folder for a DI from its linked entity (company OR
+   * client — a DI targets exactly one). Ensures the entity folder exists
+   * (idempotent) and returns `{ folderId, entityName }`. Throws a clean error
+   * when no entity is linked. The entity may carry no `driveFolderId` yet (e.g.
+   * created while Drive was down) → we (re)create it here on demand.
+   */
+  /**
+   * A ref id counts as "set" only when it's a non-empty string that isn't a
+   * stringified null/undefined. The front sends `company_id: "null"` (the
+   * literal string) for a CLIENT-type DI's unused company field (and vice
+   * versa) — treating that as a real id sent the resolver down the company
+   * branch, where `findById("null")` returned null → the
+   * `Company 'null' not found` crash. This guard picks the correct entity.
+   */
+  private isResolvableId(v: unknown): v is string {
+    return (
+      typeof v === 'string' &&
+      v.trim() !== '' &&
+      v !== 'null' &&
+      v !== 'undefined'
+    );
+  }
+
+  private async resolveDiDriveTarget(
+    di: any,
+    opts: { forceRecreate?: boolean } = {},
+  ): Promise<{ folderId: string; entityName: string }> {
+    const companyId = this.isResolvableId(di?.company_id) ? di.company_id : null;
+    const clientId = this.isResolvableId(di?.client_id) ? di.client_id : null;
+    // forceRecreate = the stored folder is stale (404) → ignore it and make a
+    // fresh one, overwriting the stale id below.
+    const reuse = !opts.forceRecreate;
+
+    if (companyId) {
+      const company: any = await this.companyModel.findById(companyId).lean();
+      if (!company) {
+        throw new GraphQLError(`Société introuvable (id ${companyId}).`, {
+          extensions: { code: 'BAD_REQUEST' },
+        });
+      }
+      const name = company.raisonSociale || company.name || 'Company';
+      if (reuse && company.driveFolderId) {
+        return { folderId: company.driveFolderId, entityName: name };
+      }
+      const folder = await this.googleDriveService.ensureEntityFolder(
+        'company',
+        name,
+        company.createdAt ?? new Date(),
+      );
+      await this.companyModel.updateOne(
+        { _id: company._id },
+        { $set: { driveFolderId: folder.id, driveFolderUrl: folder.webViewLink } },
+      );
+      return { folderId: folder.id, entityName: name };
+    }
+
+    if (clientId) {
+      const client: any = await this.clientModel.findById(clientId).lean();
+      if (!client) {
+        throw new GraphQLError(`Client introuvable (id ${clientId}).`, {
+          extensions: { code: 'BAD_REQUEST' },
+        });
+      }
+      const name = `${client.first_name ?? ''} ${client.last_name ?? ''}`.trim();
+      if (reuse && client.driveFolderId) {
+        return { folderId: client.driveFolderId, entityName: name };
+      }
+      const folder = await this.googleDriveService.ensureEntityFolder(
+        'client',
+        name,
+        client.createdAt ?? new Date(),
+      );
+      await this.clientModel.updateOne(
+        { _id: client._id },
+        { $set: { driveFolderId: folder.id, driveFolderUrl: folder.webViewLink } },
+      );
+      return { folderId: folder.id, entityName: name };
+    }
+
+    // No resolvable company OR client. Expected user/data condition (not a 500):
+    // a clean BAD_REQUEST → the global filter logs it LOW with NO Discord alert,
+    // and the FE shows the message as a toast.
+    throw new GraphQLError(
+      "Cette DI n'est rattachée à aucune société ni client — impossible de classer le fichier sur Drive.",
+      { extensions: { code: 'BAD_REQUEST' } },
+    );
+  }
+
+  /**
+   * Decode a base64 data-URL, upload it to the DI's entity Drive folder under
+   * the standardized name `{Name}_{DocType}_{date}_{heure}.{ext}`, and return
+   * the Drive `webViewLink` (stored on the DI) + `driveFileId`. Throws on any
+   * failure (Drive misconfigured, no entity, API error) so callers surface a
+   * clear error instead of a fake success — Drive is the single source.
+   */
+  private async uploadDiDocToDrive(
+    di: any,
+    base64: string,
+    docType: DriveDocType,
+  ): Promise<{ webViewLink: string; driveFileId: string; fileName: string }> {
+    const ext = getFileExtension(base64);
+    const buffer = Buffer.from(base64.split(',')[1], 'base64');
+    const mime = base64.split(',')[0]?.split(':')[1]?.split(';')[0];
+
+    const target = await this.resolveDiDriveTarget(di);
+    const fileName = this.googleDriveService.buildDocFileName(
+      target.entityName,
+      docType,
+      ext,
+    );
+
+    let uploaded;
+    try {
+      uploaded = await this.googleDriveService.uploadFile(
+        target.folderId,
+        fileName,
+        buffer,
+        mime,
+      );
+    } catch (err) {
+      // AUTO-REPAIR: the stored driveFolderId is stale (created by the old
+      // service account, or deleted) → Drive 404. Recreate the folder under the
+      // OAuth account (overwriting the stale id) and retry the upload ONCE. Any
+      // other error, or a second failure, propagates.
+      if (!this.googleDriveService.isNotFoundError(err)) throw err;
+      const fresh = await this.resolveDiDriveTarget(di, { forceRecreate: true });
+      await this.operationalErrorService.capture({
+        module: 'di',
+        submodule: 'drive',
+        method: 'DRIVE_FOLDER_AUTO_REPAIR',
+        severity: 'LOW',
+        error: 'Stale driveFolderId recreated under OAuth',
+        message: `entity folder was 404; recreated (${target.folderId} → ${fresh.folderId})`,
+        notify: false,
+        payload: {
+          diId: di?._id,
+          companyId: di?.company_id,
+          clientId: di?.client_id,
+        },
+      });
+      uploaded = await this.googleDriveService.uploadFile(
+        fresh.folderId,
+        fileName,
+        buffer,
+        mime,
+      );
+    }
+
+    return {
+      webViewLink: uploaded.webViewLink,
+      driveFileId: uploaded.id,
+      fileName,
+    };
+  }
+
+  /**
+   * Migration helper: clear `driveFolderId`/`driveFolderUrl` on ALL companies
+   * and clients so the NEXT upload recreates the folder under the new (OAuth)
+   * account. The old folders were created by the SERVICE ACCOUNT in a different
+   * Drive → unreachable under OAuth (`File not found`). Idempotent: only touches
+   * rows that still carry a stale id; the lazy recreation in resolveDiDriveTarget
+   * does the rest. Returns how many of each were reset.
+   */
+  async resetAllDriveFolders(): Promise<{ companies: number; clients: number }> {
+    const clear = { $set: { driveFolderId: null, driveFolderUrl: null } };
+    const filter = { driveFolderId: { $nin: [null, ''] } };
+    const [c, cl] = await Promise.all([
+      this.companyModel.updateMany(filter as any, clear),
+      this.clientModel.updateMany(filter as any, clear),
+    ]);
+    const companies = (c as any)?.modifiedCount ?? 0;
+    const clients = (cl as any)?.modifiedCount ?? 0;
+    return { companies, clients };
+  }
 
   /**
    * Tiny helper used at every Discord-side-effect site. Discord failures
@@ -106,6 +294,34 @@ export class DiService {
   }
 
   /**
+   * Capture a document-upload failure at the RIGHT severity. An entity-
+   * resolution problem surfaces as a GraphQLError carrying `extensions.code`
+   * (e.g. BAD_REQUEST) — an EXPECTED user/data condition: log LOW, NO Discord.
+   * A real Drive/API failure has no such code → HIGH + Discord. The caller
+   * re-throws the (clean) error so the FE shows the exact message; the global
+   * filter keys off the same code, so there's no duplicate HIGH alert.
+   */
+  private async captureUploadFailure(
+    method: string,
+    err: unknown,
+    diId: string,
+  ) {
+    const expected = !!(err as any)?.extensions?.code;
+    await this.operationalErrorService.capture({
+      module: 'di',
+      submodule: 'drive',
+      method,
+      severity: expected ? 'LOW' : 'HIGH',
+      error: expected
+        ? 'Upload skipped: DI entity unresolvable'
+        : 'Drive upload failed',
+      message: (err as Error)?.message ?? String(err),
+      notify: !expected,
+      payload: { diId },
+    });
+  }
+
+  /**
    * Helper for the historically silent `.catch(err => err)` sites. We now
    * capture the failure and the caller returns a safe default (usually `[]`)
    * so the resolver never returns an Error object to the FE.
@@ -126,45 +342,70 @@ export class DiService {
     });
   }
 
+  /**
+   * Next DI number for the `_idnum` (`DI{n}`). HARDENED: only `_idnum` matching
+   * `^DI\d+$` count — QA/legacy junk ids (`INMAG-…`, `LIFE-…`, even a previous
+   * `DINaN`) are IGNORED so the parse can never yield `NaN`. Next = max(valid)+1,
+   * fallback 1 when none. The old version read the most-recent DI's `_idnum` and
+   * did `+substring(2)`; a single non-conforming id there produced `DINaN` and
+   * poisoned every subsequent creation.
+   */
   async generateClientId(): Promise<number> {
-    let indexClient = 0;
-    const lastClient = await this.diModel.findOne(
-      {},
-      {},
-      { sort: { createdAt: -1 } },
-    );
-    if (lastClient) {
-      indexClient = +lastClient._idnum.substring(2);
-      return indexClient + 1;
+    const rows = await this.diModel
+      .find({ _idnum: { $regex: '^DI[0-9]+$' } }, { _idnum: 1 })
+      .lean();
+    let max = 0;
+    for (const r of rows) {
+      const n = parseInt(String((r as any)?._idnum).slice(2), 10);
+      if (Number.isFinite(n) && n > max) max = n;
     }
-    return indexClient;
+    return max + 1; // ≥ 1 → never `DI` + `NaN`, never collides with the max
   }
 
   async createDi(createDiInput: CreateDiInput): Promise<any> {
     try {
-      // 🖼️ Handle image
-      if (createDiInput.image?.length) {
-        const extension = getFileExtension(createDiInput.image);
-
-        const buffer = Buffer.from(createDiInput.image.split(',')[1], 'base64');
-
-        const fileName = `${randomstring.generate({
-          length: 12,
-          charset: 'alphabetic',
-        })}.${extension}`;
-
-        fs.writeFileSync(join(__dirname, `../../docs/${fileName}`), buffer);
-
-        createDiInput.image = fileName;
-      }
-
       // 🆔 Generate IDs
       const index = await this.generateClientId();
       createDiInput._id = `DI_${nanoid(4)}`;
       createDiInput._idnum = `DI${index}`;
 
+      // 🖼️ Handle image — uploaded to the DI's entity Drive folder (Drive-only,
+      // no local docs/). BEST-EFFORT here: an upload failure must NOT block DI
+      // creation (unlike the standalone addBC/addDevis/… mutations which surface
+      // the error). On failure we drop the image and keep going.
+      let imageRef:
+        | { driveFileId: string; webViewLink: string; name: string }
+        | null = null;
+      const rawImage = createDiInput.image?.includes(',')
+        ? createDiInput.image
+        : null;
+      if (rawImage) {
+        try {
+          const { webViewLink, driveFileId, fileName } =
+            await this.uploadDiDocToDrive(createDiInput, rawImage, 'Image');
+          createDiInput.image = webViewLink;
+          imageRef = { driveFileId, webViewLink, name: fileName };
+        } catch (err) {
+          createDiInput.image = null;
+          await this.operationalErrorService.capture({
+            module: 'di',
+            submodule: 'drive',
+            method: 'CREATE_DI_IMAGE_UPLOAD',
+            severity: 'MEDIUM',
+            error: 'DI image Drive upload failed (DI still created)',
+            message: (err as Error)?.message ?? String(err),
+            payload: {
+              companyId: createDiInput?.company_id,
+              clientId: createDiInput?.client_id,
+            },
+          });
+        }
+      }
+
       // 💾 Save
-      const di = await new this.diModel(createDiInput).save();
+      const diDoc = new this.diModel(createDiInput);
+      if (imageRef) (diDoc as any).driveDocs = { Image: imageRef };
+      const di = await diDoc.save();
       await this.syncEmplacementStats(di.location_id as any);
 
       // 🔔 Notify (only if pending)
@@ -263,32 +504,30 @@ export class DiService {
 
   async addDevisPDF(_id: string, pdf: string) {
     try {
-      const extension = getFileExtension(pdf);
-      const buffer = Buffer.from(pdf.split(',')[1], 'base64');
-
-      const randompdfFile = randomstring.generate({
-        length: 12,
-        charset: 'alphabetic',
-      });
-
-      const fileName = `${randompdfFile}.${extension}`;
-
-      fs.writeFileSync(join(__dirname, `../../docs/${fileName}`), buffer);
-
       const di = await this.diModel.findOne({ _id });
+      if (!di) throw new Error(`DI '${_id}' not found`);
+
+      // Drive-only: rename + upload to the DI's entity folder; store the link.
+      const { webViewLink, driveFileId, fileName } =
+        await this.uploadDiDocToDrive(di, pdf, 'Devis');
 
       let result;
 
-      if (di && di.ignoreCount && di.ignoreCount > 0) {
+      if (di.ignoreCount && di.ignoreCount > 0) {
         result = await this.logsDiService.addDevisPDFLogs(
           di._id,
           di.ignoreCount,
-          fileName,
+          webViewLink,
         );
       } else {
         result = await this.diModel.updateOne(
           { _id },
-          { $set: { devis: fileName } },
+          {
+            $set: {
+              devis: webViewLink,
+              'driveDocs.Devis': { driveFileId, webViewLink, name: fileName },
+            },
+          },
         );
       }
 
@@ -304,39 +543,24 @@ export class DiService {
 
       return result;
     } catch (error) {
-      await this.operationalErrorService.capture({
-        module: 'di',
-        submodule: 'diService',
-        method: 'ADD_DEVIS_PDF',
-        severity: 'HIGH',
-        error: 'Failed to add Devis PDF',
-        message: (error as Error)?.message ?? String(error),
-        payload: { diId: _id },
-      });
+      await this.captureUploadFailure('ADD_DEVIS_PDF', error, _id);
       throw error;
     }
   }
 
   async addBlPDF(_id: string, pdf: string) {
     try {
-      const extension = getFileExtension(pdf);
-      const buffer = Buffer.from(pdf.split(',')[1], 'base64') as any;
-
-      const randompdfFile = randomstring.generate({
-        length: 12,
-        charset: 'alphabetic',
-      });
-      fs.writeFileSync(
-        join(__dirname, `../../docs/${randompdfFile}.${extension}`),
-        buffer,
-      );
       const di = await this.diModel.findOne({ _id });
-      const fileName = `${randompdfFile}.${extension}`;
-      if (di && di.ignoreCount && di.ignoreCount > 0) {
+      if (!di) throw new Error(`DI '${_id}' not found`);
+
+      const { webViewLink, driveFileId, fileName } =
+        await this.uploadDiDocToDrive(di, pdf, 'BL');
+
+      if (di.ignoreCount && di.ignoreCount > 0) {
         let addbllogspdf = await this.logsDiService.addBLPDFLogs(
           di._id,
           di.ignoreCount,
-          fileName,
+          webViewLink,
         );
         this.notificationGateway.blAddedNotification({
           di,
@@ -368,7 +592,12 @@ export class DiService {
         // so any consumer of the WS payload received stale data.
         const updatedDi = await this.diModel.findOneAndUpdate(
           { _id },
-          { $set: { bon_de_livraison: fileName } },
+          {
+            $set: {
+              bon_de_livraison: webViewLink,
+              'driveDocs.BL': { driveFileId, webViewLink, name: fileName },
+            },
+          },
           { new: true },
         );
 
@@ -397,87 +626,67 @@ export class DiService {
         return updatedDi;
       }
     } catch (error) {
-      await this.operationalErrorService.capture({
-        module: 'di',
-        submodule: 'diService',
-        method: 'ADD_BL_PDF',
-        severity: 'HIGH',
-        error: 'Failed to add BL PDF',
-        message: (error as Error)?.message ?? String(error),
-        payload: { diId: _id },
-      });
+      await this.captureUploadFailure('ADD_BL_PDF', error, _id);
       throw error;
     }
   }
 
   async addFacturePDF(_id: string, pdf: string) {
     try {
-      const extension = getFileExtension(pdf);
-      const buffer = Buffer.from(pdf.split(',')[1], 'base64') as any;
-
-      const randompdfFile = randomstring.generate({
-        length: 12,
-        charset: 'alphabetic',
-      });
-      fs.writeFileSync(
-        join(__dirname, `../../docs/${randompdfFile}.${extension}`),
-        buffer,
-      );
       const di = await this.diModel.findOne({ _id });
-      if (di && di.ignoreCount && di.ignoreCount > 0) {
+      if (!di) throw new Error(`DI '${_id}' not found`);
+
+      const { webViewLink, driveFileId, fileName } =
+        await this.uploadDiDocToDrive(di, pdf, 'Facture');
+
+      if (di.ignoreCount && di.ignoreCount > 0) {
         return await this.logsDiService.addFacturePDFLogs(
           di._id,
           di.ignoreCount,
-          `${randompdfFile}.${extension}`,
+          webViewLink,
         );
       } else {
         return await this.diModel.updateOne(
           { _id },
-          { $set: { facture: `${randompdfFile}.${extension}` } },
+          {
+            $set: {
+              facture: webViewLink,
+              'driveDocs.Facture': { driveFileId, webViewLink, name: fileName },
+            },
+          },
         );
       }
     } catch (error) {
-      await this.operationalErrorService.capture({
-        module: 'di',
-        submodule: 'diService',
-        method: 'ADD_FACTURE_PDF',
-        severity: 'HIGH',
-        error: 'Failed to add Facture PDF',
-        message: (error as Error)?.message ?? String(error),
-        payload: { diId: _id },
-      });
+      await this.captureUploadFailure('ADD_FACTURE_PDF', error, _id);
       throw error;
     }
   }
 
   async addBCPDF(_id: string, pdf: string) {
     try {
-      const extension = getFileExtension(pdf);
-      const buffer = Buffer.from(pdf.split(',')[1], 'base64');
-
-      const randompdfFile = randomstring.generate({
-        length: 12,
-        charset: 'alphabetic',
-      });
-
-      const fileName = `${randompdfFile}.${extension}`;
-
-      fs.writeFileSync(join(__dirname, `../../docs/${fileName}`), buffer);
-
       const di = await this.diModel.findOne({ _id });
+      if (!di) throw new Error(`DI '${_id}' not found`);
+
+      const { webViewLink, driveFileId, fileName } =
+        await this.uploadDiDocToDrive(di, pdf, 'BC');
 
       let result;
 
-      if (di && di.ignoreCount && di.ignoreCount > 0) {
+      if (di.ignoreCount && di.ignoreCount > 0) {
         result = await this.logsDiService.addBCPDFLogs(
           di._id,
           di.ignoreCount,
-          fileName,
+          webViewLink,
         );
       } else {
         result = await this.diModel.updateOne(
           { _id },
-          { $set: { bon_de_commande: fileName } },
+          {
+            $set: {
+              bon_de_commande: webViewLink,
+              'driveDocs.BC': { driveFileId, webViewLink, name: fileName },
+            },
+          },
         );
       }
 
@@ -493,15 +702,7 @@ export class DiService {
 
       return result;
     } catch (error) {
-      await this.operationalErrorService.capture({
-        module: 'di',
-        submodule: 'diService',
-        method: 'ADD_BC_PDF',
-        severity: 'MEDIUM',
-        error: 'Failed to add BC PDF',
-        message: (error as Error)?.message ?? String(error),
-        payload: { diId: _id },
-      });
+      await this.captureUploadFailure('ADD_BC_PDF', error, _id);
       throw error;
     }
   }
@@ -590,38 +791,29 @@ export class DiService {
   }
 
   async addPDFFile(_id: string, facture: string, bl: string) {
-    // facture
-    const extension = getFileExtension(facture);
-    const buffer = Buffer.from(facture.split(',')[1], 'base64') as any;
+    const di = await this.diModel.findOne({ _id });
+    if (!di) throw new Error(`DI '${_id}' not found`);
 
-    const randompdfFile = randomstring.generate({
-      length: 12,
-      charset: 'alphabetic',
-    });
-    fs.writeFileSync(
-      join(__dirname, `../../docs/${randompdfFile}.${extension}`),
-      buffer,
-    );
-    //  bl
-    const extensionbl = getFileExtension(bl);
-    const bufferbl = Buffer.from(facture.split(',')[1], 'base64') as any;
+    // Drive-only: both files renamed + uploaded to the DI's entity folder.
+    const factureRef = await this.uploadDiDocToDrive(di, facture, 'Facture');
+    const blRef = await this.uploadDiDocToDrive(di, bl, 'BL');
 
-    const randompdfFilebl = randomstring.generate({
-      length: 12,
-      charset: 'alphabetic',
-    });
-    fs.writeFileSync(
-      join(__dirname, `../../docs/${randompdfFilebl}.${extensionbl}`),
-      bufferbl,
-    );
-
-    //  save
     return await this.diModel.updateOne(
       { _id },
       {
         $set: {
-          facture: `${randompdfFile}.${extension}`,
-          bon_de_livraison: `${randompdfFilebl}.${extensionbl}`,
+          facture: factureRef.webViewLink,
+          bon_de_livraison: blRef.webViewLink,
+          'driveDocs.Facture': {
+            driveFileId: factureRef.driveFileId,
+            webViewLink: factureRef.webViewLink,
+            name: factureRef.fileName,
+          },
+          'driveDocs.BL': {
+            driveFileId: blRef.driveFileId,
+            webViewLink: blRef.webViewLink,
+            name: blRef.fileName,
+          },
         },
       },
     );

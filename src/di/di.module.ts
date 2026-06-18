@@ -30,6 +30,7 @@ import {
 import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
 import { DiWorkflowService } from './workflow/di-workflow.service';
 import { OperationalErrorModule } from 'src/operational-error/operational-error.module';
+import { GoogleDriveModule } from 'src/google-drive/google-drive.module';
 
 @Module({
   providers: [
@@ -46,6 +47,7 @@ import { OperationalErrorModule } from 'src/operational-error/operational-error.
     AuditModule,
     LogsDiModule,
     OperationalErrorModule,
+    GoogleDriveModule,
     MongooseModule.forFeature([
       {
         name: Di.name,

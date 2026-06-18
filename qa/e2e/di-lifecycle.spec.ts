@@ -3,6 +3,7 @@ import type { APIRequestContext } from '@playwright/test';
 import { tokenFor } from '../utils/auth';
 import { gqlPost } from '../utils/graphql';
 import { withDb } from '../utils/mongo';
+import { nextDiIdnum, anyClientId } from '../utils/di-seed';
 
 /**
  * DI lifecycle audit — drive a DI CREATED → FINISHED through every workflow
@@ -59,7 +60,7 @@ test.beforeAll(async () => {
         const client = await db.collection('clients').findOne({ isDeleted: { $ne: true } });
         await db.collection('dis').insertOne({
             _id: diId,
-            _idnum: `LIFE-${TAG}`,
+            _idnum: await nextDiIdnum(db), // real DI{n} format, not junk
             title: 'QA Lifecycle',
             description: 'full lifecycle audit',
             status: 'CREATED',
@@ -207,11 +208,12 @@ test('LEGAL: INMAGASIN → PENDING3 (magasin sourcing branch) is accepted', asyn
     await withDb(async (db) => {
         await db.collection('dis').insertOne({
             _id: tmpId,
-            _idnum: `INMAG-${TAG}`,
+            _idnum: await nextDiIdnum(db), // real DI{n} format, not `INMAG-…`
             title: 'QA inmagasin→pending3',
             status: 'INMAGASIN',
             can_be_repaired: true,
             contain_pdr: true,
+            client_id: await anyClientId(db), // resolved entity (no "Unknown")
             isDeleted: false,
             array_composants: [],
             current_roles: ['Magasin'],
@@ -260,9 +262,10 @@ for (const c of ILLEGAL) {
         await withDb(async (db) => {
             await db.collection('dis').insertOne({
                 _id: tmpId,
-                _idnum: `ILL-${TAG}-${c.from}`,
+                _idnum: await nextDiIdnum(db), // real DI{n} format, not `ILL-…`
                 title: 'QA illegal-jump',
                 status: c.from,
+                client_id: await anyClientId(db), // resolved entity (no "Unknown")
                 isDeleted: false,
                 array_composants: [],
                 current_roles: ['Manager'],
