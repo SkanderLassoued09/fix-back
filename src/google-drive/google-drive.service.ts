@@ -256,6 +256,61 @@ export class GoogleDriveService {
     return f?.id ? { id: f.id, webViewLink: f.webViewLink ?? '' } : null;
   }
 
+  /**
+   * Find non-trashed sub-folders under `parentId` whose name starts with
+   * `{namePrefix}_` (the canonical `{Name}_{timestamp}` separator). Returned
+   * sorted by `createdTime` ASC so the OLDEST folder always comes first.
+   *
+   * Drive's query language has no native "starts with" on `name`; we use
+   * `name contains '{prefix}_'` to narrow the server-side scan, then enforce
+   * the actual prefix client-side. The trailing underscore stops `Acme` from
+   * bleeding into `AcmeBis_*`. Limited to one page (pageSize 100) — a single
+   * entity having more than 100 duplicate folders is its own incident.
+   *
+   * Used by `ensureEntityFolder` to REUSE a previously-created entity folder
+   * when the entity's stored `driveFolderId` is gone (cleared by a migration,
+   * stale 404, or just never persisted). Restricted to folders the OAuth app
+   * created (the `drive.file` scope) — folders made by hand in the UI are
+   * intentionally not matched.
+   */
+  private async findFoldersByNamePrefix(
+    drive: drive_v3.Drive,
+    namePrefix: string,
+    parentId: string,
+  ): Promise<DriveFolder[]> {
+    const probe = `${namePrefix}_`;
+    const escaped = probe.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const q = [
+      `name contains '${escaped}'`,
+      `'${parentId}' in parents`,
+      `mimeType = 'application/vnd.google-apps.folder'`,
+      'trashed = false',
+    ].join(' and ');
+    const res = await drive.files.list({
+      q,
+      fields: 'files(id, name, createdTime, webViewLink)',
+      orderBy: 'createdTime',
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+      pageSize: 100,
+    });
+    const files = res.data.files ?? [];
+    const matches = files
+      .filter((f) => typeof f.name === 'string' && f.name.startsWith(probe))
+      .map((f) => ({
+        id: f.id as string,
+        webViewLink: f.webViewLink ?? '',
+        createdTime: f.createdTime ?? '',
+      }))
+      .filter((f) => !!f.id);
+    // `orderBy` already sorts ASC, but defensively re-sort: createdTime can
+    // be missing in some edge cases and we want a deterministic "first" pick.
+    matches.sort((a, b) =>
+      (a.createdTime || '').localeCompare(b.createdTime || ''),
+    );
+    return matches.map(({ id, webViewLink }) => ({ id, webViewLink }));
+  }
+
   /** Create a sub-folder by name under `parentId` (no find — always creates). */
   private async createSubFolder(
     drive: drive_v3.Drive,
@@ -335,15 +390,26 @@ export class GoogleDriveService {
   }
 
   /**
-   * Create the entity folder `{type}/{Name}_{DD-MM-YYYY}_{HH-mm-ss}` under the
-   * parent and return its id + url. The name carries the entity's creation
-   * timestamp (frozen), so it CANNOT be looked up by name — this CREATES a new
-   * folder every time it's called. Idempotence is the CALLER's job: it must only
-   * call this when the entity has no `driveFolderId` yet, then store the returned
-   * id and resolve by id forever after (see company/client hooks +
-   * `resolveDiDriveTarget`). One folder per entity, reused for all its uploads.
+   * Find-or-create the entity folder under `{type}/`. Resolution order:
+   *   1. Look up folders whose name starts with `{SanitizedName}_` (the
+   *      `{Name}_{timestamp}` separator) in the type container. If ≥ 1
+   *      match, REUSE the oldest one — even if `createdAt` here doesn't
+   *      reproduce the original folder's exact timestamp.
+   *   2. None found → create a new `{Name}_{DD-MM-YYYY}_{HH-mm-ss}` folder.
    *
-   * Used by BOTH company and client. `createdAt` = the entity's creation time.
+   * Why prefix and not exact name? The original implementation matched on the
+   * exact timestamped name, which only worked while the caller passed the
+   * entity's FROZEN `createdAt`. A legacy code path passing `new Date()`, or
+   * any drift in the timestamp source, broke the lookup and produced
+   * duplicates. Matching by `{Name}_` prefix is robust to any timestamp.
+   *
+   * Multiple matches (= pre-existing duplicates) → pick the oldest, log the
+   * extras at warn. We never CREATE if any match exists.
+   *
+   * Scope: limited to folders the OAuth app created (the `drive.file` scope)
+   * — folders made by hand in the Drive UI are intentionally not visible.
+   *
+   * Used by BOTH company and client.
    */
   async ensureEntityFolder(
     type: DriveEntityType,
@@ -352,6 +418,32 @@ export class GoogleDriveService {
   ): Promise<DriveFolder> {
     const drive = await this.ensureClient();
     const containerId = await this.ensureTypeContainer(drive, type);
+    const sanitizedName = this.sanitizeFileNamePart(name);
+
+    const matches = await this.findFoldersByNamePrefix(
+      drive,
+      sanitizedName,
+      containerId,
+    );
+    if (matches.length > 0) {
+      const oldest = matches[0];
+      if (matches.length > 1) {
+        const extras = matches
+          .slice(1)
+          .map((m) => m.id)
+          .join(', ');
+        this.logger.warn(
+          `Entity has ${matches.length} folders matching ${type}/${sanitizedName}_*. ` +
+            `Reusing oldest (${oldest.id}); duplicate ids: ${extras}.`,
+        );
+      } else {
+        this.logger.log(
+          `Entity Drive folder REUSED by prefix: ${type}/${sanitizedName}_* (${oldest.id})`,
+        );
+      }
+      return oldest;
+    }
+
     const folderName = this.buildEntityFolderName(name, createdAt);
     const folder = await this.createSubFolder(drive, folderName, containerId);
     this.logger.log(
@@ -460,10 +552,15 @@ export class GoogleDriveService {
       (err as any)?.response?.data?.error?.message ??
       (err as any)?.message ??
       '';
+    // Anchored "^File not found" matches Drive's canonical 404 ("File not found:
+    // {id}") without catching arbitrary errors that merely mention "not found"
+    // somewhere in the message — the previous broad regex turned every
+    // unrelated upload failure into a forceRecreate, which is one of the paths
+    // that produced duplicate entity folders.
     return (
       code === 404 ||
       reason === 'notFound' ||
-      /file not found|not found/i.test(String(message))
+      /^file not found\b/i.test(String(message).trim())
     );
   }
 }

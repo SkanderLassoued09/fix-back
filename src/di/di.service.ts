@@ -118,7 +118,58 @@ export class DiService {
     );
   }
 
+  /**
+   * In-process per-entity lock for `resolveDiDriveTarget`. When two DIs are
+   * created near-simultaneously for the same client/company AND the entity has
+   * no `driveFolderId` yet, both calls used to read null, both called
+   * `ensureEntityFolder`, and Drive happily produced two folders. We now share
+   * the same in-flight Promise across racers on the same key
+   * (`company:{id}` / `client:{id}`); the second caller awaits the first's
+   * result instead of starting a parallel create. The entry is deleted as soon
+   * as the Promise settles (success OR failure) so a failed call doesn't
+   * poison the lock indefinitely. Single-process scope — `ensureEntityFolder`
+   * is also idempotent by name (see google-drive.service.ts) so concurrent
+   * Node instances converge on the same folder too.
+   */
+  private readonly _driveTargetInFlight = new Map<
+    string,
+    Promise<{ folderId: string; entityName: string }>
+  >();
+
   private async resolveDiDriveTarget(
+    di: any,
+    opts: { forceRecreate?: boolean } = {},
+  ): Promise<{ folderId: string; entityName: string }> {
+    const companyId = this.isResolvableId(di?.company_id) ? di.company_id : null;
+    const clientId = this.isResolvableId(di?.client_id) ? di.client_id : null;
+    const key = companyId
+      ? `company:${companyId}`
+      : clientId
+        ? `client:${clientId}`
+        : null;
+
+    // forceRecreate must bypass the in-flight cache: an auto-repair call after
+    // a real 404 must NOT return a parallel pre-repair folder.
+    if (!opts.forceRecreate && key) {
+      const inFlight = this._driveTargetInFlight.get(key);
+      if (inFlight) return inFlight;
+    }
+
+    const work = this._resolveDiDriveTargetUncached(di, opts);
+    if (!opts.forceRecreate && key) {
+      this._driveTargetInFlight.set(key, work);
+      // Two-arg `then` (not `.finally`) so a rejection on `work` doesn't fork
+      // a second unhandled rejection on the cleanup chain — the original
+      // `work` Promise still surfaces the error to its own awaiter.
+      void work.then(
+        () => this._driveTargetInFlight.delete(key),
+        () => this._driveTargetInFlight.delete(key),
+      );
+    }
+    return work;
+  }
+
+  private async _resolveDiDriveTargetUncached(
     di: any,
     opts: { forceRecreate?: boolean } = {},
   ): Promise<{ folderId: string; entityName: string }> {
@@ -144,10 +195,23 @@ export class DiService {
         name,
         company.createdAt ?? new Date(),
       );
-      await this.companyModel.updateOne(
-        { _id: company._id },
-        { $set: { driveFolderId: folder.id, driveFolderUrl: folder.webViewLink } },
-      );
+      // Conditional write: only persist OUR id when the slot is still
+      // empty/stale. If another writer (or process) won the race, re-read and
+      // prefer their stored id — `ensureEntityFolder` is idempotent by name so
+      // both racers obtained the same Drive folder anyway, but this keeps the
+      // stored id stable across processes.
+      const filter: any = reuse
+        ? { _id: company._id, $or: [{ driveFolderId: null }, { driveFolderId: { $exists: false } }, { driveFolderId: '' }] }
+        : { _id: company._id };
+      const res: any = await this.companyModel.updateOne(filter, {
+        $set: { driveFolderId: folder.id, driveFolderUrl: folder.webViewLink },
+      });
+      if (reuse && (res?.matchedCount ?? res?.n) === 0) {
+        const winner: any = await this.companyModel.findById(company._id).lean();
+        if (winner?.driveFolderId) {
+          return { folderId: winner.driveFolderId, entityName: name };
+        }
+      }
       return { folderId: folder.id, entityName: name };
     }
 
@@ -167,10 +231,18 @@ export class DiService {
         name,
         client.createdAt ?? new Date(),
       );
-      await this.clientModel.updateOne(
-        { _id: client._id },
-        { $set: { driveFolderId: folder.id, driveFolderUrl: folder.webViewLink } },
-      );
+      const filter: any = reuse
+        ? { _id: client._id, $or: [{ driveFolderId: null }, { driveFolderId: { $exists: false } }, { driveFolderId: '' }] }
+        : { _id: client._id };
+      const res: any = await this.clientModel.updateOne(filter, {
+        $set: { driveFolderId: folder.id, driveFolderUrl: folder.webViewLink },
+      });
+      if (reuse && (res?.matchedCount ?? res?.n) === 0) {
+        const winner: any = await this.clientModel.findById(client._id).lean();
+        if (winner?.driveFolderId) {
+          return { folderId: winner.driveFolderId, entityName: name };
+        }
+      }
       return { folderId: folder.id, entityName: name };
     }
 

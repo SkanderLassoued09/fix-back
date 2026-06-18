@@ -79,6 +79,151 @@ describe('GoogleDriveService — naming & sanitization', () => {
     );
   });
 
+  // Bug: duplicate `CLIENTS/client/{Name}_*` folders appeared on every new DI.
+  // Now ensureEntityFolder looks up by `{SanitizedName}_` prefix first and
+  // reuses any existing folder; only creates when none exists. Same entity =>
+  // same prefix => same folder, regardless of how many times callers fire OR
+  // whether `createdAt` reproduces the original timestamp.
+  describe('ensureEntityFolder — find-by-prefix or create (no duplicate folders)', () => {
+    function makeSvc(
+      findMatches: Array<Array<{ id: string; webViewLink: string }>>,
+    ): {
+      svc: any;
+      findFoldersByNamePrefix: jest.Mock;
+      createSubFolder: jest.Mock;
+    } {
+      const svc: any = new GoogleDriveService();
+      const findFoldersByNamePrefix = jest.fn();
+      for (const m of findMatches)
+        findFoldersByNamePrefix.mockResolvedValueOnce(m);
+      const createSubFolder = jest
+        .fn()
+        .mockResolvedValue({ id: 'NEW', webViewLink: 'http://drive/NEW' });
+      // Stub the IO surface — only the find-or-create branch matters here.
+      svc.ensureClient = jest.fn().mockResolvedValue({});
+      svc.ensureTypeContainer = jest.fn().mockResolvedValue('PARENT');
+      svc.findFoldersByNamePrefix = findFoldersByNamePrefix;
+      svc.createSubFolder = createSubFolder;
+      return { svc, findFoldersByNamePrefix, createSubFolder };
+    }
+
+    const at = new Date('2026-06-18T10:30:45.000Z');
+
+    it('REUSES an existing folder found by {Name}_ prefix (timestamp may differ)', async () => {
+      const { svc, findFoldersByNamePrefix, createSubFolder } = makeSvc([
+        [{ id: 'EXISTING', webViewLink: 'http://drive/EXISTING' }],
+      ]);
+      const folder = await svc.ensureEntityFolder('client', 'Skander L', at);
+      expect(folder.id).toBe('EXISTING');
+      // Sanitized prefix passed (spaces dropped, no timestamp).
+      expect(findFoldersByNamePrefix).toHaveBeenCalledWith(
+        expect.anything(),
+        'SkanderL',
+        'PARENT',
+      );
+      expect(createSubFolder).not.toHaveBeenCalled();
+    });
+
+    it('CREATES the folder when no match exists', async () => {
+      const { svc, findFoldersByNamePrefix, createSubFolder } = makeSvc([[]]);
+      const folder = await svc.ensureEntityFolder('client', 'Skander L', at);
+      expect(folder.id).toBe('NEW');
+      expect(findFoldersByNamePrefix).toHaveBeenCalledTimes(1);
+      expect(createSubFolder).toHaveBeenCalledTimes(1);
+    });
+
+    it('MULTIPLE matches → returns OLDEST (first), logs duplicates', async () => {
+      const warn = jest
+        .spyOn(require('@nestjs/common').Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+      // findFoldersByNamePrefix returns ordered ASC by createdTime → [0] is oldest.
+      const { svc, createSubFolder } = makeSvc([
+        [
+          { id: 'OLDEST', webViewLink: 'http://drive/OLDEST' },
+          { id: 'DUP1', webViewLink: 'http://drive/DUP1' },
+          { id: 'DUP2', webViewLink: 'http://drive/DUP2' },
+        ],
+      ]);
+      const folder = await svc.ensureEntityFolder('client', 'Skander L', at);
+      expect(folder.id).toBe('OLDEST');
+      expect(createSubFolder).not.toHaveBeenCalled();
+      // Warn cites the count + the duplicates' ids — best-effort visibility,
+      // we don't auto-delete them.
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('3 folders'),
+      );
+      expect(warn.mock.calls[0][0]).toContain('DUP1');
+      expect(warn.mock.calls[0][0]).toContain('DUP2');
+      warn.mockRestore();
+    });
+
+    it('idempotent: 3 sequential calls with same name → 1 create, 2 reuses', async () => {
+      // 1st call: not found → creates. 2nd & 3rd: now found → reuse.
+      const { svc, findFoldersByNamePrefix, createSubFolder } = makeSvc([
+        [],
+        [{ id: 'NEW', webViewLink: 'http://drive/NEW' }],
+        [{ id: 'NEW', webViewLink: 'http://drive/NEW' }],
+      ]);
+      const r1 = await svc.ensureEntityFolder('client', 'A B', at);
+      const r2 = await svc.ensureEntityFolder('client', 'A B', at);
+      const r3 = await svc.ensureEntityFolder('client', 'A B', at);
+      expect([r1.id, r2.id, r3.id]).toEqual(['NEW', 'NEW', 'NEW']);
+      expect(findFoldersByNamePrefix).toHaveBeenCalledTimes(3);
+      expect(createSubFolder).toHaveBeenCalledTimes(1);
+    });
+
+    it('prefix is the sanitized {Name}: accents/spaces/illegal chars dropped', async () => {
+      const { svc, findFoldersByNamePrefix } = makeSvc([
+        [{ id: 'X', webViewLink: 'http://drive/X' }],
+      ]);
+      await svc.ensureEntityFolder('company', 'Sté Béta / X*?', at);
+      expect(findFoldersByNamePrefix).toHaveBeenCalledWith(
+        expect.anything(),
+        'SteBetaX',
+        'PARENT',
+      );
+    });
+  });
+
+  // The previous `/file not found|not found/i` regex caught any error message
+  // containing "not found" anywhere, mis-classifying unrelated upload failures
+  // as 404s and triggering forceRecreate → a path that produced duplicate
+  // entity folders. The tightened predicate only matches Drive's canonical
+  // 404 shape (numeric code, `notFound` reason, or `^File not found`).
+  describe('isNotFoundError — narrowed scope (no false-positive forceRecreate)', () => {
+    const svc = new GoogleDriveService();
+
+    it('matches numeric code 404', () => {
+      expect(svc.isNotFoundError({ code: 404 })).toBe(true);
+      expect(svc.isNotFoundError({ response: { status: 404 } })).toBe(true);
+    });
+
+    it('matches reason "notFound"', () => {
+      expect(svc.isNotFoundError({ errors: [{ reason: 'notFound' }] })).toBe(true);
+      expect(svc.isNotFoundError({ reason: 'notFound' })).toBe(true);
+    });
+
+    it('matches canonical Drive message "File not found: {id}"', () => {
+      expect(
+        svc.isNotFoundError(new Error('File not found: 1AbCdEfGh123')),
+      ).toBe(true);
+    });
+
+    it('does NOT match arbitrary errors mentioning "not found" elsewhere', () => {
+      // The previous broad regex flagged ALL of these as 404 → forceRecreate.
+      expect(
+        svc.isNotFoundError(new Error('User token not found in cache')),
+      ).toBe(false);
+      expect(
+        svc.isNotFoundError(new Error('Quota: refresh token not found')),
+      ).toBe(false);
+      expect(svc.isNotFoundError(new Error('parent folder not found here'))).toBe(
+        false,
+      );
+      expect(svc.isNotFoundError(new Error('quota exceeded'))).toBe(false);
+    });
+  });
+
   it('isConfigured needs OAuth client + refresh token (parent folder is OPTIONAL)', () => {
     const keys = [
       'GOOGLE_DRIVE_PARENT_FOLDER_ID',

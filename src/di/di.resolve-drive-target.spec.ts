@@ -33,6 +33,9 @@ function makeService(opts: {
     .mockResolvedValue({ id: 'newFolder', webViewLink: 'http://drive/newFolder' });
 
   const svc: any = Object.create(DiService.prototype);
+  // Field initializers don't fire under Object.create(prototype) — provide the
+  // in-flight cache the service uses to dedupe concurrent calls.
+  svc._driveTargetInFlight = new Map();
   svc.companyModel = { findById: companyFindById, updateOne: jest.fn() };
   svc.clientModel = { findById: clientFindById, updateOne: jest.fn() };
   svc.googleDriveService = { ensureEntityFolder };
@@ -80,6 +83,8 @@ describe('DiService.resolveDiDriveTarget', () => {
     const { svc, ensureEntityFolder } = makeService({
       client: { _id: 'C2', first_name: 'A', last_name: 'B', driveFolderId: null },
     });
+    // Default mock: matchedCount=1 (we won the conditional write race).
+    svc.clientModel.updateOne = jest.fn().mockResolvedValue({ matchedCount: 1 });
     const res = await svc.resolveDiDriveTarget({
       company_id: 'undefined',
       client_id: 'C2',
@@ -87,6 +92,55 @@ describe('DiService.resolveDiDriveTarget', () => {
     expect(ensureEntityFolder).toHaveBeenCalledWith('client', 'A B', expect.anything());
     expect(res.folderId).toBe('newFolder');
     expect(svc.clientModel.updateOne).toHaveBeenCalled();
+  });
+
+  // Bug: same client got duplicate Drive folders on every new DI. Concurrent
+  // resolveDiDriveTarget calls for the SAME entity (which has no folder yet)
+  // used to both read null + both call ensureEntityFolder → two folders. The
+  // in-flight Promise cache now collapses racers onto a single create.
+  it('CONCURRENT calls for the SAME entity share one ensureEntityFolder call', async () => {
+    const { svc, ensureEntityFolder } = makeService({
+      client: { _id: 'C3', first_name: 'Skander', last_name: 'L', driveFolderId: null },
+    });
+    svc.clientModel.updateOne = jest.fn().mockResolvedValue({ matchedCount: 1 });
+    const [a, b, c] = await Promise.all([
+      svc.resolveDiDriveTarget({ company_id: 'null', client_id: 'C3' }),
+      svc.resolveDiDriveTarget({ company_id: 'null', client_id: 'C3' }),
+      svc.resolveDiDriveTarget({ company_id: 'null', client_id: 'C3' }),
+    ]);
+    // All 3 racers got the SAME folder id.
+    expect(a.folderId).toBe('newFolder');
+    expect(b.folderId).toBe('newFolder');
+    expect(c.folderId).toBe('newFolder');
+    // Drive was hit EXACTLY ONCE — the other 2 awaited the in-flight Promise.
+    expect(ensureEntityFolder).toHaveBeenCalledTimes(1);
+    expect(svc.clientModel.updateOne).toHaveBeenCalledTimes(1);
+  });
+
+  // If another writer (or process) won the conditional write, we re-read and
+  // return THEIR id. Prevents a stale duplicate id leaking into the DI's docs.
+  it('lost the conditional-write race → re-reads and returns the winning id', async () => {
+    const company = {
+      _id: 'CMP3',
+      raisonSociale: 'Acme',
+      driveFolderId: null, // first read: empty
+    };
+    const { svc, ensureEntityFolder } = makeService({ company });
+    // Lost the race (matchedCount: 0). Refetch returns the OTHER writer's id.
+    svc.companyModel.updateOne = jest.fn().mockResolvedValue({ matchedCount: 0 });
+    svc.companyModel.findById = jest
+      .fn()
+      // 1st findById (initial read): empty driveFolderId
+      .mockReturnValueOnce(leanOf(company))
+      // 2nd findById (refetch after lost race): winner's id
+      .mockReturnValueOnce(leanOf({ ...company, driveFolderId: 'WINNER' }));
+    const res = await svc.resolveDiDriveTarget({
+      company_id: 'CMP3',
+      client_id: 'null',
+    });
+    expect(ensureEntityFolder).toHaveBeenCalledTimes(1);
+    // Returned id = winner's, NOT our newly-created folder.
+    expect(res.folderId).toBe('WINNER');
   });
 
   it('throws a clean BAD_REQUEST (no "Company") when NO entity is resolvable', async () => {
@@ -130,6 +184,7 @@ describe('DiService.uploadDiDocToDrive — stale folder auto-repair', () => {
       .mockResolvedValue({ id: 'FRESH', webViewLink: 'http://drive/FRESH' });
     const capture = jest.fn();
     const svc: any = Object.create(DiService.prototype);
+    svc._driveTargetInFlight = new Map();
     svc.companyModel = {
       findById: jest.fn().mockReturnValue(leanOf(company)),
       updateOne: companyUpdateOne,
