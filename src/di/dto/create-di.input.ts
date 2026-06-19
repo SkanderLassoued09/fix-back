@@ -160,4 +160,13 @@ export class UpdateDi {
   location_id?: string;
   @Field({ nullable: true })
   di_category_id?: string;
+  // Repair-close fields — the wizard's « Fin réparation » persists the tech's
+  // repair note + the used parts via `saveRepairParts` (an updateDi). These were
+  // missing from the input type, so that mutation failed GraphQL validation
+  // (the masked error behind the double toast). `updateDi` $sets any provided
+  // field, so adding them here is enough — no service change.
+  @Field({ nullable: true })
+  remarque_tech_repair?: string;
+  @Field(() => [ComposantStructureInput], { nullable: true })
+  array_composants?: ComposantStructureInput[];
 }

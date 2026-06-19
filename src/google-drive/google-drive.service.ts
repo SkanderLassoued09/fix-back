@@ -349,7 +349,9 @@ export class GoogleDriveService {
    * Cached; the id is logged so it can optionally be frozen in
    * `GOOGLE_DRIVE_PARENT_FOLDER_ID`.
    */
-  private async ensureRootClientsFolder(drive: drive_v3.Drive): Promise<string> {
+  private async ensureRootClientsFolder(
+    drive: drive_v3.Drive,
+  ): Promise<string> {
     const cacheKey = '__rootClients';
     const cached = this.containerCache.get(cacheKey);
     if (cached) return cached;
@@ -496,22 +498,20 @@ export class GoogleDriveService {
         fields: 'id, webViewLink, name',
         supportsAllDrives: true,
       });
-      console.log('🦀res', res);
     } catch (err) {
-      console.log('🌮[err]:', err);
       // A service account has NO storage quota, so it can CREATE folders (0
       // bytes) but cannot STORE a file unless the parent lives in a Shared
       // Drive (storage billed to the Workspace org). If the parent is in a
       // personal My Drive, the upload is billed to the SA → this error. Turn
       // Google's cryptic message into an actionable one.
-      // if (this.isQuotaError(err)) {
-      //   throw new Error(
-      //     'Upload Drive refusé : le compte de service n’a pas de quota de stockage. ' +
-      //       'Le dossier parent (GOOGLE_DRIVE_PARENT_FOLDER_ID) doit être DANS un Shared Drive ' +
-      //       'dont le service account est membre (Content Manager) — pas un My Drive personnel. ' +
-      //       `Détail Google : ${(err as Error)?.message ?? String(err)}`,
-      //   );
-      // }
+      if (this.isQuotaError(err)) {
+        throw new Error(
+          'Upload Drive refusé : le compte de service n’a pas de quota de stockage. ' +
+            'Le dossier parent (GOOGLE_DRIVE_PARENT_FOLDER_ID) doit être DANS un Shared Drive ' +
+            'dont le service account est membre (Content Manager) — pas un My Drive personnel. ' +
+            `Détail Google : ${(err as Error)?.message ?? String(err)}`,
+        );
+      }
       throw err;
     }
     const id = res.data.id;
