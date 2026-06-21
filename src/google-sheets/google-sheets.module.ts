@@ -5,6 +5,7 @@ import { Di, DiSchema } from 'src/di/entities/di.entity';
 import { Stat, StatSchema } from 'src/stat/entities/stat.entity';
 import { GoogleSheetsClient } from './google-sheets.client';
 import { DiSheetMapper } from './mappers/di-sheet.mapper';
+import { ActionsEnCoursSheetMapper } from './mappers/actions-en-cours-sheet.mapper';
 import { SHEET_MAPPERS } from './mappers/google-sheet-mapper.interface';
 import { StatsSheetMapper } from './mappers/stats-sheet.mapper';
 import { SheetSyncScheduler } from './sheet-sync.scheduler';
@@ -39,10 +40,15 @@ import { SheetSyncService } from './sheet-sync.service';
     GoogleSheetsClient,
     DiSheetMapper,
     StatsSheetMapper,
+    ActionsEnCoursSheetMapper,
     {
       provide: SHEET_MAPPERS,
-      useFactory: (di: DiSheetMapper, stats: StatsSheetMapper) => [di, stats],
-      inject: [DiSheetMapper, StatsSheetMapper],
+      useFactory: (
+        di: DiSheetMapper,
+        stats: StatsSheetMapper,
+        actions: ActionsEnCoursSheetMapper,
+      ) => [di, stats, actions],
+      inject: [DiSheetMapper, StatsSheetMapper, ActionsEnCoursSheetMapper],
     },
     SheetSyncService,
     SheetSyncScheduler,

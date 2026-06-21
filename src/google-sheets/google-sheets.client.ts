@@ -125,6 +125,47 @@ export class GoogleSheetsClient implements OnModuleInit {
     this.logger.log(`appendRows · range=${range} · rows=${appended}`);
   }
 
+  /**
+   * Snapshot write: CLEAR the target tab, then write `headerRow` (if any)
+   * followed by all `rows` starting at A1. Used by 'snapshot' mappers like
+   * "Actions en cours" so the tab always mirrors the current set with no
+   * duplication. Auto-creates the tab if missing.
+   */
+  async replaceRows(
+    range: string,
+    rows: (string | number | boolean)[][],
+    headerRow?: string[],
+  ): Promise<void> {
+    const spreadsheetId = process.env.GOOGLE_SHEETS_ID;
+    if (!spreadsheetId) {
+      throw new Error('GOOGLE_SHEETS_ID env var is required for Google Sheets sync');
+    }
+    const sheets = await this.ensureClient();
+    const tabName = this.extractTabName(range);
+    if (!tabName) throw new Error(`replaceRows: cannot parse tab from "${range}"`);
+
+    await this.ensureTab(sheets, spreadsheetId, tabName, headerRow);
+
+    // Clear the whole tab, then write header + rows from A1 in one update.
+    await this.callWithRetry(`clear ${tabName}`, () =>
+      sheets.spreadsheets.values.clear({ spreadsheetId, range: tabName }),
+    );
+    const values = [...(headerRow?.length ? [headerRow] : []), ...rows];
+    if (!values.length) {
+      this.logger.log(`replaceRows · ${tabName} · cleared (no rows)`);
+      return;
+    }
+    await this.callWithRetry(`replace ${tabName}`, () =>
+      sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${tabName}!A1`,
+        valueInputOption: 'RAW',
+        requestBody: { values },
+      }),
+    );
+    this.logger.log(`replaceRows · ${tabName} · rows=${rows.length}`);
+  }
+
   /** Create the tab if absent; seed `headerRow` as row 1 when provided. */
   private async ensureTab(
     sheets: sheets_v4.Sheets,

@@ -21,6 +21,13 @@ export interface IGoogleSheetMapper<T> {
   readonly entityName: string;
   readonly range: string;
   /**
+   * 'append' (default) → incremental daily log via values.append (scope
+   * fetch() by a date window to avoid duplicates). 'snapshot' → a LIVE view
+   * ("Actions en cours"): the tab is cleared + rewritten with the full
+   * current set each run, so it never duplicates and always reflects now.
+   */
+  readonly mode?: 'append' | 'snapshot';
+  /**
    * Optional header row. When provided, the client writes it as the FIRST
    * row whenever it has to auto-create the target tab — keeps freshly
    * created tabs self-documenting. Length should match mapToSheetRow().

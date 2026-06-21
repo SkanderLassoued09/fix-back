@@ -33,6 +33,9 @@ export class AppCronService {
       case 'SYNC_GOOGLE_SHEETS':
         await this.triggerGoogleSheetsSync();
         break;
+      case 'SYNC_ACTIONS_EN_COURS':
+        await this.triggerActionsEnCoursSync();
+        break;
       default:
         this.logger.error(`Unknown ACTION: ${action}`);
     }
@@ -50,6 +53,22 @@ export class AppCronService {
     } catch (err) {
       this.logger.error(
         `Google Sheets sync cron failed: ${(err as Error).stack ?? err}`,
+      );
+    }
+  }
+
+  /**
+   * Refresh ONLY the live snapshot tab(s) ("Actions en cours") without
+   * re-appending the daily log tabs. Run via
+   * `ACTION=SYNC_ACTIONS_EN_COURS npm run start:dev` or a tighter cron — safe
+   * to fire often since snapshot writes overwrite, never duplicate.
+   */
+  async triggerActionsEnCoursSync() {
+    try {
+      await this.sheetSyncService.syncSnapshotEntities();
+    } catch (err) {
+      this.logger.error(
+        `Actions-en-cours snapshot sync failed: ${(err as Error).stack ?? err}`,
       );
     }
   }
