@@ -613,7 +613,9 @@ export class DiService {
         await this.captureDiscordFailure('addDevisPDF', err, { diId: _id });
       }
 
-      return result;
+      // Return the fresh DI (the mutation is typed `() => Di`); `result` is a
+      // Mongo update/log result with no Di fields.
+      return await this.diModel.findOne({ _id });
     } catch (error) {
       await this.captureUploadFailure('ADD_DEVIS_PDF', error, _id);
       throw error;
@@ -629,7 +631,7 @@ export class DiService {
         await this.uploadDiDocToDrive(di, pdf, 'BL');
 
       if (di.ignoreCount && di.ignoreCount > 0) {
-        let addbllogspdf = await this.logsDiService.addBLPDFLogs(
+        await this.logsDiService.addBLPDFLogs(
           di._id,
           di.ignoreCount,
           webViewLink,
@@ -656,7 +658,9 @@ export class DiService {
           await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
         }
 
-        return addbllogspdf;
+        // Return the fresh DI (mutation is typed `() => Di`); addbllogspdf is
+        // a LogsDi, not a Di.
+        return await this.diModel.findOne({ _id });
       } else {
         // Use findOneAndUpdate({ new: true }) so the post-update document
         // (with bon_de_livraison populated) is what we both broadcast and
@@ -712,13 +716,13 @@ export class DiService {
         await this.uploadDiDocToDrive(di, pdf, 'Facture');
 
       if (di.ignoreCount && di.ignoreCount > 0) {
-        return await this.logsDiService.addFacturePDFLogs(
+        await this.logsDiService.addFacturePDFLogs(
           di._id,
           di.ignoreCount,
           webViewLink,
         );
       } else {
-        return await this.diModel.updateOne(
+        await this.diModel.updateOne(
           { _id },
           {
             $set: {
@@ -728,6 +732,8 @@ export class DiService {
           },
         );
       }
+      // Return the fresh DI (mutation is typed `() => Di`).
+      return await this.diModel.findOne({ _id });
     } catch (error) {
       await this.captureUploadFailure('ADD_FACTURE_PDF', error, _id);
       throw error;
@@ -772,7 +778,9 @@ export class DiService {
         await this.captureDiscordFailure('addBCPDF', err, { diId: _id });
       }
 
-      return result;
+      // Return the fresh DI (the mutation is typed `() => Di`); `result` is a
+      // Mongo update/log result with no Di fields.
+      return await this.diModel.findOne({ _id });
     } catch (error) {
       await this.captureUploadFailure('ADD_BC_PDF', error, _id);
       throw error;
