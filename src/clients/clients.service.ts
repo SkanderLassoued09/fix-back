@@ -195,7 +195,8 @@ export class ClientsService {
   }
 
   async getAllClient() {
-    return await this.ClientModel.find({}).exec();
+    // Exclude soft-deleted clients so they don't appear in the new-DI dropdown.
+    return await this.ClientModel.find({ isDeleted: { $ne: true } }).exec();
   }
 
   async updateClient(payload: UpdateClientInput) {
