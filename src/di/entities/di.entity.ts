@@ -153,6 +153,13 @@ export class DiDocument extends Document {
   statusUpdatedAt: Date | null;
   // ------------------------------------------------------------------------
 
+  // Retour (return) tracking — motif + timestamp of the latest retour, shown
+  // in the coordinator "Contrôle du Flow" banner.
+  @Prop({ default: null })
+  retourReason: string | null;
+  @Prop({ default: null })
+  retourDate: Date | null;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -225,6 +232,10 @@ export class Di {
   componentsConfirmedAt?: Date;
   @Field({ nullable: true })
   componentsConfirmedBy?: string;
+  @Field({ nullable: true })
+  retourReason?: string;
+  @Field({ nullable: true })
+  retourDate?: Date;
   @Field({ nullable: true })
   description: string;
 
@@ -494,6 +505,12 @@ export class DiTable {
   // ---- Stagnation tracking (surfaced on the table view) -------------------
   @Field({ nullable: true })
   statusUpdatedAt?: Date;
+
+  // ---- Retour (return) tracking — motif + date of the latest retour --------
+  @Field({ nullable: true })
+  retourReason?: string;
+  @Field({ nullable: true })
+  retourDate?: Date;
 }
 @ObjectType()
 export class DiTableData {

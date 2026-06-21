@@ -2032,6 +2032,8 @@ export class DiService {
         updatedAt: di.updatedAt,
         location_id: di.location_id?.location_name ?? 'N/A',
         status: di.status,
+        retourReason: di.retourReason,
+        retourDate: di.retourDate,
         pricingRequestSentAt: di.pricingRequestSentAt,
         pricingRequestSentBy: di.pricingRequestSentBy,
         componentsConfirmedAt: di.componentsConfirmedAt,
@@ -2792,10 +2794,16 @@ export class DiService {
     return result;
   }
 
-  async changeDiRetour1(_id: string) {
+  async changeDiRetour1(_id: string, reason?: string) {
     const updated = await this.diModel.findOneAndUpdate(
       { _id },
-      { $set: { status: STATUS_DI.Retour1.status } },
+      {
+        $set: {
+          status: STATUS_DI.Retour1.status,
+          retourReason: reason ?? null,
+          retourDate: new Date(),
+        },
+      },
       { new: true },
     );
 
@@ -2813,10 +2821,16 @@ export class DiService {
 
     return updated;
   }
-  async changeDiRetour2(_id: string) {
+  async changeDiRetour2(_id: string, reason?: string) {
     const updated = await this.diModel.findOneAndUpdate(
       { _id },
-      { $set: { status: STATUS_DI.Retour2.status } },
+      {
+        $set: {
+          status: STATUS_DI.Retour2.status,
+          retourReason: reason ?? null,
+          retourDate: new Date(),
+        },
+      },
       { new: true },
     );
 
@@ -2834,10 +2848,16 @@ export class DiService {
 
     return updated;
   }
-  async changeDiRetour3(_id: string) {
+  async changeDiRetour3(_id: string, reason?: string) {
     const updated = await this.diModel.findOneAndUpdate(
       { _id },
-      { $set: { status: STATUS_DI.Retour3.status } },
+      {
+        $set: {
+          status: STATUS_DI.Retour3.status,
+          retourReason: reason ?? null,
+          retourDate: new Date(),
+        },
+      },
       { new: true },
     );
 

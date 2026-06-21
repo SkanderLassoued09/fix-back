@@ -416,8 +416,11 @@ export class DiResolver {
     }
   }
   @Mutation(() => Boolean)
-  changeStatusRetour1(@Args('_id') _id: string) {
-    const pending3 = this.diService.changeDiRetour1(_id);
+  changeStatusRetour1(
+    @Args('_id') _id: string,
+    @Args('reason', { nullable: true }) reason?: string,
+  ) {
+    const pending3 = this.diService.changeDiRetour1(_id, reason);
     if (pending3) {
       return true;
     } else {
@@ -425,8 +428,11 @@ export class DiResolver {
     }
   }
   @Mutation(() => Boolean)
-  changeStatusRetour2(@Args('_id') _id: string) {
-    const pending3 = this.diService.changeDiRetour2(_id);
+  changeStatusRetour2(
+    @Args('_id') _id: string,
+    @Args('reason', { nullable: true }) reason?: string,
+  ) {
+    const pending3 = this.diService.changeDiRetour2(_id, reason);
     if (pending3) {
       return true;
     } else {
@@ -434,8 +440,11 @@ export class DiResolver {
     }
   }
   @Mutation(() => Boolean)
-  changeStatusRetour3(@Args('_id') _id: string) {
-    const pending3 = this.diService.changeDiRetour3(_id);
+  changeStatusRetour3(
+    @Args('_id') _id: string,
+    @Args('reason', { nullable: true }) reason?: string,
+  ) {
+    const pending3 = this.diService.changeDiRetour3(_id, reason);
     if (pending3) {
       return true;
     } else {
