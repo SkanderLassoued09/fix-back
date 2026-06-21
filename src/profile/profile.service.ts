@@ -114,7 +114,9 @@ export class ProfileService {
   // for listing profiles pagination
   async getAllProfile(paginationConfig: PaginationConfigProfile) {
     const { first, rows } = paginationConfig;
-    const totalProfileCount = await this.profileModel.countDocuments().exec();
+    const totalProfileCount = await this.profileModel
+      .countDocuments({ isDeleted: false })
+      .exec();
     const profileRecord = await this.profileModel
       .find({ isDeleted: false })
       .sort({ createdAt: -1 })

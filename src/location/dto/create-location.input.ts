@@ -11,7 +11,7 @@ export class CreateLocationInput {
   @Field(() => Int, { nullable: true })
   max_capacity: number;
   @Field(() => Int, { nullable: true })
-  current_items: number;
+  current_item_stored: number;
   @Field({ defaultValue: true })
   avaible: boolean;
 }

@@ -101,29 +101,21 @@ export class StatResolver {
    */
 
   @Mutation(() => Boolean)
-  lapTimeForPauseAndGetBack(
+  async lapTimeForPauseAndGetBack(
     @Args('_id') _id: string,
     @Args('diagTime') diagTime: string,
   ) {
-    const isUpdated = this.statService.lapTime(_id, diagTime);
-    if (isUpdated) {
-      return true;
-    } else {
-      false;
-    }
+    const isUpdated = await this.statService.lapTime(_id, diagTime);
+    return !!isUpdated;
   }
 
   @Mutation(() => Boolean)
-  lapTimeForPauseAndGetBackForReaparation(
+  async lapTimeForPauseAndGetBackForReaparation(
     @Args('_id') _id: string,
     @Args('repTime') repTime: string,
   ) {
-    const isUpdated = this.statService.lapTimeForReaparation(_id, repTime);
-    if (isUpdated) {
-      return true;
-    } else {
-      false;
-    }
+    const isUpdated = await this.statService.lapTimeForReaparation(_id, repTime);
+    return !!isUpdated;
   }
 
   /**

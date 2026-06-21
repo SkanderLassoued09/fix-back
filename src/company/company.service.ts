@@ -317,7 +317,7 @@ it should be soft delete ya nezih change it
   }
 
   async getAllComapnyforDropDown() {
-    return await this.CompanyModel.find({}).exec();
+    return await this.CompanyModel.find({ isDeleted: { $ne: true } }).exec();
   }
 
   async findOneCompany(_id: string): Promise<Company> {
@@ -374,10 +374,10 @@ it should be soft delete ya nezih change it
     }
 
     return this.CompanyModel.find({
-      company_name: { $regex: name, $options: 'i' },
-      isDeleted: false,
+      name: { $regex: name, $options: 'i' },
+      isDeleted: { $ne: true },
     })
-      .select('_id company_name')
+      .select('_id name')
       .limit(20)
       .lean();
   }

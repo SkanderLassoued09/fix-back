@@ -10,7 +10,7 @@ export class TarifResolver {
   createTarif(@Args('createTarifInput') createTarifInput: CreateTarifInput) {
     return this.tarifService.create(createTarifInput);
   }
-  @Query(() => Tarif)
+  @Query(() => Tarif, { nullable: true })
   getTarif() {
     return this.tarifService.getTarif();
   }

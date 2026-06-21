@@ -37,8 +37,12 @@ export class ActionsEnCoursSheetMapper implements IGoogleSheetMapper<DiDocument>
     'Devis',
   ];
 
-  /** Statuses that mean the DI has left the workshop → excluded from the list. */
-  private static readonly CLOSED = ['FINISHED'];
+  /**
+   * Statuses that mean the DI has left the workshop → excluded from the list.
+   * FINISHED = delivered/done, ANNULER = cancelled. Everything else (including
+   * RETOUR1/2/3, which are returned items being reworked) is still "in the shop".
+   */
+  private static readonly CLOSED = ['FINISHED', 'ANNULER'];
 
   constructor(@InjectModel('Di') private readonly diModel: Model<DiDocument>) {}
 

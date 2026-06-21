@@ -123,11 +123,13 @@ export class LogsDiService {
         return await this.logsDiModel.findOneAndUpdate(
           { _idDi, idIgnore },
           { $set: { price, final_price } },
+          { new: true },
         );
       } else {
         return await this.logsDiModel.findOneAndUpdate(
           { _idDi, idIgnore },
           { $set: { price } },
+          { new: true },
         );
       }
     } catch (error) {

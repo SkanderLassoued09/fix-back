@@ -2002,7 +2002,7 @@ export class DiService {
       .limit(rows)
       .skip(first);
 
-    const coordDiList = di.map(async (di) => {
+    const coordDiList = await Promise.all(di.map(async (di) => {
       // Fetch the stat document based on the DI's _id
       const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
       // Fetch logs related to this DI
@@ -2059,7 +2059,7 @@ export class DiService {
           di.createdBy?.lastName ?? ''
         }`,
       };
-    });
+    }));
 
     return { di: coordDiList, totalDiCount };
   }
@@ -2069,6 +2069,7 @@ export class DiService {
       return await this.diModel.find({
         current_workers_ids: tech_id,
         status: { $in: TECH_STATUS_DI_VALUES },
+        isDeleted: { $ne: true },
       });
     } catch (err) {
       await this.operationalErrorService.capture({
@@ -3199,9 +3200,6 @@ export class DiService {
     const di = await this.diModel.findOne({ _id });
     if (!di) return null;
 
-    // Stock is drawn down only on the FIRST confirmation (idempotent).
-    const alreadyConfirmed = !!di.componentsConfirmedAt;
-
     let updated;
     const componentsConfirmedAt = new Date();
 
@@ -3235,8 +3233,13 @@ export class DiService {
         { new: true },
       );
     } else {
-      updated = await this.diModel.findOneAndUpdate(
-        { _id },
+      // Atomic single-winner: only the request that flips componentsConfirmedAt
+      // from unset → now draws down stock. The `componentsConfirmedAt: null`
+      // guard (matches null OR missing) makes concurrent / double-clicked
+      // confirms idempotent — a second call matches nothing, so it never
+      // decrements the same parts twice.
+      const flipped = await this.diModel.findOneAndUpdate(
+        { _id, componentsConfirmedAt: null },
         {
           $set: {
             isConfirmedComponentFromCoordinator: true,
@@ -3247,23 +3250,24 @@ export class DiService {
         },
         { new: true },
       );
+      if (flipped) {
+        updated = flipped;
+        try {
+          await this.decrementStockForComposants(di.array_composants);
+        } catch (err) {
+          await this.captureDiscordFailure?.(
+            'decrementStockForComposants',
+            err,
+            { diId: _id },
+          );
+        }
+      } else {
+        // Already confirmed earlier (idempotent retry) — no second draw-down.
+        updated = await this.diModel.findOne({ _id });
+      }
     }
 
     if (!updated) return null;
-
-    // Decrement in-stock composant quantities once, on first confirmation.
-    // (Retour re-work cycles keep their parts in LogsDi — out of scope here.)
-    if (!alreadyConfirmed && !(di.ignoreCount && di.ignoreCount > 0)) {
-      try {
-        await this.decrementStockForComposants(di.array_composants);
-      } catch (err) {
-        await this.captureDiscordFailure?.(
-          'decrementStockForComposants',
-          err,
-          { diId: _id },
-        );
-      }
-    }
 
     const payload = this.buildPayload(updated, {
       isConfirmedComponentFromCoordinator: true,

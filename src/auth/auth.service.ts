@@ -55,6 +55,10 @@ export class AuthService {
       loginAuthInput.username,
     );
 
+    if (!user) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
     const { password, ...result } = user;
 
     return {

@@ -248,11 +248,13 @@ export class Di {
   isDeleted: boolean;
 
   //? ID's
-  @Field()
+  // Nullable: a CLIENT-type DI has no company_id and vice-versa; legacy rows
+  // may have no createdBy. Non-nullable here crashes Apollo on such rows.
+  @Field({ nullable: true })
   createdBy: string;
-  @Field()
+  @Field({ nullable: true })
   client_id: string;
-  @Field()
+  @Field({ nullable: true })
   company_id: string;
   @Field(() => [String])
   current_workers_ids: [string];
@@ -414,7 +416,7 @@ export class DiTable {
   _idnum: string;
   @Field({ nullable: true })
   comment: string;
-  @Field()
+  @Field({ nullable: true })
   title: string;
   @Field({ nullable: true })
   description: string;

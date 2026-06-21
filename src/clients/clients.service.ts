@@ -177,7 +177,9 @@ export class ClientsService {
       .limit(rows)
       .skip(first)
       .exec();
-    const totalClientRecord = await this.ClientModel.countDocuments().exec();
+    const totalClientRecord = await this.ClientModel.countDocuments({
+      isDeleted: false,
+    }).exec();
     return { clientRecords, totalClientRecord };
   }
 
