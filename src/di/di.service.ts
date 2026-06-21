@@ -3186,10 +3186,24 @@ export class DiService {
     const componentsConfirmedAt = new Date();
 
     if (di.ignoreCount && di.ignoreCount > 0) {
-      await this.logsDiService.componentConfirmedFromCoordinator(
-        _id,
-        di.ignoreCount,
-      );
+      // Pre-update log row (no {new:true}) → use its old confirm flag for
+      // per-cycle idempotency and its parts for the stock draw-down.
+      const logRow: any =
+        await this.logsDiService.componentConfirmedFromCoordinator(
+          _id,
+          di.ignoreCount,
+        );
+      if (logRow && !logRow.isConfirmedComponentFromCoordinator) {
+        try {
+          await this.decrementStockForComposants(logRow.array_composants);
+        } catch (err) {
+          await this.captureDiscordFailure?.(
+            'decrementStockForComposants',
+            err,
+            { diId: _id },
+          );
+        }
+      }
       updated = await this.diModel.findOneAndUpdate(
         { _id },
         {
