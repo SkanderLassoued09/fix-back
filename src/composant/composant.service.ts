@@ -36,8 +36,13 @@ export class ComposantService {
     try {
       const ext = getFileExtension(base64);
       const buffer = Buffer.from(base64.split(',')[1], 'base64');
-      const containerId =
-        await this.googleDriveService.ensureNamedContainer('composants');
+      // Structured per-composant folder under CLIENTS, mirroring client/company:
+      // CLIENTS/composant/<Name>_<date>/ — idempotent by name (reused per part).
+      const entityFolder = await this.googleDriveService.ensureEntityFolder(
+        'composant',
+        name || 'Composant',
+      );
+      const containerId = entityFolder.id;
       const fileName = this.googleDriveService.buildDocFileName(
         name || 'Composant',
         'FicheTechnique',

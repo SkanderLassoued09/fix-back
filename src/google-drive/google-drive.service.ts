@@ -13,8 +13,9 @@ export interface DriveFile {
   name: string;
 }
 
-/** The two kinds of entity a DI can target. */
-export type DriveEntityType = 'company' | 'client';
+/** Entity kinds that get their own structured folder under the CLIENTS root
+ *  (company/client are DI targets; composant groups its datasheets). */
+export type DriveEntityType = 'company' | 'client' | 'composant';
 
 /** Document categories — same naming scheme for every upload, images included. */
 export type DriveDocType =
