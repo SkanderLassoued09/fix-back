@@ -2802,11 +2802,29 @@ export class DiService {
     return result;
   }
 
+  /** Per-cycle workflow flags cleared whenever a DI is returned, so every
+   *  retour cycle re-runs the FULL original flow with no phase showing as
+   *  "already done" (e.g. "Envoyé aux admins" / "Composants confirmés").
+   *  Cycle history is preserved separately in LogsDi (keyed by ignoreCount). */
+  private readonly retourCycleReset = {
+    pricingRequestSentAt: null,
+    pricingRequestSentBy: null,
+    componentsConfirmedAt: null,
+    componentsConfirmedBy: null,
+    isConfirmedComponentFromCoordinator: false,
+    isSentToCoordinator: false,
+    gotComposantFromMagasin: false,
+    isOpenedOnce: false,
+    confirmationComposant: null,
+    handleSendingNotificationBetweenCoordinatorAndMagasin: 'IN_COORDINATOR',
+  };
+
   async changeDiRetour1(_id: string, reason?: string) {
     const updated = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
+          ...this.retourCycleReset,
           status: STATUS_DI.Retour1.status,
           retourReason: reason ?? null,
           retourDate: new Date(),
@@ -2834,6 +2852,7 @@ export class DiService {
       { _id },
       {
         $set: {
+          ...this.retourCycleReset,
           status: STATUS_DI.Retour2.status,
           retourReason: reason ?? null,
           retourDate: new Date(),
@@ -2861,6 +2880,7 @@ export class DiService {
       { _id },
       {
         $set: {
+          ...this.retourCycleReset,
           status: STATUS_DI.Retour3.status,
           retourReason: reason ?? null,
           retourDate: new Date(),
