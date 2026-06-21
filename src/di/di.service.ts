@@ -3142,12 +3142,45 @@ export class DiService {
     return updated;
   }
 
+  /** Draw down `quantity_stocked` for each EnStock composant used on a DI.
+   *  Matches by the composant's unique name, floors at 0, and leaves
+   *  Interne/Externe parts (sourced per-job, not from stock) untouched. */
+  private async decrementStockForComposants(
+    composants: Array<{ nameComposant?: string; quantity?: number }> = [],
+  ): Promise<void> {
+    for (const item of composants ?? []) {
+      const name = item?.nameComposant;
+      const qty = Number(item?.quantity) || 0;
+      if (!name || qty <= 0) continue;
+      // The app stores the in-stock status as 'En stock' (frontend value);
+      // accept the legacy 'EnStock' enum spelling too.
+      await this.composantModel.updateOne(
+        { name, status_composant: { $in: ['En stock', 'EnStock'] } },
+        [
+          {
+            $set: {
+              quantity_stocked: {
+                $max: [
+                  0,
+                  { $subtract: [{ $ifNull: ['$quantity_stocked', 0] }, qty] },
+                ],
+              },
+            },
+          },
+        ],
+      );
+    }
+  }
+
   async componentConfirmedFromCoordinator(
     _id: string,
     componentsConfirmedBy?: string | null,
   ) {
     const di = await this.diModel.findOne({ _id });
     if (!di) return null;
+
+    // Stock is drawn down only on the FIRST confirmation (idempotent).
+    const alreadyConfirmed = !!di.componentsConfirmedAt;
 
     let updated;
     const componentsConfirmedAt = new Date();
@@ -3183,6 +3216,20 @@ export class DiService {
     }
 
     if (!updated) return null;
+
+    // Decrement in-stock composant quantities once, on first confirmation.
+    // (Retour re-work cycles keep their parts in LogsDi — out of scope here.)
+    if (!alreadyConfirmed && !(di.ignoreCount && di.ignoreCount > 0)) {
+      try {
+        await this.decrementStockForComposants(di.array_composants);
+      } catch (err) {
+        await this.captureDiscordFailure?.(
+          'decrementStockForComposants',
+          err,
+          { diId: _id },
+        );
+      }
+    }
 
     const payload = this.buildPayload(updated, {
       isConfirmedComponentFromCoordinator: true,
