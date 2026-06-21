@@ -61,12 +61,14 @@ export class Profile extends Document {
 export class TechTickets {
   @Field()
   _id: string;
-  @Field()
+  // Nullable: getAllAdmins returns raw Profile docs that don't carry these
+  // computed fields, so non-null here crashes the query on real data.
+  @Field({ nullable: true })
   isTechBusy: boolean;
   @Field()
   username: string;
 
-  @Field(() => Int)
+  @Field(() => Int, { nullable: true })
   ticketCount: number;
 }
 @ObjectType()
