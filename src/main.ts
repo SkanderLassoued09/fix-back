@@ -73,7 +73,7 @@ async function bootstrap() {
   app.use(bodyParser.urlencoded({ limit: bodyLimit, extended: true }));
 
   const port = process.env.PORT ?? 3000;
-  await app.listen(port, '192.168.1.30');
+  await app.listen(port);
   new Logger('Bootstrap').log(`Fixtronix API listening on port ${port}`);
 }
 
