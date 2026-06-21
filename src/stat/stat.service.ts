@@ -665,18 +665,27 @@ export class StatService {
       .limit(rows)
       .skip(first)
       .lean();
-    const desiredData = stat.map((el: any) => ({
-      ...el,
-      _idnum: el.diRef?._idnum,
-      client:
-        this.isEmpty(el.diRef?.client_id) === false
-          ? el.diRef?.client_id
+    const desiredData = await Promise.all(
+      stat.map(async (el: any) => ({
+        ...el,
+        _idnum: el.diRef?._idnum,
+        client:
+          this.isEmpty(el.diRef?.client_id) === false
+            ? el.diRef?.client_id
+            : null,
+        company:
+          this.isEmpty(el.diRef?.company_id) === false
+            ? el.diRef?.company_id
+            : null,
+        // Resolve tech ids → display names for the diagnostic/repair résumé.
+        techDiag: el.id_tech_diag
+          ? await this.profileService.getTech(el.id_tech_diag)
           : null,
-      company:
-        this.isEmpty(el.diRef?.company_id) === false
-          ? el.diRef?.company_id
+        techRep: el.id_tech_rep
+          ? await this.profileService.getTech(el.id_tech_rep)
           : null,
-    }));
+      })),
+    );
     return {
       stat: desiredData,
       totalTechDataCount,

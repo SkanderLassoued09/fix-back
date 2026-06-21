@@ -153,6 +153,12 @@ export class Stat {
   client: ClientType;
   @Field({ nullable: true })
   company: CompanyType;
+  // Resolved technician display names (from id_tech_diag / id_tech_rep) so the
+  // repair/diagnostic résumé can show a name, not a raw id.
+  @Field({ nullable: true })
+  techDiag?: string;
+  @Field({ nullable: true })
+  techRep?: string;
 }
 
 @ObjectType()
