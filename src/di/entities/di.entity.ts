@@ -440,8 +440,8 @@ export class DiTable {
   createdAt: string;
   @Field({ nullable: true })
   updatedAt: string;
-  @Field({ nullable: true })
-  current_roles: string;
+  @Field(() => [String], { nullable: true })
+  current_roles: string[];
   @Field({ nullable: true })
   image: string;
   @Field({ nullable: true })
