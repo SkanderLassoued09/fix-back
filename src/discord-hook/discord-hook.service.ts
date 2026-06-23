@@ -46,6 +46,12 @@ interface EmbedContext {
 export class DiscordHookService {
   // Critical operational-alerts webhook — now read from env (was hardcoded).
   private readonly webhookUrl = process.env.DISCORD_WEBHOOK_URL ?? '';
+  // Dedicated channel for DI flow events (affectation / pause / réparation).
+  // Falls back to the critical webhook if unset so behaviour never breaks.
+  private readonly diEventsWebhookUrl =
+    process.env.DISCORD_DI_EVENTS_WEBHOOK_URL ||
+    process.env.DISCORD_WEBHOOK_URL ||
+    '';
 
   constructor(
     @InjectModel(Client.name) private readonly clientModel: Model<any>,
@@ -514,7 +520,7 @@ export class DiscordHookService {
   async sendDiagnosticPaused(di: any) {
     const ctx = await this.buildContext(di);
     const note = di?.remarque_tech_diagnostic;
-    await axios.post(this.webhookUrl, {
+    await axios.post(this.diEventsWebhookUrl, {
       embeds: [
         {
           title: '⏸️ Diagnostic Paused',
@@ -566,7 +572,7 @@ export class DiscordHookService {
 
   async sendDiagnosticAssigned(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await axios.post(this.diEventsWebhookUrl, {
       embeds: [
         {
           title: '🧭 Diagnostic Assigned',
@@ -582,7 +588,7 @@ export class DiscordHookService {
 
   async sendReparationStarted(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await axios.post(this.diEventsWebhookUrl, {
       embeds: [
         {
           title: '🔧 Reparation Started',
@@ -599,7 +605,7 @@ export class DiscordHookService {
   async sendReparationPaused(di: any) {
     const ctx = await this.buildContext(di);
     const note = di?.remarque_tech_repair;
-    await axios.post(this.webhookUrl, {
+    await axios.post(this.diEventsWebhookUrl, {
       embeds: [
         {
           title: '⏸️ Reparation Paused',
@@ -619,7 +625,7 @@ export class DiscordHookService {
 
   async sendReparationResumed(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await axios.post(this.diEventsWebhookUrl, {
       embeds: [
         {
           title: '▶️ Reparation Resumed',
