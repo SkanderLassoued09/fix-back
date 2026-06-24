@@ -6,6 +6,8 @@ import {
   UpdateComposantResponse,
 } from './dto/create-composant.input';
 import { UpdateComposantInput } from './dto/update-composant.input';
+import { User as CurrentUser } from 'src/auth/profile.decorator';
+import { Profile } from 'src/profile/entities/profile.entity';
 
 @Resolver(() => Composant)
 export class ComposantResolver {
@@ -15,8 +17,15 @@ export class ComposantResolver {
   createComposant(
     @Args('createComposantInput')
     createComposantInput: CreateComposantInput,
+    // The Discord "catalog event" embed wants WHO created the part (tech name
+    // / role) — pulled from the JWT via the existing CurrentUser decorator.
+    // Optional: if no token (rare), the service falls back to "Auteur inconnu".
+    @CurrentUser() profile: Profile,
   ) {
-    return this.composantService.createComposant(createComposantInput);
+    return this.composantService.createComposant(
+      createComposantInput,
+      profile,
+    );
   }
 
   @Mutation(() => Composant)

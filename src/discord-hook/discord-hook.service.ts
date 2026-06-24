@@ -938,4 +938,124 @@ export class DiscordHookService {
       ],
     });
   }
+
+  /**
+   * Catalog event — a NEW composant was added to the parts catalog (NOT an
+   * update). Useful for procurement / admin visibility: who added what, at
+   * what price, in what category. Routes through the DI events webhook to
+   * keep the critical-ops channel quiet. Author is taken from the JWT via the
+   * resolver's `@CurrentUser`; rare missing-author case shows "Auteur inconnu".
+   */
+  async sendComposantCreated({
+    composant,
+    profile,
+    categoryName,
+  }: {
+    composant: any;
+    profile?: any;
+    categoryName?: string;
+  }) {
+    if (!this.diEventsWebhookUrl) return;
+    const author = await this.resolveProfileDisplay(profile);
+    const role = profile?.role ? ` · ${profile.role}` : '';
+    const priceLine = (label: string, v: any) =>
+      Number.isFinite(Number(v))
+        ? `${Number(v).toLocaleString('fr-TN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} TND`
+        : '—';
+    await axios.post(this.diEventsWebhookUrl, {
+      embeds: [
+        {
+          title: '🧩 Nouveau composant catalogue',
+          description: `Le composant **${composant?.name ?? '—'}** a été ajouté au catalogue.`,
+          color: 3066993, // green — non-critical informational
+          fields: [
+            {
+              name: '👤 Auteur',
+              value: `${author}${role}`,
+              inline: true,
+            },
+            {
+              name: '🏷️ Catégorie',
+              value: categoryName || composant?.category_composant_id || '—',
+              inline: true,
+            },
+            {
+              name: '📦 Package',
+              value: composant?.package || '—',
+              inline: true,
+            },
+            {
+              name: '💵 Prix achat',
+              value: priceLine('achat', composant?.prix_achat),
+              inline: true,
+            },
+            {
+              name: '💰 Prix vente',
+              value: priceLine('vente', composant?.prix_vente),
+              inline: true,
+            },
+            {
+              name: '📊 Stock',
+              value: String(composant?.quantity_stocked ?? 0),
+              inline: true,
+            },
+          ],
+          footer: { text: 'Fixtronix · Catalogue' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  /**
+   * DI flow event — a technician was assigned to REPARATION (the diagnostic
+   * counterpart `sendDiagnosticAssigned` already exists). Surfaces the tech
+   * load, who assigned, and the current DI status so the on-call coordinator
+   * can react quickly. Routes through the DI events webhook.
+   */
+  async sendReparationAssigned({
+    di,
+    technician,
+    assignedBy,
+    activeDiCount,
+  }: {
+    di: any;
+    technician: any;
+    assignedBy?: any;
+    activeDiCount?: number;
+  }) {
+    if (!this.diEventsWebhookUrl) return;
+    const ctx = await this.buildContext(di);
+    const techDisplay = await this.resolveProfileDisplay(technician);
+    const assignerDisplay = await this.resolveProfileDisplay(assignedBy);
+    const extras = [
+      { name: '👨‍🔧 Technicien réparation', value: techDisplay, inline: true },
+    ];
+    if (assignerDisplay && assignerDisplay !== 'N/A') {
+      extras.push({
+        name: '🧑‍💼 Affecté par',
+        value: assignerDisplay,
+        inline: true,
+      });
+    }
+    if (Number.isFinite(activeDiCount)) {
+      extras.push({
+        name: '📋 DI actifs (tech)',
+        value: String(activeDiCount),
+        inline: true,
+      });
+    }
+    await axios.post(this.diEventsWebhookUrl, {
+      embeds: [
+        {
+          title: '🛠️ Réparation affectée',
+          description: 'Le coordinateur a affecté ce DI à un technicien réparation.',
+          color: 15105570, // orange
+          fields: this.buildBaseFields(ctx, undefined, extras),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
 }

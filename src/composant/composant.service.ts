@@ -11,6 +11,7 @@ import { getFileExtension } from 'src/di/shared.files';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
 import { GraphQLError } from 'graphql';
 import { GoogleDriveService } from 'src/google-drive/google-drive.service';
+import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 @Injectable()
 export class ComposantService {
   constructor(
@@ -20,6 +21,7 @@ export class ComposantService {
     @InjectModel('Di') private diModel: Model<any>,
     private readonly operationalErrorService: OperationalErrorService,
     private readonly googleDriveService: GoogleDriveService,
+    private readonly discordHookService: DiscordHookService,
   ) {}
 
   /**
@@ -87,6 +89,10 @@ export class ComposantService {
 
   async createComposant(
     createComposantInput: CreateComposantInput,
+    // Author from the JWT (forwarded by the resolver via `@CurrentUser`).
+    // Optional — preserved as `any` because not every test fixture seeds a
+    // full Profile; the Discord embed handles "Auteur inconnu" gracefully.
+    profile?: any,
   ): Promise<Composant> {
     try {
       // Check if the PDF is a valid base64 string
@@ -112,7 +118,30 @@ export class ComposantService {
       // HIGH-severity bug (resolver returned an Error object that the FE
       // rendered as a row). Direct await now; failure routes through capture
       // and the original error rethrows so callers see the real cause.
-      return await new this.ComposantModel(createComposantInput).save();
+      const saved = await new this.ComposantModel(createComposantInput).save();
+
+      // Catalog event — fire-and-forget Discord notification so procurement
+      // sees new parts (price, package, stock). Failure must NOT block the
+      // save: route through captureDiscordFailure via the same pattern as
+      // every other Discord side-effect site.
+      try {
+        await this.discordHookService.sendComposantCreated({
+          composant: saved,
+          profile,
+        });
+      } catch (notifErr) {
+        await this.operationalErrorService.capture({
+          module: 'composant',
+          submodule: 'discord',
+          method: 'SEND_COMPOSANT_CREATED',
+          severity: 'LOW',
+          error: 'Discord notification failed',
+          message: (notifErr as Error)?.message ?? String(notifErr),
+          payload: { name: saved?.name, _id: saved?._id },
+        });
+      }
+
+      return saved;
     } catch (error) {
       await this.operationalErrorService.capture({
         module: 'composant',

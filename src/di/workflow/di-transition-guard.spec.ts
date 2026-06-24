@@ -73,6 +73,34 @@ describe('assertDiTransition · M1 guard', () => {
     ).not.toThrow();
   });
 
+  // Non-repairable shortcut from diagnostic — the tech marks the DI
+  // `can_be_repaired: false` and clicks "Terminer (non réparable)" → straight
+  // to FINISHED without magasin/pricing/repair.
+  it('DIAGNOSTIC → FINISHED is allowed (non-réparable shortcut)', () => {
+    expect(() =>
+      assertDiTransition(
+        STATUS_DI.Diagnostic.status,
+        STATUS_DI.Finished.status,
+      ),
+    ).not.toThrow();
+  });
+  it('INDIAGNOSTIC → FINISHED is allowed (non-réparable shortcut)', () => {
+    expect(() =>
+      assertDiTransition(
+        STATUS_DI.InDiagnostic.status,
+        STATUS_DI.Finished.status,
+      ),
+    ).not.toThrow();
+  });
+  it('DIAGNOSTIC_Pause → FINISHED is allowed (non-réparable shortcut, _Pause mirror)', () => {
+    expect(() =>
+      assertDiTransition(
+        STATUS_DI.DiagnosticInPause.status,
+        STATUS_DI.Finished.status,
+      ),
+    ).not.toThrow();
+  });
+
   // ── Multi-source arcs (negotiation → magasin, INMAGASIN → Pending3) ─────
 
   it('NEGOTIATION1 → InMagasin is allowed (parts-needed branch)', () => {

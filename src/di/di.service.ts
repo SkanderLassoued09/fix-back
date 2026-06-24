@@ -1396,6 +1396,7 @@ export class DiService {
           status: STATUS_DI.Reparation,
         },
       },
+      { new: true },
     );
 
     if (!reparation) {
@@ -1411,6 +1412,36 @@ export class DiService {
     }
 
     await this.statsService.updateStatus(_idDI, STATUS_DI.Reparation.status);
+
+    // Discord event — tech assigned to REPARATION. Mirrors the diagnostic
+    // counterpart `sendDiagnosticAssigned` (already fired in `coordinator_ToDiag`)
+    // so on-call coordinators see both ends of the assignment flow in one
+    // channel. Best-effort: failure goes through the standard
+    // captureDiscordFailure path so a flaky webhook never blocks the mutation.
+    try {
+      const activeDiCount = await this.diModel.countDocuments({
+        current_workers_ids: tech_id,
+        status: {
+          $in: [
+            STATUS_DI.Reparation.status,
+            STATUS_DI.InReparation.status,
+            STATUS_DI.ReparationInPause.status,
+          ],
+        },
+        isDeleted: { $ne: true },
+      });
+      await this.discordHookService.sendReparationAssigned({
+        di: reparation,
+        technician: tech_id,
+        activeDiCount,
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('coordinator_ToRep', err, {
+        diId: _idDI,
+        techId: tech_id,
+      });
+    }
+
     return reparation;
   }
 

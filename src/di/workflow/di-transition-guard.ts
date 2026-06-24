@@ -109,6 +109,14 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = 
     // Non-repairable DI: finished right after pricing/negotiation, no repair.
     STATUS_DI.Negotiation1.status,
     STATUS_DI.Negotiation2.status,
+    // Non-repairable shortcut from diagnostic: when the tech marks the DI as
+    // `can_be_repaired: false` during diagnostic, the modal's "Terminer (non
+    // réparable)" action moves it straight to FINISHED — no magasin, no
+    // pricing, no repair. Allowed from the active diagnostic state AND its
+    // paused sibling (same `_Pause` equivalence rule applied elsewhere).
+    STATUS_DI.Diagnostic.status,
+    STATUS_DI.InDiagnostic.status,
+    STATUS_DI.DiagnosticInPause.status,
   ],
 };
 
