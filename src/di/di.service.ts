@@ -523,21 +523,32 @@ export class DiService {
    */
   async getDiById(_id: string) {
     try {
-      // Fetch the Demande d'intervention (di) by ID
-      const di = await this.diModel.findOne({ _id });
+      // `.lean()` → a plain object so we can attach the resolved `client` /
+      // `company` below (they aren't schema paths on the DI document).
+      const di: any = await this.diModel.findOne({ _id }).lean();
       if (!di) {
         throw new Error(`Demande d'intervention with ID '${_id}' not found.`);
       }
 
       // Initialize logsDi to null and only fetch if needed
       let logsDi = null;
-      if (di && di.ignoreCount && di.ignoreCount > 0) {
+      if (di.ignoreCount && di.ignoreCount > 0) {
         logsDi = [];
         for (let index = 1; index <= di.ignoreCount; index++) {
           // Push each logDi to the logsDi array
           const log = await this.logsDiService.getLogsById(index, di._id);
           logsDi.push(log);
         }
+      }
+
+      // Populate the linked entity so the modal can show its contacts (the `Di`
+      // type now exposes `client` / `company`). A DI targets exactly ONE; the FE
+      // sends "null" (the literal string) for the unused side → guard it.
+      if (this.isResolvableId(di.company_id)) {
+        di.company = await this.companyModel.findById(di.company_id).lean();
+      }
+      if (this.isResolvableId(di.client_id)) {
+        di.client = await this.clientModel.findById(di.client_id).lean();
       }
 
       // Return the result
@@ -2336,6 +2347,20 @@ export class DiService {
       await this.captureDiscordFailure('discord-notification', err);
     }
 
+    // Stamp the START of the current diagnostic run leg — ONLY on a genuine
+    // start/resume, i.e. when the previous status was NOT already INDIAGNOSTIC.
+    // A no-op modal re-open (INDIAGNOSTIC → INDIAGNOSTIC) must NOT move it, or
+    // the elapsed anchor would reset on every refresh. Mirror of the repair
+    // anchor in `changeStatusInRepair`. The UI reads this as
+    // `elapsed = diag_time + (now - diagRunStartedAt)` while running.
+    if (previousStatus !== STATUS_DI.InDiagnostic.status) {
+      const ignoreCount = (result as any)?.ignoreCount ?? 0;
+      await this.statModel.updateOne(
+        ignoreCount > 0 ? { _idDi: _id, ignoreCount } : { _idDi: _id },
+        { $set: { diagRunStartedAt: new Date() } },
+      );
+    }
+
     this.notificationGateway.updateTicket({
       action: 'updateState',
       content: { result, states: result },
@@ -2973,6 +2998,18 @@ export class DiService {
       await this.statsService.updateStatus(
         _id,
         STATUS_DI.DiagnosticInPause.status,
+      );
+    }
+
+    // Drop the live run anchor — a paused DI must not carry one, otherwise a
+    // server-only restore (no localStorage) would keep ticking past the pause.
+    // The accumulated time is already frozen into Stat.diag_time by the
+    // frontend's lapTimeForPauseAndGetBack before this fires. Resume restamps it.
+    {
+      const ignoreCount = diStatus?.ignoreCount ?? 0;
+      await this.statModel.updateOne(
+        ignoreCount > 0 ? { _idDi: _id, ignoreCount } : { _idDi: _id },
+        { $set: { diagRunStartedAt: null } },
       );
     }
 

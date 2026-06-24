@@ -256,6 +256,13 @@ export class Di {
   client_id: string;
   @Field({ nullable: true })
   company_id: string;
+  // Resolved entity (populated by getDiById) so the modal shows the client's /
+  // company's contacts without a second round-trip. Nullable: a DI targets
+  // exactly one entity, so the other side is null.
+  @Field(() => Client, { nullable: true })
+  client?: Client;
+  @Field(() => Company, { nullable: true })
+  company?: Company;
   @Field(() => [String])
   current_workers_ids: [string];
   @Field(() => [String])

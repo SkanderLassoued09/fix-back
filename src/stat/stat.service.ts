@@ -731,6 +731,9 @@ export class StatService {
     return modifiedStatsRetour;
   }
   async lapTime(_id: string, diag_time: string) {
+    // Normalize at the write boundary — never persist a leading/trailing space
+    // (an old client built `" HH:MM:SS"`), which the HH:MM:SS regex rejects.
+    diag_time = (diag_time ?? '').trim();
     try {
       const stat = await this.StatModel.findOne({ _id });
 
@@ -771,6 +774,8 @@ export class StatService {
   }
 
   async lapTimeForReaparation(_id: string, rep_time: string) {
+    // Normalize at the write boundary (see `lapTime`).
+    rep_time = (rep_time ?? '').trim();
     try {
     const stat = await this.StatModel.findOne({ _id });
     if (!stat) {

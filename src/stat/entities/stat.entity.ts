@@ -24,6 +24,13 @@ export class StatDocument extends Document {
   // repair timer survives refresh/tabs/devices without localStorage.
   @Prop({ type: Date, default: null })
   repRunStartedAt: Date;
+  // Diagnostic twin of `repRunStartedAt` — wall-clock at which the CURRENT
+  // diagnostic run leg started. Set on a real start/resume into INDIAGNOSTIC,
+  // cleared on pause, so the UI derives elapsed = diag_time + (now -
+  // diagRunStartedAt). This is the single source of truth that replaced the
+  // localStorage anchor (which drifted to 837:15:12 after long idle).
+  @Prop({ type: Date, default: null })
+  diagRunStartedAt: Date;
   @Prop()
   status: string;
   @Prop({ type: String, ref: 'Location' })
@@ -130,6 +137,8 @@ export class Stat {
   rep_time: string;
   @Field({ nullable: true })
   repRunStartedAt?: Date;
+  @Field({ nullable: true })
+  diagRunStartedAt?: Date;
   @Field({ nullable: true })
   id_tech_retour: string;
   @Field({ nullable: true })
