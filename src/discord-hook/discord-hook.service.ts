@@ -42,16 +42,39 @@ interface EmbedContext {
   statusLabel: string;
 }
 
+// Hard kill-switch: silences EVERY DI-events post (pause / resume / started /
+// assigned / reparation*) regardless of env. Flip to `false` to re-enable.
+// Reason: user reported the atelier-general channel was still receiving
+// "Diagnostic Paused" pings even after setting DISCORD_DI_EVENTS_ENABLED=false
+// (env values are read once at process start — stale on a non-restarted dev
+// server). Hardcoding here removes the restart dependency.
+const DI_EVENTS_FORCE_OFF = true;
+
 @Injectable()
 export class DiscordHookService {
   // Critical operational-alerts webhook — now read from env (was hardcoded).
   private readonly webhookUrl = process.env.DISCORD_WEBHOOK_URL ?? '';
   // Dedicated channel for DI flow events (affectation / pause / réparation).
   // Falls back to the critical webhook if unset so behaviour never breaks.
-  private readonly diEventsWebhookUrl =
-    process.env.DISCORD_DI_EVENTS_WEBHOOK_URL ||
-    process.env.DISCORD_WEBHOOK_URL ||
-    '';
+  // Kill-switches: (a) module-level `DI_EVENTS_FORCE_OFF` above, (b) env
+  // `DISCORD_DI_EVENTS_ENABLED=false`. Either one silences all sendXxx posts
+  // that target this URL — every method guards with `if (!this.diEventsWebhookUrl) return;`.
+  // Implemented as a getter (not a readonly field) so flipping the constant
+  // takes effect on the next call — no re-instantiation needed.
+  private get diEventsWebhookUrl(): string {
+    if (DI_EVENTS_FORCE_OFF) return '';
+    if (
+      String(process.env.DISCORD_DI_EVENTS_ENABLED ?? 'true').toLowerCase() ===
+      'false'
+    ) {
+      return '';
+    }
+    return (
+      process.env.DISCORD_DI_EVENTS_WEBHOOK_URL ||
+      process.env.DISCORD_WEBHOOK_URL ||
+      ''
+    );
+  }
 
   constructor(
     @InjectModel(Client.name) private readonly clientModel: Model<any>,
@@ -518,6 +541,7 @@ export class DiscordHookService {
   // ── Pause / Resume / Started / Assigned (workflow refinements) ──────
 
   async sendDiagnosticPaused(di: any) {
+    if (!this.diEventsWebhookUrl) return;
     const ctx = await this.buildContext(di);
     const note = di?.remarque_tech_diagnostic;
     await axios.post(this.diEventsWebhookUrl, {
@@ -571,6 +595,7 @@ export class DiscordHookService {
   }
 
   async sendDiagnosticAssigned(di: any) {
+    if (!this.diEventsWebhookUrl) return;
     const ctx = await this.buildContext(di);
     await axios.post(this.diEventsWebhookUrl, {
       embeds: [
@@ -587,6 +612,7 @@ export class DiscordHookService {
   }
 
   async sendReparationStarted(di: any) {
+    if (!this.diEventsWebhookUrl) return;
     const ctx = await this.buildContext(di);
     await axios.post(this.diEventsWebhookUrl, {
       embeds: [
@@ -603,6 +629,7 @@ export class DiscordHookService {
   }
 
   async sendReparationPaused(di: any) {
+    if (!this.diEventsWebhookUrl) return;
     const ctx = await this.buildContext(di);
     const note = di?.remarque_tech_repair;
     await axios.post(this.diEventsWebhookUrl, {
@@ -624,6 +651,7 @@ export class DiscordHookService {
   }
 
   async sendReparationResumed(di: any) {
+    if (!this.diEventsWebhookUrl) return;
     const ctx = await this.buildContext(di);
     await axios.post(this.diEventsWebhookUrl, {
       embeds: [
@@ -958,7 +986,7 @@ export class DiscordHookService {
     if (!this.diEventsWebhookUrl) return;
     const author = await this.resolveProfileDisplay(profile);
     const role = profile?.role ? ` · ${profile.role}` : '';
-    const priceLine = (label: string, v: any) =>
+    const priceLine = (v: any) =>
       Number.isFinite(Number(v))
         ? `${Number(v).toLocaleString('fr-TN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} TND`
         : '—';
@@ -986,12 +1014,12 @@ export class DiscordHookService {
             },
             {
               name: '💵 Prix achat',
-              value: priceLine('achat', composant?.prix_achat),
+              value: priceLine(composant?.prix_achat),
               inline: true,
             },
             {
               name: '💰 Prix vente',
-              value: priceLine('vente', composant?.prix_vente),
+              value: priceLine(composant?.prix_vente),
               inline: true,
             },
             {
