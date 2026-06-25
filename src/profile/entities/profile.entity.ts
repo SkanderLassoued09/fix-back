@@ -17,6 +17,13 @@ export const ProfileSchema = new mongoose.Schema(
 
     isTechBusy: { type: Boolean, required: false, default: false },
     isDeleted: { type: Boolean, required: false, default: false },
+
+    // Single-session lock — dead simple: `true` means an active session
+    // exists on some device → login blocked. `false` → login allowed.
+    // Set true at login, false at logout (explicit click) and best-effort
+    // on tab/window close via the frontend's `pagehide` hook. No heartbeat,
+    // no loginId, no expiration window — by design.
+    isConnected: { type: Boolean, required: false, default: false },
   },
   { timestamps: true },
 );
@@ -55,6 +62,10 @@ export class Profile extends Document {
   updatedAt: Date;
   @Field({ nullable: true })
   isDeleted: boolean;
+  // Single-session lock — `true` while a device is signed in, `false`
+  // otherwise. Managed by AuthService.login/logout.
+  @Field({ nullable: true })
+  isConnected: boolean;
 }
 
 @ObjectType()
