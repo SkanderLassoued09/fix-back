@@ -108,6 +108,39 @@ const ContexteRetourSchema = new mongoose.Schema(
   { _id: false },
 );
 
+// 5M / Ishikawa root-cause analysis. A PV documents the *retained* causes
+// (those the meeting checked) classified into the five families
+// (Main-d'œuvre, Matériel, Milieu, Matière, Méthode). Only kept causes are
+// persisted — the static seeded checklist is a UI affordance, not data.
+const IshikawaCauseSchema = new mongoose.Schema(
+  {
+    label: { type: String, required: true },
+    detail: { type: String, default: '' },
+    // true when the user typed a cause not in the seeded checklist.
+    custom: { type: Boolean, default: false },
+  },
+  { _id: false },
+);
+
+const IshikawaFamilleSchema = new mongoose.Schema(
+  {
+    // 'mo' | 'mt' | 'mi' | 'ma' | 'me'
+    key: { type: String, required: true },
+    // Human label kept on the doc so PDF/exports are self-contained.
+    label: { type: String, default: '' },
+    causes: { type: [IshikawaCauseSchema], default: [] },
+  },
+  { _id: false },
+);
+
+const IshikawaSchema = new mongoose.Schema(
+  {
+    probleme: { type: String, default: '' },
+    familles: { type: [IshikawaFamilleSchema], default: [] },
+  },
+  { _id: false },
+);
+
 // ── ReunionPV root schema ───────────────────────────────────────────────
 
 export const ReunionPVSchema = new mongoose.Schema(
@@ -141,6 +174,9 @@ export const ReunionPVSchema = new mongoose.Schema(
     decisions: { type: [String], default: [] },
     pointsDiscutes: { type: [PointDiscuteSchema], default: [] },
     actions: { type: [ActionItemSchema], default: [] },
+
+    // 5M / Ishikawa analysis (null when the section was left untouched).
+    ishikawa: { type: IshikawaSchema, default: null },
 
     prochaineReunion: { type: Date, default: null },
     statut: {
@@ -209,6 +245,34 @@ export class ContexteRetour {
 }
 
 @ObjectType()
+export class IshikawaCause {
+  @Field()
+  label: string;
+  @Field({ nullable: true })
+  detail: string;
+  @Field({ defaultValue: false })
+  custom: boolean;
+}
+
+@ObjectType()
+export class IshikawaFamille {
+  @Field()
+  key: string;
+  @Field({ nullable: true })
+  label: string;
+  @Field(() => [IshikawaCause])
+  causes: IshikawaCause[];
+}
+
+@ObjectType()
+export class Ishikawa {
+  @Field({ nullable: true })
+  probleme: string;
+  @Field(() => [IshikawaFamille])
+  familles: IshikawaFamille[];
+}
+
+@ObjectType()
 export class ReunionPV {
   @Field()
   _id: string;
@@ -244,6 +308,9 @@ export class ReunionPV {
   pointsDiscutes: PointDiscute[];
   @Field(() => [ActionItem])
   actions: ActionItem[];
+
+  @Field(() => Ishikawa, { nullable: true })
+  ishikawa: Ishikawa;
 
   @Field({ nullable: true })
   prochaineReunion: Date;

@@ -48,6 +48,34 @@ export class ContexteRetourInput {
 }
 
 @InputType()
+export class IshikawaCauseInput {
+  @Field()
+  label: string;
+  @Field({ nullable: true })
+  detail?: string;
+  @Field({ nullable: true })
+  custom?: boolean;
+}
+
+@InputType()
+export class IshikawaFamilleInput {
+  @Field()
+  key: string;
+  @Field({ nullable: true })
+  label?: string;
+  @Field(() => [IshikawaCauseInput], { nullable: true })
+  causes?: IshikawaCauseInput[];
+}
+
+@InputType()
+export class IshikawaInput {
+  @Field({ nullable: true })
+  probleme?: string;
+  @Field(() => [IshikawaFamilleInput], { nullable: true })
+  familles?: IshikawaFamilleInput[];
+}
+
+@InputType()
 export class CreateReunionPVInput {
   @Field()
   titre: string;
@@ -84,6 +112,9 @@ export class CreateReunionPVInput {
   pointsDiscutes?: PointDiscuteInput[];
   @Field(() => [ActionItemInput], { nullable: true })
   actions?: ActionItemInput[];
+
+  @Field(() => IshikawaInput, { nullable: true })
+  ishikawa?: IshikawaInput;
 
   @Field({ nullable: true })
   prochaineReunion?: Date;

@@ -137,6 +137,27 @@ export class ReunionPVService {
           statut: a.statut,
           jira: { synced: false, issueKey: null, url: null },
         })),
+        // 5M / Ishikawa — persist only when the section carries data (a
+        // problem statement or at least one retained cause), else keep null.
+        ishikawa:
+          input.ishikawa &&
+          ((input.ishikawa.probleme ?? '').trim().length > 0 ||
+            (input.ishikawa.familles ?? []).some(
+              (f) => (f.causes ?? []).length > 0,
+            ))
+            ? {
+                probleme: input.ishikawa.probleme ?? '',
+                familles: (input.ishikawa.familles ?? []).map((f) => ({
+                  key: f.key,
+                  label: f.label ?? '',
+                  causes: (f.causes ?? []).map((c) => ({
+                    label: c.label,
+                    detail: c.detail ?? '',
+                    custom: c.custom ?? false,
+                  })),
+                })),
+              }
+            : null,
         prochaineReunion: input.prochaineReunion ?? null,
         statut: input.statut ?? PvStatut.BROUILLON,
       };

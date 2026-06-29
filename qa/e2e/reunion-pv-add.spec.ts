@@ -26,7 +26,8 @@ test.use({ storageState: authFile('ADMIN_MANAGER') });
 
 const TAG = Date.now().toString(36);
 const TITRE = `QA-REUNION-${TAG}`;
-const LIEU = `Salle QA ${TAG}`;
+const PROBLEME = `QA cause racine ${TAG}`;
+const DETAIL = `QA détail ${TAG}`;
 
 let createdPvId: string | null = null;
 
@@ -76,15 +77,32 @@ test('Ajouter une réunion (mode standalone) → PV créé en DB avec référenc
     const dialog = page.locator('.p-dialog').filter({
         hasText: 'Procès-Verbal de Réunion',
     });
-    // formControlName="titre" lives on 3 inputs (main, points, actions);
+    // The redesign is a section-rail + content-pane layout; "Informations" is
+    // the default-active section, so the titre/objet inputs are on screen.
+    // formControlName="titre" lives on several inputs (main, points, actions);
     // we target by the unique placeholders to stay deterministic.
-    await dialog
-        .getByPlaceholder('Ex. Retour 1 — DI42')
-        .fill(TITRE);
+    await dialog.getByPlaceholder('Ex. Retour 1 — DI42').fill(TITRE);
     await dialog
         .getByPlaceholder('Synthèse du sujet abordé')
         .fill('QA run — standalone');
-    await dialog.getByPlaceholder('Salle A / lien Visio').fill(LIEU);
+
+    // ── Exercise the new 5M · Ishikawa section ──────────────────────
+    // Navigate via the rail, fill the problem, retain one seeded cause from
+    // the (default-open) "Main-d'œuvre" family and precise its detail. This
+    // proves rail navigation + the 5M checkbox + backend persistence.
+    await dialog.getByRole('button', { name: /Ishikawa/i }).click();
+    await dialog
+        .getByPlaceholder('Ex. Retards de livraison récurrents sur DI42')
+        .fill(PROBLEME);
+
+    const cause = dialog
+        .locator('.pv-cause')
+        .filter({ hasText: 'Manque de formation' });
+    await cause.locator('.pv-cb').click(); // check it
+    await cause.getByPlaceholder('Préciser le détail…').fill(DETAIL);
+
+    // The synthèse total now reflects 1 retained cause.
+    await expect(dialog.getByText('1 cause(s) retenue(s)')).toBeVisible();
 
     // Submit.
     await dialog
@@ -113,11 +131,29 @@ test('Ajouter une réunion (mode standalone) → PV créé en DB avec référenc
     createdPvId = row?._id ? String(row._id) : null;
 
     expect(row?.titre).toBe(TITRE);
-    expect(row?.lieu).toBe(LIEU);
     expect(row?.di).toBeNull(); // standalone — no DI bound
     expect(row?.contexteRetour).toBeNull(); // no retour context
     expect(typeof row?.createdBy).toBe('string');
     expect(row?.createdBy.length).toBeGreaterThan(0);
+
+    // Lieu/Modalité were removed from the redesigned form — the row keeps the
+    // schema defaults (empty lieu) and is never fed from the UI.
+    expect(row?.lieu ?? '').toBe('');
+
+    // 5M · Ishikawa persisted: problem + the one retained "mo" cause + detail.
+    expect(row?.ishikawa).toBeTruthy();
+    expect(row?.ishikawa?.probleme).toBe(PROBLEME);
+    const moFamille = (row?.ishikawa?.familles ?? []).find(
+        (f: any) => f.key === 'mo',
+    );
+    expect(moFamille).toBeTruthy();
+    const moCause = (moFamille?.causes ?? []).find(
+        (c: any) => c.label === 'Manque de formation',
+    );
+    expect(moCause).toBeTruthy();
+    expect(moCause?.detail).toBe(DETAIL);
+    // Only the retained cause is persisted — not the whole seeded checklist.
+    expect((moFamille?.causes ?? []).length).toBe(1);
 
     // Reference format: PV-{4-digit year}-{3-digit seq}
     expect(row?.reference).toMatch(/^PV-\d{4}-\d{3}$/);
