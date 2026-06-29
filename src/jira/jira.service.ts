@@ -44,6 +44,17 @@ export interface JiraMeetingContext {
   titre?: string;
 }
 
+/** A normalized Jira issue row as returned by `searchIssues`. */
+export interface JiraSearchIssue {
+  issueKey: string;
+  titre: string;
+  /** Assignee email when exposed, else display name, else null. */
+  responsable: string | null;
+  /** Jira `duedate` (date-only field) parsed to a Date, or null. */
+  echeance: Date | null;
+  url: string;
+}
+
 @Injectable()
 export class JiraService {
   private readonly logger = new Logger(JiraService.name);
@@ -231,6 +242,48 @@ export class JiraService {
       await this.capture(action, meeting, err);
       return null;
     }
+  }
+
+  /**
+   * Run a JQL search and return normalized issue rows. Unlike the best-effort
+   * `createIssueForAction` (which returns null), this **throws** on an API
+   * error so a polling caller (the due-soon cron) can log it and skip the run
+   * cleanly rather than silently treating an outage as "no issues".
+   *
+   * Endpoint: POST /rest/api/{v}/search/jql — Jira Cloud's **enhanced** JQL
+   * search. The classic `GET /rest/api/3/search` was removed by Atlassian
+   * (returns 410 Gone since 2025), so we POST `{ jql, fields, maxResults }`
+   * here. The response shape (`issues[].key` / `.fields`) is unchanged.
+   */
+  async searchIssues(
+    jql: string,
+    fields: string[] = ['summary', 'duedate', 'assignee'],
+    maxResults = 50,
+  ): Promise<JiraSearchIssue[]> {
+    if (!this.isConfigured) {
+      throw new Error(
+        'Jira not configured (JIRA_BASE_URL/JIRA_EMAIL/JIRA_API_TOKEN/JIRA_PROJECT_KEY)',
+      );
+    }
+    const res = await axios.post(
+      `${this.baseUrl}/rest/api/${this.apiVersion}/search/jql`,
+      { jql, fields, maxResults },
+      { headers: this.authHeaders(), timeout: this.timeout },
+    );
+    const issues: any[] = Array.isArray(res.data?.issues)
+      ? res.data.issues
+      : [];
+    return issues.map((it) => {
+      const f = it?.fields ?? {};
+      return {
+        issueKey: it?.key,
+        titre: f.summary ?? '',
+        responsable:
+          f.assignee?.emailAddress ?? f.assignee?.displayName ?? null,
+        echeance: f.duedate ? new Date(f.duedate) : null,
+        url: `${this.baseUrl}/browse/${it?.key}`,
+      };
+    });
   }
 
   private async postIssue(
