@@ -12,6 +12,7 @@ import {
   ReunionPVDocument,
 } from './entities/reunion-pv.entity';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
+import { JiraService } from 'src/jira/jira.service';
 
 // Dedicated error codes — surfaced to GraphQL as the message body so the
 // frontend can branch on the exact failure (invalid DI ref vs invalid
@@ -29,6 +30,7 @@ export class ReunionPVService {
     @InjectModel('Profile') private readonly profileModel: Model<any>,
     @InjectModel('Di') private readonly diModel: Model<any>,
     private readonly discordHook: DiscordHookService,
+    private readonly jiraService: JiraService,
   ) {}
 
   /**
@@ -98,7 +100,7 @@ export class ReunionPVService {
    */
   async create(
     input: CreateReunionPVInput,
-    options?: { skipDiscord?: boolean },
+    options?: { skipDiscord?: boolean; skipJira?: boolean },
   ): Promise<ReunionPVDocument> {
     await this.assertRefs(input);
 
@@ -205,7 +207,86 @@ export class ReunionPVService {
       }
     }
 
+    // Jira — best-effort. Each "Action à mener" becomes a Jira issue in the
+    // configured project AFTER the PV is persisted, so a Jira outage / 4xx can
+    // never undo a meeting that was already saved. Inert until JIRA_* env is
+    // set; skipped on QA traffic (x-test-run) exactly like Discord. Per-issue
+    // failures are logged by JiraService (OperationalError, severity LOW).
+    if (!options?.skipJira) {
+      try {
+        await this.syncActionsToJira(saved);
+      } catch {
+        /* swallow — Jira is non-critical; JiraService already logged */
+      }
+    }
+
     return saved;
+  }
+
+  /**
+   * Mirror every retained "Action à mener" into a Jira issue and write the
+   * resulting issue key/url back onto the PV's `actions[].jira` sub-doc. Skips
+   * empty-title actions and any already synced. No-op when Jira is unconfigured.
+   * Best-effort throughout — never throws to the caller.
+   */
+  private async syncActionsToJira(saved: ReunionPVDocument): Promise<void> {
+    if (!this.jiraService.isConfigured) return;
+
+    // Work on a plain object so the `$set` write carries no Mongoose internals.
+    const plain: any =
+      typeof (saved as any).toObject === 'function'
+        ? (saved as any).toObject()
+        : saved;
+    const actions: any[] = plain.actions ?? [];
+    if (!actions.length) return;
+
+    let changed = false;
+    for (let i = 0; i < actions.length; i++) {
+      const a = actions[i];
+      if (!a || !(a.titre ?? '').trim() || a?.jira?.synced) continue;
+
+      // Resolve the responsable Profile → email so Jira can map an assignee.
+      let assigneeEmail: string | null = null;
+      if (a.responsable) {
+        const prof = await this.profileModel
+          .findOne({ _id: a.responsable })
+          .lean()
+          .catch(() => null);
+        assigneeEmail = (prof as any)?.email ?? null;
+      }
+
+      const result = await this.jiraService.createIssueForAction(
+        {
+          titre: a.titre,
+          description: a.description,
+          priorite: a.priorite,
+          echeance: a.echeance,
+          assigneeEmail,
+        },
+        {
+          _id: String(saved._id),
+          reference: plain.reference,
+          titre: plain.titre,
+        },
+      );
+
+      if (result?.issueKey) {
+        actions[i].jira = {
+          synced: true,
+          issueKey: result.issueKey,
+          url: result.url,
+        };
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      await this.reunionPVModel
+        .updateOne({ _id: saved._id }, { $set: { actions } })
+        .catch(() => {
+          /* the issues exist in Jira; the back-link is recoverable */
+        });
+    }
   }
 
   /** Single PV by id, with populated DI / createdBy / participants. */

@@ -12,7 +12,8 @@ export class ReunionPVResolver {
    * `localStorage._id`) — we don't rely on the JWT-derived @CurrentUser
    * because that decorator path is unreliable in this codebase. The
    * `x-test-run: 1` header (sent by QA traffic) makes the service skip
-   * the Discord post so test runs never spam the channel.
+   * the Discord post AND the Jira issue creation so test runs never spam the
+   * channel or create throwaway issues in the real Jira project.
    */
   @Mutation(() => ReunionPV)
   async createReunionPV(
@@ -22,7 +23,10 @@ export class ReunionPVResolver {
     const headers = ctx?.req?.headers ?? {};
     const testRun =
       String(headers['x-test-run'] ?? headers['X-Test-Run'] ?? '') === '1';
-    return this.service.create(input, { skipDiscord: testRun });
+    return this.service.create(input, {
+      skipDiscord: testRun,
+      skipJira: testRun,
+    });
   }
 
   @Query(() => ReunionPV)

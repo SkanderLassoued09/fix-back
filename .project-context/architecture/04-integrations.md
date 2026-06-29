@@ -12,6 +12,7 @@
 | Google Sheets | push (append) | `googleapis` Sheets v4 | Service account (JWT) | [google-sheets/](../../fix-back/src/google-sheets/) |
 | Google Drive | push (create folder) | `googleapis` Drive v3 | Service account (JWT, same creds) | [google-drive/](../../fix-back/src/google-drive/) |
 | Discord | push (notify) | HTTPS webhook (`axios`) | webhook URL (**hardcoded**) | [discord-hook/discord-hook.service.ts](../../fix-back/src/discord-hook/discord-hook.service.ts) |
+| Jira Cloud | push (create issue) | HTTPS REST v3 (`axios`) | Basic (email + API token) | [jira/jira.service.ts](../../fix-back/src/jira/jira.service.ts) |
 | Socket.io | push (front) | WebSocket | none | [notification.gateway.ts](../../fix-back/src/notification.gateway.ts) |
 | GraphQL subscriptions | push (front) | WebSocket (`graphql-ws` subprotocol) | none (no JWT on WS) | [pubsub/](../../fix-back/src/pubsub/), resolvers |
 
@@ -58,6 +59,19 @@ Posts structured operational errors and key events to a Discord channel via webh
 - **Code:** [discord-hook.service.ts](../../fix-back/src/discord-hook/discord-hook.service.ts) — many `axios.post(this.webhookUrl, …)` helpers for different event shapes.
 - ⚠️ **The webhook URL is hardcoded in source** (`discord-hook.service.ts:47-48`) — a real, live secret committed to the repo. The error message at line 186 references `DISCORD_WEBHOOK_URL`, implying it was *meant* to come from env. See [known-issues](../decisions/01-known-issues.md). Move it to an env var and rotate the webhook.
 - **Callers:** `OperationalErrorService.capture()` (best-effort) and `AlertsService` (stagnation alert broadcast). All Discord calls are **best-effort** — a webhook failure never fails the originating operation.
+
+---
+
+## Jira Cloud (meeting actions → issues)
+
+On `createReunionPV`, every **"Action à mener"** of the meeting is mirrored into a Jira issue in the configured project — the realization of the `actions[].jira` sub-doc that was scaffolded on the entity.
+
+- **Code:** [jira.service.ts](../../fix-back/src/jira/jira.service.ts), called from [reunion-pv.service.ts](../../fix-back/src/reunion-pv/reunion-pv.service.ts) `syncActionsToJira` **after the PV is persisted** (same best-effort site as Discord).
+- **Auth:** HTTP Basic — `JIRA_EMAIL` + `JIRA_API_TOKEN` (base64). Endpoint `POST {JIRA_BASE_URL}/rest/api/3/issue`, **ADF** description.
+- **Mapping:** `titre→summary`, `description→description` (ADF), `priorite→priority` (BASSE/MOYENNE/HAUTE → Low/Medium/High), `echeance→duedate`, `responsable→assignee` (best-effort `accountId` lookup by the Profile's email), meeting `reference`+`_id` embedded in the description. On success writes back `actions[].jira { synced, issueKey, url }`.
+- **Resilience:** a 400 (optional fields not on the project's create screen) triggers one retry with a minimal payload so the action still lands.
+- **Best-effort:** never blocks PV creation; per-issue failures captured via `OperationalErrorService` (severity LOW). **Inert** until `JIRA_BASE_URL`/`JIRA_EMAIL`/`JIRA_API_TOKEN`/`JIRA_PROJECT_KEY` are set; **skipped** on `x-test-run` traffic.
+- **Config:** the four required vars above (+ optional `JIRA_API_VERSION`=3, `JIRA_TIMEOUT`=10000, `JIRA_ISSUE_TYPE`=Task). See [operations/03-environment.md](../operations/03-environment.md).
 
 ---
 
