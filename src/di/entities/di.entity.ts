@@ -160,6 +160,13 @@ export class DiDocument extends Document {
   @Prop({ default: null })
   retourDate: Date | null;
 
+  // Inverse link to ReunionPV documents that were logged against this DI.
+  // Maintained by ReunionPvService.create() via `$push`. Allows the front
+  // to list all meeting minutes attached to a DI without scanning the
+  // ReunionPV collection.
+  @Prop({ type: [String], ref: 'ReunionPV', default: [] })
+  pvReunions: string[];
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -236,6 +243,11 @@ export class Di {
   retourReason?: string;
   @Field({ nullable: true })
   retourDate?: Date;
+  // ReunionPV ids attached to this DI (inverse link, maintained by
+  // ReunionPvService.create). Frontend list view uses this to show the
+  // PV count without an extra round-trip to the ReunionPV collection.
+  @Field(() => [String], { nullable: true })
+  pvReunions?: string[];
   @Field({ nullable: true })
   description: string;
 

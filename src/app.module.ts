@@ -28,6 +28,7 @@ import { AlertsModule } from './alerts/alerts.module';
 import { StagnationModule } from './stagnation/stagnation.module';
 import { OperationalErrorModule } from './operational-error/operational-error.module';
 import { GoogleSheetsModule } from './google-sheets/google-sheets.module';
+import { ReunionPVModule } from './reunion-pv/reunion-pv.module';
 
 @Module({
   imports: [
@@ -97,6 +98,7 @@ import { GoogleSheetsModule } from './google-sheets/google-sheets.module';
     StagnationModule,
     OperationalErrorModule,
     GoogleSheetsModule,
+    ReunionPVModule,
   ],
   controllers: [],
   providers: [

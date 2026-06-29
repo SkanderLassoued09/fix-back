@@ -76,6 +76,17 @@ export class DiscordHookService {
     );
   }
 
+  /**
+   * Dedicated channel for ReunionPV events. Falls back to the critical
+   * webhook when `DISCORD_PV_WEBHOOK_URL` is unset so the channel split
+   * (dev/test/prod) can be configured at any time without code changes.
+   */
+  private get pvWebhookUrl(): string {
+    return (
+      process.env.DISCORD_PV_WEBHOOK_URL || process.env.DISCORD_WEBHOOK_URL || ''
+    );
+  }
+
   constructor(
     @InjectModel(Client.name) private readonly clientModel: Model<any>,
     @InjectModel(Company.name) private readonly companyModel: Model<any>,
@@ -1080,6 +1091,65 @@ export class DiscordHookService {
           description: 'Le coordinateur a affecté ce DI à un technicien réparation.',
           color: 15105570, // orange
           fields: this.buildBaseFields(ctx, undefined, extras),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  /**
+   * Procès-Verbal de Réunion — fired after a PV is persisted (Retour or
+   * standalone flow). Routes to `pvWebhookUrl` (env DISCORD_PV_WEBHOOK_URL,
+   * fallback to the critical channel). Best-effort: any failure here is
+   * swallowed by the caller (ReunionPvService) so a flaky webhook never
+   * blocks the meeting record.
+   */
+  async sendReunionPvCreated({
+    pv,
+    di,
+    profile,
+  }: {
+    pv: any;
+    di?: any;
+    profile?: any;
+  }) {
+    const url = this.pvWebhookUrl;
+    if (!url) return;
+    const authorName = profile
+      ? `${profile.firstName ?? ''} ${profile.lastName ?? ''}`.trim() ||
+        profile.username ||
+        'Utilisateur'
+      : 'Utilisateur';
+    const fields: Array<{ name: string; value: string; inline?: boolean }> = [
+      { name: '🆔 Référence', value: pv?.reference ?? 'N/A', inline: true },
+      { name: '📝 Titre', value: String(pv?.titre ?? 'N/A').slice(0, 256) },
+      { name: '👤 Créé par', value: authorName, inline: true },
+      {
+        name: '📅 Date réunion',
+        value: pv?.dateReunion
+          ? new Date(pv.dateReunion).toISOString().slice(0, 10)
+          : 'N/A',
+        inline: true,
+      },
+    ];
+    if (di?._idnum) {
+      fields.push({ name: '🔗 DI liée', value: String(di._idnum), inline: true });
+    }
+    if (pv?.contexteRetour?.niveau) {
+      fields.push({
+        name: '🔁 Niveau Retour',
+        value: String(pv.contexteRetour.niveau),
+        inline: true,
+      });
+    }
+    await axios.post(url, {
+      embeds: [
+        {
+          title: '📄 Procès-Verbal de Réunion',
+          description: 'Un PV de réunion vient d\'être enregistré.',
+          color: 3447003, // blue
+          fields,
           footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },

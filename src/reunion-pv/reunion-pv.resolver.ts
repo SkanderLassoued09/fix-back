@@ -1,0 +1,47 @@
+import { Args, Mutation, Query, Resolver, Context } from '@nestjs/graphql';
+import { CreateReunionPVInput } from './dto/reunion-pv.input';
+import { ReunionPV } from './entities/reunion-pv.entity';
+import { ReunionPVService } from './reunion-pv.service';
+
+@Resolver(() => ReunionPV)
+export class ReunionPVResolver {
+  constructor(private readonly service: ReunionPVService) {}
+
+  /**
+   * Create a PV. The frontend MUST pass `createdById` (read from
+   * `localStorage._id`) — we don't rely on the JWT-derived @CurrentUser
+   * because that decorator path is unreliable in this codebase. The
+   * `x-test-run: 1` header (sent by QA traffic) makes the service skip
+   * the Discord post so test runs never spam the channel.
+   */
+  @Mutation(() => ReunionPV)
+  async createReunionPV(
+    @Args('input') input: CreateReunionPVInput,
+    @Context() ctx: any,
+  ) {
+    const headers = ctx?.req?.headers ?? {};
+    const testRun =
+      String(headers['x-test-run'] ?? headers['X-Test-Run'] ?? '') === '1';
+    return this.service.create(input, { skipDiscord: testRun });
+  }
+
+  @Query(() => ReunionPV)
+  async reunionPV(@Args('_id') _id: string) {
+    return this.service.findById(_id);
+  }
+
+  /**
+   * List PVs filtered by `diId` OR `createdById`. With no filter, returns
+   * the full list capped at 200 rows (newest first) — used by the
+   * "Réunions" sidebar menu.
+   */
+  @Query(() => [ReunionPV])
+  async reunionPVs(
+    @Args('diId', { nullable: true }) diId?: string,
+    @Args('createdById', { nullable: true }) createdById?: string,
+  ) {
+    if (diId) return this.service.findByDi(diId);
+    if (createdById) return this.service.findByCreatedBy(createdById);
+    return this.service.findAll();
+  }
+}
