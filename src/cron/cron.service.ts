@@ -7,6 +7,7 @@ import { Di } from 'src/di/entities/di.entity';
 import { NotificationsGateway } from 'src/notification.gateway';
 import { StagnationService } from 'src/stagnation/stagnation.service';
 import { SheetSyncService } from 'src/google-sheets/sheet-sync.service';
+import { JiraCronNotificationService } from 'src/jira-cron-notification/jira-cron-notification.service';
 
 @Injectable()
 export class AppCronService {
@@ -18,6 +19,7 @@ export class AppCronService {
     private readonly auditService: AuditService,
     private readonly stagnationService: StagnationService,
     private readonly sheetSyncService: SheetSyncService,
+    private readonly jiraCronNotificationService: JiraCronNotificationService,
   ) {}
 
   /**
@@ -36,8 +38,61 @@ export class AppCronService {
       case 'SYNC_ACTIONS_EN_COURS':
         await this.triggerActionsEnCoursSync();
         break;
+      case 'SYNC_JIRA_DUE_SOON':
+        await this.triggerJiraDueSoonSync();
+        break;
+      case 'SYNC_JIRA_TASKS':
+        await this.triggerJiraTasksSync();
+        break;
       default:
         this.logger.error(`Unknown ACTION: ${action}`);
+    }
+  }
+
+  /**
+   * Trigger-only — SYNC_JIRA_DUE_SOON (Cron 2). NO Jira call: reads the PENDING
+   * JiraCronNotification rows (produced by Cron 1 = SYNC_JIRA_TASKS), sends ONE
+   * grouped Discord digest, and marks them PROCESSED. Run via
+   * `ACTION=SYNC_JIRA_DUE_SOON node dist/main` (alias `action:sync-jira-due-soon`).
+   * A delivery failure FAILS the action (rethrown → bootstrap logs "ACTION
+   * failed" + sets exitCode 1; rows already reverted to PENDING so nothing is
+   * lost). An unconfigured "skipped" run is NOT an error (exit 0).
+   */
+  async triggerJiraDueSoonSync() {
+    const res = await this.jiraCronNotificationService.envoyerNotifications();
+    this.logger.log(
+      `Jira notif: claimed=${res.claimed} processed=${res.processed} failed=${res.failed}` +
+        (res.skipped ? ' (skipped: not configured)' : '') +
+        (res.error ? ` (error: ${res.error})` : ''),
+    );
+    if (res.error || res.failed > 0) {
+      throw new Error(
+        `Jira notif failed: ${res.error ?? `${res.failed} doc(s) en échec`}`,
+      );
+    }
+  }
+
+  /**
+   * Trigger-only — SYNC_JIRA_TASKS. Reads OPEN (TODO/IN-PROGRESS) Jira tasks due
+   * within ~24h and upserts each as a daily PENDING JiraCronNotification
+   * (dedupeKey `issueKey:YYYY-MM-DD`). Run via
+   * `ACTION=SYNC_JIRA_TASKS node dist/main` (alias `action:sync-jira-tasks`),
+   * scheduled hourly by the system crontab. A Jira API failure FAILS the action:
+   * it's rethrown so the bootstrap logs "ACTION failed" and sets
+   * `process.exitCode = 1` (the context still closes cleanly in its finally) —
+   * a monitorable signal, no zombie process. An unconfigured "skipped" run is
+   * NOT an error (exit 0).
+   */
+  async triggerJiraTasksSync() {
+    const res = await this.jiraCronNotificationService.syncTaches();
+    console.log('🥠[res]:', res);
+    this.logger.log(
+      `Jira tasks sync: fetched=${res.fetched} inserted=${res.inserted}` +
+        (res.skipped ? ' (skipped: not configured)' : '') +
+        (res.error ? ` (error: ${res.error})` : ''),
+    );
+    if (res.error) {
+      throw new Error(`Jira tasks sync failed: ${res.error}`);
     }
   }
 
@@ -45,7 +100,7 @@ export class AppCronService {
    * Trigger-only — every business decision lives in SheetSyncService so
    * the same logic runs via the dedicated SheetSyncScheduler (daily 02:00)
    * AND via `ACTION=SYNC_GOOGLE_SHEETS npm run start:dev`.
-   * 
+   *
    */
   async triggerGoogleSheetsSync() {
     try {

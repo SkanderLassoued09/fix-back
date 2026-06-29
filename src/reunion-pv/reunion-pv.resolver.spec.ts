@@ -6,7 +6,7 @@ import { ReunionPVService } from './reunion-pv.service';
  * Resolver-level guards:
  *  - createReunionPV forwards the input to the service
  *  - queries route to the right service method based on which arg is set
- *  - x-test-run header switches `skipDiscord` on
+ *  - x-test-run header switches `skipDiscord` AND `skipJira` on
  */
 describe('ReunionPVResolver', () => {
   let resolver: ReunionPVResolver;
@@ -38,15 +38,21 @@ describe('ReunionPVResolver', () => {
   it('createReunionPV forwards the input', async () => {
     const input: any = { titre: 'T', dateReunion: new Date(), createdById: 'P' };
     await resolver.createReunionPV(input, { req: { headers: {} } });
-    expect(service.create).toHaveBeenCalledWith(input, { skipDiscord: false });
+    expect(service.create).toHaveBeenCalledWith(input, {
+      skipDiscord: false,
+      skipJira: false,
+    });
   });
 
-  it('createReunionPV passes skipDiscord:true when x-test-run is 1', async () => {
+  it('createReunionPV passes skipDiscord:true AND skipJira:true when x-test-run is 1', async () => {
     const input: any = { titre: 'T', dateReunion: new Date(), createdById: 'P' };
     await resolver.createReunionPV(input, {
       req: { headers: { 'x-test-run': '1' } },
     });
-    expect(service.create).toHaveBeenCalledWith(input, { skipDiscord: true });
+    expect(service.create).toHaveBeenCalledWith(input, {
+      skipDiscord: true,
+      skipJira: true,
+    });
   });
 
   it('reunionPV → findById', async () => {

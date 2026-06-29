@@ -87,6 +87,12 @@ export class DiscordHookService {
     );
   }
 
+  /** True when a PV/Jira-digest webhook is configured — lets the Jira-notify
+   *  cron skip cleanly (no claim) instead of claiming docs it can't deliver. */
+  get isPvConfigured(): boolean {
+    return !!this.pvWebhookUrl;
+  }
+
   constructor(
     @InjectModel(Client.name) private readonly clientModel: Model<any>,
     @InjectModel(Company.name) private readonly companyModel: Model<any>,
@@ -1149,6 +1155,72 @@ export class DiscordHookService {
           title: '📄 Procès-Verbal de Réunion',
           description: 'Un PV de réunion vient d\'être enregistré.',
           color: 3447003, // blue
+          fields,
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  /**
+   * Grouped "Jira tasks due soon" digest — ONE embed, one field per
+   * `responsable` (section), listing `[issueKey](url) — titre (échéance)` with
+   * the échéance rendered in Africa/Tunis. Used by the SYNC_JIRA_DUE_SOON cron
+   * which reads PENDING JiraCronNotification rows (it no longer hits Jira).
+   *
+   * Unlike the best-effort DI notifications, this **throws** on a missing
+   * webhook or an HTTP failure so the caller can revert the claimed rows to
+   * PENDING (nothing is silently lost).
+   */
+  async sendJiraTasksDigest(
+    items: Array<{
+      issueKey: string;
+      titre?: string;
+      responsable?: string | null;
+      echeance?: Date | string | null;
+      url?: string;
+    }>,
+  ): Promise<void> {
+    const url = this.pvWebhookUrl;
+    if (!url) {
+      throw new Error('DISCORD_PV_WEBHOOK_URL not configured');
+    }
+
+    // Section by responsable (null/empty → "Non assigné").
+    const groups = new Map<string, typeof items>();
+    for (const it of items) {
+      const key = (it.responsable ?? '').trim() || 'Non assigné';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(it);
+    }
+
+    const fmtEcheance = (d?: Date | string | null): string =>
+      d
+        ? new Date(d).toLocaleDateString('fr-FR', { timeZone: 'Africa/Tunis' })
+        : 'N/A';
+
+    // Discord limits: ≤25 fields, field value ≤1024 chars.
+    const fields = [...groups.entries()].slice(0, 25).map(([resp, tasks]) => ({
+      name: `👤 ${resp}`.slice(0, 256),
+      value: tasks
+        .map(
+          (t) =>
+            `• [${t.issueKey}](${t.url ?? ''}) — ${String(t.titre ?? '').slice(
+              0,
+              120,
+            )} _(échéance ${fmtEcheance(t.echeance)})_`,
+        )
+        .join('\n')
+        .slice(0, 1024),
+    }));
+
+    await axios.post(url, {
+      embeds: [
+        {
+          title: '⏰ Tâches Jira proches échéance',
+          description: `${items.length} tâche(s) à traiter, regroupée(s) par responsable.`,
+          color: 16763904, // amber
           fields,
           footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),

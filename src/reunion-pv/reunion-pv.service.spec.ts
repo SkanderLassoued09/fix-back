@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import { ReunionPVService } from './reunion-pv.service';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
+import { JiraService } from 'src/jira/jira.service';
 import { Modalite, PvStatut } from './entities/reunion-pv.entity';
 
 /**
@@ -83,6 +84,12 @@ describe('ReunionPVService', () => {
         { provide: getModelToken('Profile'), useValue: profileModel },
         { provide: getModelToken('Di'), useValue: diModel },
         { provide: DiscordHookService, useValue: discord },
+        // Jira is best-effort + env-gated; isConfigured:false makes
+        // syncActionsToJira a clean no-op so these tests stay network-free.
+        {
+          provide: JiraService,
+          useValue: { isConfigured: false, createIssueForAction: jest.fn() },
+        },
       ],
     }).compile();
     service = moduleRef.get(ReunionPVService);
