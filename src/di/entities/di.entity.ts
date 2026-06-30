@@ -22,6 +22,11 @@ export class DiDocument extends Document {
   description: string;
   @Prop()
   nSerie: string;
+  // Date the equipment was physically received (« Date de réception »). Added
+  // for the bulk .xlsx import (backlog DIs carry their original reception date);
+  // optional for normal creation, which leaves it null.
+  @Prop({ default: null })
+  dateReception: Date | null;
   @Prop()
   // repair or not
   can_be_repaired: boolean;
@@ -229,6 +234,10 @@ export class Di {
   title: string;
   @Field({ nullable: true })
   nSerie: string;
+  // Physical reception date (« Date de réception ») — populated by the bulk
+  // import; null for DIs created through the normal flow.
+  @Field({ nullable: true })
+  dateReception?: Date;
   @Field({ nullable: true })
   confirmationComposant: string;
   @Field({ nullable: true })

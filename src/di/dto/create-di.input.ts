@@ -39,6 +39,10 @@ export class CreateDiInput {
   company_id: string;
   @Field({ nullable: true })
   nSerie: string;
+  // « Date de réception » — only set by the bulk .xlsx import (backlog DIs keep
+  // their original reception date). Normal creation leaves it undefined.
+  @Field({ nullable: true })
+  dateReception: Date;
   @Field({ nullable: true })
   price: number;
   @Field({ nullable: true })
