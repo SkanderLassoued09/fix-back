@@ -415,31 +415,61 @@ export class DiService {
   }
 
   /**
-   * Next DI number for the `_idnum` (`DI{n}`). HARDENED: only `_idnum` matching
-   * `^DI\d+$` count — QA/legacy junk ids (`INMAG-…`, `LIFE-…`, even a previous
-   * `DINaN`) are IGNORED so the parse can never yield `NaN`. Next = max(valid)+1,
-   * fallback 1 when none. The old version read the most-recent DI's `_idnum` and
-   * did `+substring(2)`; a single non-conforming id there produced `DINaN` and
-   * poisoned every subsequent creation.
+   * Next DI number for `_idnum`. New refs use the `T{n}` format, but legacy DIs
+   * carry the old `DI{n}` — so the next number is `max(both)+1`, letting the
+   * sequence CONTINUE seamlessly across the rename (e.g. last `DI1561` → next
+   * `T1562`) and guaranteeing a fresh `T{n}` never collides with an earlier one.
+   *
+   * HARDENED: only ids matching `^(DI|T)\d+$` count — QA/legacy junk ids
+   * (`INMAG-…`, `LIFE-…`, even a previous `DINaN`) are IGNORED so the parse can
+   * never yield `NaN`. Next = max(valid)+1, fallback 1 when none.
+   *
+   * NOTE: this remains a `max+1` read (not an atomic counter). Two strictly
+   * simultaneous creations could in theory read the same max — acceptable at
+   * this volume; switch to a `counters` doc + `$inc` if that ever bites.
    */
   async generateClientId(): Promise<number> {
     const rows = await this.diModel
-      .find({ _idnum: { $regex: '^DI[0-9]+$' } }, { _idnum: 1 })
+      .find({ _idnum: { $regex: '^(DI|T)[0-9]+$' } }, { _idnum: 1 })
       .lean();
     let max = 0;
     for (const r of rows) {
-      const n = parseInt(String((r as any)?._idnum).slice(2), 10);
+      // Strip the prefix (DI or T) and read the trailing number; non-matching
+      // ids are skipped (never NaN-poison the max).
+      const m = String((r as any)?._idnum ?? '').match(/^(?:DI|T)(\d+)$/);
+      if (!m) continue;
+      const n = parseInt(m[1], 10);
       if (Number.isFinite(n) && n > max) max = n;
     }
-    return max + 1; // ≥ 1 → never `DI` + `NaN`, never collides with the max
+    return max + 1; // ≥ 1 → never collides with the current max
   }
 
-  async createDi(createDiInput: CreateDiInput): Promise<any> {
+  /**
+   * Create one DI.
+   *
+   * `opts` exists for the bulk .xlsx import (the only other caller):
+   *  - `forcedRef`  — use this exact `_idnum` (taken AS-IS from the imported
+   *    file, e.g. `T1394`) INSTEAD of `generateClientId()`. The auto counter is
+   *    never read nor advanced, so importing a backlog leaves the live sequence
+   *    untouched. The caller is responsible for collision/format checks.
+   *  - `skipNotify` — suppress the Discord "pending" ping (a bulk import would
+   *    otherwise fire one webhook per row). Normal single creation keeps it on.
+   */
+  async createDi(
+    createDiInput: CreateDiInput,
+    opts?: { forcedRef?: string; skipNotify?: boolean },
+  ): Promise<any> {
     try {
-      // 🆔 Generate IDs
-      const index = await this.generateClientId();
+      // 🆔 Generate IDs. `_id` stays a random unique key (`DI_<nanoid>`); the
+      // human reference `_idnum` now uses the **`T{num}`** format (e.g. T1562)
+      // — unless the import forces a specific ref taken from the file.
       createDiInput._id = `DI_${nanoid(4)}`;
-      createDiInput._idnum = `DI${index}`;
+      if (opts?.forcedRef) {
+        createDiInput._idnum = opts.forcedRef;
+      } else {
+        const index = await this.generateClientId();
+        createDiInput._idnum = `T${index}`;
+      }
 
       // 🖼️ Handle image — uploaded to the DI's entity Drive folder (Drive-only,
       // no local docs/). BEST-EFFORT here: an upload failure must NOT block DI
@@ -480,8 +510,9 @@ export class DiService {
       const di = await diDoc.save();
       await this.syncEmplacementStats(di.location_id as any);
 
-      // 🔔 Notify (only if pending)
-      if (di.status === 'PENDING1') {
+      // 🔔 Notify (only if pending) — skipped for bulk import to avoid one
+      // Discord webhook per imported row.
+      if (!opts?.skipNotify && di.status === 'PENDING1') {
         this.discordHookService.sendDiPendingNotification(di);
       }
 

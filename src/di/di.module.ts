@@ -31,8 +31,13 @@ import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
 import { DiWorkflowService } from './workflow/di-workflow.service';
 import { OperationalErrorModule } from 'src/operational-error/operational-error.module';
 import { GoogleDriveModule } from 'src/google-drive/google-drive.module';
+import { ClientsModule } from 'src/clients/clients.module';
+import { LocationModule } from 'src/location/location.module';
+import { DiImportController } from './import/di-import.controller';
+import { DiImportService } from './import/di-import.service';
 
 @Module({
+  controllers: [DiImportController],
   providers: [
     DiResolver,
     DiService,
@@ -40,6 +45,7 @@ import { GoogleDriveModule } from 'src/google-drive/google-drive.module';
     NotificationsGateway,
     ProfileService,
     DiWorkflowService,
+    DiImportService,
   ],
   imports: [
     DiscordHookModule,
@@ -48,6 +54,8 @@ import { GoogleDriveModule } from 'src/google-drive/google-drive.module';
     LogsDiModule,
     OperationalErrorModule,
     GoogleDriveModule,
+    ClientsModule,
+    LocationModule,
     MongooseModule.forFeature([
       {
         name: Di.name,
