@@ -9,8 +9,8 @@
 | Integration | Direction | Transport | Auth | Code |
 |-------------|-----------|-----------|------|------|
 | MongoDB | read/write | Mongoose | none (no DB auth) | [app.module.ts](../../fix-back/src/app.module.ts) |
-| Google Sheets | push (append) | `googleapis` Sheets v4 | Service account (JWT) | [google-sheets/](../../fix-back/src/google-sheets/) |
-| Google Drive | push (create folder) | `googleapis` Drive v3 | Service account (JWT, same creds) | [google-drive/](../../fix-back/src/google-drive/) |
+| Google Sheets | push (append) | `googleapis` Sheets v4 | **OAuth 2.0** — shared Gmail grant (see [google-auth/](../../fix-back/src/google-auth/)) | [google-sheets/](../../fix-back/src/google-sheets/) |
+| Google Drive | push (create folder/upload) | `googleapis` Drive v3 | **OAuth 2.0** — same shared Gmail grant | [google-drive/](../../fix-back/src/google-drive/) |
 | Discord | push (notify) | HTTPS webhook (`axios`) | webhook URL (**hardcoded**) | [discord-hook/discord-hook.service.ts](../../fix-back/src/discord-hook/discord-hook.service.ts) |
 | Jira Cloud | push (create issue) | HTTPS REST v3 (`axios`) | Basic (email + API token) | [jira/jira.service.ts](../../fix-back/src/jira/jira.service.ts) |
 | Socket.io | push (front) | WebSocket | none | [notification.gateway.ts](../../fix-back/src/notification.gateway.ts) |
@@ -22,7 +22,7 @@
 
 Appends new/changed DIs and a daily KPI snapshot to a Google Sheets workbook.
 
-- **Auth:** Google **service account** — `GOOGLE_SERVICE_ACCOUNT_EMAIL` + `GOOGLE_PRIVATE_KEY` ([google-sheets.client.ts:39-43](../../fix-back/src/google-sheets/google-sheets.client.ts#L39)).
+- **Auth:** **OAuth 2.0** — the SHARED Gmail grant (same account as Drive), via `GoogleOAuthService` ([google-auth.service.ts](../../fix-back/src/google-auth/google-auth.service.ts)). Reads `GOOGLE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN`; the consent requests the combined scopes `drive.file` **+** `spreadsheets` on one refresh token. The Gmail account **owns** the workbook, so no service-account sharing is needed. *(Migrated off the service account 2026-07-01 — adding the `spreadsheets` scope requires a one-time re-consent to mint a token covering Drive + Sheets; a Sheets 403 raises a clear re-consent error.)*
 - **Target:** workbook `GOOGLE_SHEETS_ID`; tabs `GOOGLE_SHEETS_TAB` (DI rows) and `GOOGLE_SHEETS_STATS_TAB` (stats snapshot).
 - **Architecture:**
   - `SheetSyncService.syncAllEntities()` iterates a list of `IGoogleSheetMapper`s with per-mapper try/catch isolation.
@@ -39,9 +39,8 @@ Details: [backend-cron-and-actions.md](../modules/backend-cron-and-actions.md).
 On `createCompany`, auto-creates a Drive folder `{raisonSociale} {DD/MM/YYYY HH:mm:ss}`
 (timezone `Africa/Tunis`) and stores `driveFolderId`/`driveFolderUrl` on the company.
 
-- **Auth:** same **service account** as Sheets, with the `drive` scope ([google-drive.service.ts](../../fix-back/src/google-drive/google-drive.service.ts)).
-- **⚠️ Shared Drive required:** the SA has no personal quota → folders are created in a Shared
-  Drive (SA = Content manager) under `GOOGLE_DRIVE_PARENT_FOLDER_ID`, with `supportsAllDrives: true`.
+- **Auth:** **OAuth 2.0** as a real Gmail account (the one owning the storage quota), via the shared `GoogleOAuthService` ([google-auth.service.ts](../../fix-back/src/google-auth/google-auth.service.ts)) — **NOT** a service account. Same refresh token as Sheets (scope `drive.file`).
+- **No Shared Drive required:** files are owned by (and billed to) the consenting account's own Drive; `supportsAllDrives: true` is kept for forward-compat if the account later moves to Workspace. (Historical: a service account was used first — it has no personal quota, which is exactly why the project moved to OAuth-as-real-account.)
 - **Best-effort:** Drive failure never blocks company creation (`driveFolderId` stays null).
 - **Idempotent:** by `driveFolderId` (the name is unique per second — no name-based dedup).
 - **Repair:** `ensureClientFolder(companyId)` mutation recreates the folder when missing.

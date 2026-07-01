@@ -7,7 +7,7 @@
 ## Environment & secrets
 1. **Full `.env` contents for production.** Only 6 vars are referenced in code (`ACTION`, `GOOGLE_*`). Inference: nothing else is read from env today; JWT secret / Mongo URI / Discord URL are hardcoded. → *Should these be migrated to env, and what are the prod values?*
 2. **Is MongoDB Atlas used in production?** A commented Atlas URI exists in [app.module.ts](../../fix-back/src/app.module.ts). Inference: prod still uses a local/LAN Mongo (no auth). → *Confirm the real prod database + whether auth should be enabled.*
-3. **Google service-account credentials** — where do `GOOGLE_PRIVATE_KEY` / `GOOGLE_SERVICE_ACCOUNT_EMAIL` come from, and which workbook/tabs (`GOOGLE_SHEETS_ID`, `GOOGLE_SHEETS_TAB`, `GOOGLE_SHEETS_STATS_TAB`) are the live targets?
+3. **Google OAuth credentials** — Drive **and** Sheets now authenticate via one shared OAuth 2.0 grant (`GOOGLE_OAUTH_CLIENT_ID/SECRET` + `GOOGLE_OAUTH_REFRESH_TOKEN`, scopes `drive.file` + `spreadsheets`); the service account was removed 2026-07-01. Still open: which workbook/tabs (`GOOGLE_SHEETS_ID`, `GOOGLE_SHEETS_TAB`, `GOOGLE_SHEETS_STATS_TAB`) are the live targets, and which Gmail account owns the grant?
 
 ## Deployment
 4. **What is the actual deployment target?** Prod env points at `192.168.1.29` (LAN). Inference: on-prem single-server LAN deployment, dev-only Docker images, manual `npm` inside containers. → *Is there a real prod host/process, or is `192.168.1.29` someone's machine?*

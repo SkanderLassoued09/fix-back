@@ -24,7 +24,7 @@ flowchart LR
     end
 
     DB[("MongoDB 6<br/>mongodb://localhost:27017/fixtronix")]
-    Sheets["Google Sheets API<br/>(service account)"]
+    Sheets["Google Sheets API<br/>(OAuth 2.0)"]
     Discord["Discord webhook"]
 
     Apollo -- "HTTP POST /graphql<br/>(queries/mutations, Bearer JWT)" --> GQL

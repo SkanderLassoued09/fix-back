@@ -1,4 +1,5 @@
 import { GoogleDriveService } from './google-drive.service';
+import { GoogleOAuthService } from '../google-auth/google-auth.service';
 
 /**
  * Unit tests for the parts that DON'T need a live Drive (naming + sanitization).
@@ -6,7 +7,7 @@ import { GoogleDriveService } from './google-drive.service';
  * and are validated separately by the user.
  */
 describe('GoogleDriveService — naming & sanitization', () => {
-  const svc = new GoogleDriveService();
+  const svc = new GoogleDriveService(new GoogleOAuthService());
   // Fixed instant: 2026-06-18 10:30:45 UTC → 11:30:45 in Africa/Tunis (UTC+1).
   const at = new Date('2026-06-18T10:30:45.000Z');
 
@@ -92,7 +93,7 @@ describe('GoogleDriveService — naming & sanitization', () => {
       findFoldersByNamePrefix: jest.Mock;
       createSubFolder: jest.Mock;
     } {
-      const svc: any = new GoogleDriveService();
+      const svc: any = new GoogleDriveService(new GoogleOAuthService());
       const findFoldersByNamePrefix = jest.fn();
       for (const m of findMatches)
         findFoldersByNamePrefix.mockResolvedValueOnce(m);
@@ -191,7 +192,7 @@ describe('GoogleDriveService — naming & sanitization', () => {
   // entity folders. The tightened predicate only matches Drive's canonical
   // 404 shape (numeric code, `notFound` reason, or `^File not found`).
   describe('isNotFoundError — narrowed scope (no false-positive forceRecreate)', () => {
-    const svc = new GoogleDriveService();
+    const svc = new GoogleDriveService(new GoogleOAuthService());
 
     it('matches numeric code 404', () => {
       expect(svc.isNotFoundError({ code: 404 })).toBe(true);

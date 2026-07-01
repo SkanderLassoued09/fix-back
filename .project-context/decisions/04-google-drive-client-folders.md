@@ -1,7 +1,12 @@
 # Decision: auto Google Drive client folder on company creation
 
 **Date:** 2026-06-11 · **Scope:** `fix-back` (new `google-drive` module + company hook).
-**Reuses** the existing Sheets service-account auth. Security (guards/RBAC) out of scope.
+**Reuses** the existing Sheets auth. Security (guards/RBAC) out of scope.
+
+> **⚠️ SUPERSEDED (2026-07-01):** both Drive and Sheets now authenticate via **OAuth 2.0** as a
+> real Gmail account (shared `GoogleOAuthService`, scopes `drive.file` + `spreadsheets`), **NOT** a
+> service account. The Shared-Drive requirement below **no longer applies** — files live in the
+> consenting account's own Drive quota. The rest of this doc is kept for historical context.
 
 ## What it does
 On `createCompany`, after the company is persisted, a Google Drive folder named

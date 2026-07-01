@@ -11,8 +11,9 @@ Loaded by `import 'dotenv/config'` at the top of [`main.ts`](../../fix-back/src/
 | Variable | Used by | Required for | Notes |
 |----------|---------|--------------|-------|
 | `ACTION` | [main.ts](../../fix-back/src/main.ts) | ACTION mode only | e.g. `DETECT_STAGNANT_DI`, `SYNC_GOOGLE_SHEETS`. Unset = NORMAL server. |
-| `GOOGLE_SERVICE_ACCOUNT_EMAIL` | [google-sheets.client.ts:39](../../fix-back/src/google-sheets/google-sheets.client.ts#L39) | Google Sheets sync | Service-account email |
-| `GOOGLE_PRIVATE_KEY` | [google-sheets.client.ts:43](../../fix-back/src/google-sheets/google-sheets.client.ts#L43) | Google Sheets sync | Service-account private key (PEM; usually needs `\n` un-escaping) |
+| `GOOGLE_OAUTH_CLIENT_ID` | [google-auth.service.ts](../../fix-back/src/google-auth/google-auth.service.ts) | Google Drive + Sheets | OAuth 2.0 client id (shared Gmail grant) |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | [google-auth.service.ts](../../fix-back/src/google-auth/google-auth.service.ts) | Google Drive + Sheets | OAuth 2.0 client secret |
+| `GOOGLE_OAUTH_REFRESH_TOKEN` | [google-auth.service.ts](../../fix-back/src/google-auth/google-auth.service.ts) | Google Drive + Sheets | Refresh token from the consent flow — must cover `drive.file` **+** `spreadsheets`. *(Replaces the removed `GOOGLE_SERVICE_ACCOUNT_EMAIL` / `GOOGLE_PRIVATE_KEY` — Sheets migrated off the service account 2026-07-01.)* |
 | `GOOGLE_SHEETS_ID` | [google-sheets.client.ts:79](../../fix-back/src/google-sheets/google-sheets.client.ts#L79) | Google Sheets sync | Target workbook id |
 | `GOOGLE_SHEETS_TAB` | [di-sheet.mapper.ts:43](../../fix-back/src/google-sheets/mappers/di-sheet.mapper.ts#L43) | Google Sheets sync | DI tab name / range |
 | `GOOGLE_SHEETS_STATS_TAB` | [stats-sheet.mapper.ts:29](../../fix-back/src/google-sheets/mappers/stats-sheet.mapper.ts#L29) | Google Sheets sync | Stats tab name / range |
@@ -47,7 +48,7 @@ No `.env`; config is compiled in. `ng build` swaps `environment.ts` → `environ
 ---
 
 ## Secrets handling — current state
-- There is **no secrets manager**. The only `.env`-based secrets are the Google service-account vars; the JWT secret and Discord webhook are in source.
+- There is **no secrets manager**. The `.env`-based secrets are the Google **OAuth** vars (`GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REFRESH_TOKEN`) and the Jira API token; the JWT secret and Discord webhook are in source.
 - `.env` is git-ignored, but the in-source secrets are **already in git history** — rotating them requires also scrubbing/rotating, not just moving to `.env`.
 
 ---

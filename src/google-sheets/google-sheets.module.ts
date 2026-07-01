@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ScheduleModule } from '@nestjs/schedule';
+import { GoogleAuthModule } from '../google-auth/google-auth.module';
 import { Di, DiSchema } from 'src/di/entities/di.entity';
 import { Stat, StatSchema } from 'src/stat/entities/stat.entity';
 import { GoogleSheetsClient } from './google-sheets.client';
@@ -31,6 +32,7 @@ import { SheetSyncService } from './sheet-sync.service';
 @Module({
   imports: [
     ScheduleModule.forRoot(),
+    GoogleAuthModule,
     MongooseModule.forFeature([
       { name: Di.name, schema: DiSchema },
       { name: Stat.name, schema: StatSchema },

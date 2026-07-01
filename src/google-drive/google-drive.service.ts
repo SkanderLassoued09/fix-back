@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Readable } from 'stream';
 import { google, drive_v3 } from 'googleapis';
+import { GoogleOAuthService } from '../google-auth/google-auth.service';
 
 export interface DriveFolder {
   id: string;
@@ -59,73 +60,34 @@ export class GoogleDriveService {
   /** Cache of resolved container folder ids (`company`, `client`) keyed by type. */
   private readonly containerCache = new Map<string, string>();
 
-  /** Drive scope: `drive.file` = only files/folders this app creates or opens.
-   *  Enough for the CLIENTS tree + uploads, and the least-privilege choice. */
-  private static readonly OAUTH_SCOPES = [
-    'https://www.googleapis.com/auth/drive.file',
-  ];
+  /** OAuth is centralized in `GoogleOAuthService` (shared with Google Sheets):
+   *  one Gmail grant, one refresh token, combined Drive + Sheets scopes. */
+  constructor(private readonly oauth: GoogleOAuthService) {}
 
-  /** True when Drive is configured: OAuth client + refresh token. The parent
-   *  folder is OPTIONAL — when empty, the app creates its own `CLIENTS` folder
-   *  (visible under `drive.file`). The refresh token comes from the consent flow. */
+  /** True when Drive is configured (OAuth client + refresh token present). The
+   *  parent folder is OPTIONAL — when empty, the app creates its own `CLIENTS`
+   *  folder. Delegated to the shared OAuth factory. */
   isConfigured(): boolean {
-    return (
-      !!process.env.GOOGLE_OAUTH_CLIENT_ID &&
-      !!process.env.GOOGLE_OAUTH_CLIENT_SECRET &&
-      !!process.env.GOOGLE_OAUTH_REFRESH_TOKEN
-    );
-  }
-
-  /** Build a bare OAuth2 client from `.env` (no tokens set yet). Used by both
-   *  the consent flow and the runtime client. */
-  private buildOAuthClient() {
-    const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
-    const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
-    const redirectUri =
-      process.env.GOOGLE_OAUTH_REDIRECT_URI ||
-      'http://localhost:3000/oauth/callback';
-    if (!clientId || !clientSecret) {
-      throw new Error(
-        'Google OAuth credentials missing — set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in .env',
-      );
-    }
-    return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+    return this.oauth.isConfigured();
   }
 
   /** Consent URL for the one-time setup (`GET /auth/google` redirects here).
-   *  `offline` + `consent` guarantee a refresh token is returned. */
+   *  Delegated to the shared factory, which requests the Drive + Sheets scopes. */
   generateAuthUrl(): string {
-    return this.buildOAuthClient().generateAuthUrl({
-      access_type: 'offline',
-      prompt: 'consent',
-      scope: GoogleDriveService.OAUTH_SCOPES,
-    });
+    return this.oauth.generateAuthUrl();
   }
 
   /** Exchange the `code` from the OAuth callback for tokens (incl. the refresh
-   *  token to paste into `.env`). */
+   *  token to paste into `.env`). Delegated to the shared factory. */
   async exchangeCodeForTokens(code: string) {
-    const { tokens } = await this.buildOAuthClient().getToken(code);
-    return tokens;
+    return this.oauth.exchangeCodeForTokens(code);
   }
 
   private async ensureClient(): Promise<drive_v3.Drive> {
     if (this.drive) return this.drive;
-
-    const refreshToken = process.env.GOOGLE_OAUTH_REFRESH_TOKEN;
-    if (!refreshToken) {
-      throw new Error(
-        'Google OAuth refresh token missing — run the consent flow (GET /auth/google) ' +
-          'with the quota-owning account and set GOOGLE_OAUTH_REFRESH_TOKEN in .env',
-      );
-    }
-
-    const oauth2 = this.buildOAuthClient();
-    // Only the refresh token is needed; the library mints + refreshes the
-    // access token on demand for every API call.
-    oauth2.setCredentials({ refresh_token: refreshToken });
-
-    this.drive = google.drive({ version: 'v3', auth: oauth2 });
+    // Shared OAuth2 client (refresh token set) — same grant as Google Sheets.
+    const auth = this.oauth.getAuthenticatedClient();
+    this.drive = google.drive({ version: 'v3', auth });
     return this.drive;
   }
 

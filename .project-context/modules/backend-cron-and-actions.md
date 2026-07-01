@@ -66,14 +66,14 @@ Appends DIs and a KPI snapshot to a Google Sheets workbook daily at 02:00. See f
 
 | File | Role |
 |------|------|
-| [`google-sheets.client.ts`](../../fix-back/src/google-sheets/google-sheets.client.ts) | Auth (service account) + Sheets v4 append |
+| [`google-sheets.client.ts`](../../fix-back/src/google-sheets/google-sheets.client.ts) | Auth (shared OAuth — [google-auth/](../../fix-back/src/google-auth/)) + Sheets v4 append |
 | [`sheet-sync.service.ts`](../../fix-back/src/google-sheets/sheet-sync.service.ts) | Orchestrator; iterates mappers with per-mapper try/catch; returns a summary |
 | [`sheet-sync.scheduler.ts`](../../fix-back/src/google-sheets/sheet-sync.scheduler.ts) | `@Cron(EVERY_DAY_AT_2AM)` → calls the service |
 | [`mappers/di-sheet.mapper.ts`](../../fix-back/src/google-sheets/mappers/di-sheet.mapper.ts) | 21-column DI export, last-24h window |
 | [`mappers/stats-sheet.mapper.ts`](../../fix-back/src/google-sheets/mappers/stats-sheet.mapper.ts) | one daily aggregated KPI row |
 | [`mappers/google-sheet-mapper.interface.ts`](../../fix-back/src/google-sheets/mappers/google-sheet-mapper.interface.ts) | `IGoogleSheetMapper` contract |
 
-**Env required:** `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY`, `GOOGLE_SHEETS_ID`, `GOOGLE_SHEETS_TAB`, `GOOGLE_SHEETS_STATS_TAB` (see [operations/03-environment.md](../operations/03-environment.md)).
+**Env required:** `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REFRESH_TOKEN` (shared with Drive; the token must cover the `spreadsheets` scope), `GOOGLE_SHEETS_ID`, `GOOGLE_SHEETS_TAB`, `GOOGLE_SHEETS_STATS_TAB` (see [operations/03-environment.md](../operations/03-environment.md)).
 
 **To add a synced entity:** implement a new mapper + register it in `GoogleSheetsModule`. The service is stateless.
 

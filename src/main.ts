@@ -1,13 +1,15 @@
-// Load .env BEFORE anything else imports a service that reads process.env
-// (Google Sheets client checks GOOGLE_SHEETS_ID; same bootstrap covers
-// both NORMAL and ACTION modes so one line keeps env-var setup uniform).
-import 'dotenv/config';
+// Load the SINGLE targeted env file `.env.${NODE_ENV}` BEFORE anything else
+// imports a service that reads process.env. This side-effect import REPLACES the
+// old `import 'dotenv/config'` (which loaded a plain `.env`) and must stay FIRST.
+// The environment is selected by the CLI (`bin/fixtronix.js`); default = development.
+import './config/load-env';
 
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import * as bodyParser from 'body-parser';
 import { AppModule } from './app.module';
 import { AppCronService } from './cron/cron.service';
+import { buildActionBanner, buildStartupBanner } from './config/env-banner';
 
 /**
  * Single bootstrap entrypoint, two modes:
@@ -29,6 +31,8 @@ async function bootstrap() {
 
   if (action) {
     const logger = new Logger('Action');
+    // Short one-line banner so a standalone cron logs its environment too.
+    console.log(buildActionBanner(process.env.NODE_ENV || 'development', action));
     logger.log(`ACTION started: ${action}`);
     const app = await NestFactory.createApplicationContext(AppModule, {
       logger: ['log', 'warn', 'error'],
@@ -74,7 +78,19 @@ async function bootstrap() {
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);
-  new Logger('Bootstrap').log(`Fixtronix API listening on port ${port}`);
+  // Loud, colored environment banner (green dev / amber preprod / red prod).
+  // Shows env, loaded file, DB name + port — NEVER any secret.
+  console.log(
+    '\n' +
+      buildStartupBanner({
+        nodeEnv: process.env.NODE_ENV || 'development',
+        port,
+        mongoUri: process.env.MONGODB_URI,
+      }),
+  );
+  new Logger('Bootstrap').log(
+    `Fixtronix API listening on port ${port} — env: ${process.env.NODE_ENV}`,
+  );
 }
 
 bootstrap();

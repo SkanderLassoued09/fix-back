@@ -1,9 +1,11 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { google, sheets_v4 } from 'googleapis';
+import { GoogleOAuthService } from '../google-auth/google-auth.service';
 
 /**
  * Thin client around the Google Sheets v4 API. Owns:
- *   - lazy authentication (service-account via GOOGLE_APPLICATION_CREDENTIALS)
+ *   - lazy authentication via the shared **OAuth 2.0** grant (same Gmail account
+ *     as Google Drive — see `GoogleOAuthService`; NO service account)
  *   - batched `values.append` (respects Sheets per-request size limits)
  *   - exponential retry on transient failures (429 / 5xx)
  *
@@ -19,6 +21,8 @@ export class GoogleSheetsClient implements OnModuleInit {
   private static readonly CHUNK_SIZE = 1000;
   private static readonly MAX_ATTEMPTS = 3;
 
+  constructor(private readonly oauth: GoogleOAuthService) {}
+
   async onModuleInit() {
     // Best-effort auth bootstrap — failure is non-fatal so the rest of the
     // app boots even when credentials are absent in dev. Each call later
@@ -28,7 +32,7 @@ export class GoogleSheetsClient implements OnModuleInit {
     } catch (err) {
       this.logger.warn(
         `Google Sheets auth not initialized at boot: ${(err as Error).message}. ` +
-          `Set GOOGLE_APPLICATION_CREDENTIALS to enable sync.`,
+          `Run the OAuth consent flow (GET /auth/google) and set GOOGLE_OAUTH_REFRESH_TOKEN to enable sync.`,
       );
     }
   }
@@ -36,26 +40,9 @@ export class GoogleSheetsClient implements OnModuleInit {
   private async ensureClient(): Promise<sheets_v4.Sheets> {
     if (this.sheets) return this.sheets;
 
-    const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-    // GOOGLE_PRIVATE_KEY in .env stores newlines as the literal `\n` sequence
-    // so the line stays single-line in the file. Restore real newlines before
-    // handing the PEM to GoogleAuth — otherwise the JWT signer rejects it.
-    const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-
-    if (!clientEmail || !privateKey) {
-      throw new Error(
-        'Google Sheets credentials missing — set GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY in .env',
-      );
-    }
-
-    const auth = new google.auth.GoogleAuth({
-      credentials: {
-        client_email: clientEmail,
-        private_key: privateKey,
-      },
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    });
-
+    // OAuth 2.0 — the SAME Gmail grant Google Drive uses (shared factory). The
+    // account owns the spreadsheets, so no service-account sharing is needed.
+    const auth = this.oauth.getAuthenticatedClient();
     this.sheets = google.sheets({ version: 'v4', auth });
     return this.sheets;
   }
@@ -173,10 +160,12 @@ export class GoogleSheetsClient implements OnModuleInit {
     tabName: string,
     headerRow?: string[],
   ): Promise<void> {
-    const meta = await sheets.spreadsheets.get({
-      spreadsheetId,
-      fields: 'sheets.properties(title)',
-    });
+    const meta = await this.callWithRetry(`get meta`, () =>
+      sheets.spreadsheets.get({
+        spreadsheetId,
+        fields: 'sheets.properties(title)',
+      }),
+    );
     const existing =
       meta.data.sheets?.some((s) => s.properties?.title === tabName) ?? false;
     if (existing) return;
@@ -242,6 +231,37 @@ export class GoogleSheetsClient implements OnModuleInit {
         await new Promise((r) => setTimeout(r, backoffMs));
       }
     }
-    throw lastErr;
+    throw this.clarifyScopeError(lastErr);
+  }
+
+  /**
+   * Turn Google's opaque 403 "insufficient authentication scopes" into an
+   * actionable message: the shared OAuth refresh token predates the Sheets
+   * scope and must be re-consented (Drive alone won't grant Sheets access).
+   * Non-scope errors pass through unchanged.
+   */
+  private clarifyScopeError(err: unknown): unknown {
+    const code = (err as any)?.code ?? (err as any)?.response?.status;
+    const status = (err as any)?.response?.data?.error?.status;
+    const message = String(
+      (err as any)?.response?.data?.error?.message ??
+        (err as any)?.errors?.[0]?.message ??
+        (err as any)?.message ??
+        '',
+    );
+    const insufficientScope =
+      code === 403 &&
+      (/insufficient/i.test(message) ||
+        /ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(message) ||
+        status === 'PERMISSION_DENIED');
+    if (insufficientScope) {
+      return new Error(
+        "Google Sheets: le refresh token OAuth ne couvre pas le scope 'spreadsheets'. " +
+          'Relancez le consentement (GET /auth/google) avec le compte Gmail propriétaire ' +
+          'pour régénérer un refresh token couvrant Drive + Sheets, puis mettez à jour ' +
+          'GOOGLE_OAUTH_REFRESH_TOKEN dans .env.',
+      );
+    }
+    return err;
   }
 }
