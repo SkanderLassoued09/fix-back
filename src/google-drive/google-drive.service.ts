@@ -306,22 +306,29 @@ export class GoogleDriveService {
   }
 
   /**
-   * Find-or-create the `CLIENTS` parent folder, CREATED BY THIS OAUTH APP at the
-   * Drive root — so it is visible under the `drive.file` scope (which only sees
-   * what the app created). The whole `CLIENTS/...` subtree then lives under it.
-   * Cached; the id is logged so it can optionally be frozen in
+   * Find-or-create the root parent folder, CREATED BY THIS OAUTH APP at
+   * the Drive root — so it is visible under the `drive.file` scope
+   * (which only sees what the app created). All company/client subtrees
+   * then live under it.
+   *
+   * The name is env-driven so each environment can have its own root
+   * (`FIXTRONIX-ERP-DEV` in dev, `CLIENTS` in prod, etc.) without a
+   * code change. Fallback: `CLIENTS` (legacy default). Cached; the id
+   * is logged so it can optionally be frozen in
    * `GOOGLE_DRIVE_PARENT_FOLDER_ID`.
    */
   private async ensureRootClientsFolder(
     drive: drive_v3.Drive,
   ): Promise<string> {
-    const cacheKey = '__rootClients';
+    const rootName =
+      process.env.GOOGLE_DRIVE_ROOT_FOLDER_NAME?.trim() || 'CLIENTS';
+    const cacheKey = `__root:${rootName}`;
     const cached = this.containerCache.get(cacheKey);
     if (cached) return cached;
-    const folder = await this.ensureFolder(drive, 'CLIENTS', 'root');
+    const folder = await this.ensureFolder(drive, rootName, 'root');
     this.containerCache.set(cacheKey, folder.id);
     this.logger.log(
-      `CLIENTS parent folder ready (id=${folder.id}). ` +
+      `Root folder "${rootName}" ready (id=${folder.id}). ` +
         `Set GOOGLE_DRIVE_PARENT_FOLDER_ID=${folder.id} to freeze it.`,
     );
     return folder.id;
