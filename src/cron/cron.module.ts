@@ -7,6 +7,7 @@ import { AuditModule } from 'src/audit/audit.module';
 import { StagnationModule } from 'src/stagnation/stagnation.module';
 import { GoogleSheetsModule } from 'src/google-sheets/google-sheets.module';
 import { JiraCronNotificationModule } from 'src/jira-cron-notification/jira-cron-notification.module';
+import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { JiraCronNotificationModule } from 'src/jira-cron-notification/jira-cron
     StagnationModule,
     GoogleSheetsModule,
     JiraCronNotificationModule,
+    DiscordHookModule,
     ScheduleModule.forRoot(),
   ],
   providers: [AppCronService, NotificationsGateway],

@@ -12,6 +12,7 @@ import { ComposantModule } from './composant/composant.module';
 import { ComposantCategoryModule } from './composant_category/composant_category.module';
 import { DiCategoryModule } from './di_category/di_category.module';
 import { DiModule } from './di/di.module';
+import { DiArchiveModule } from './di-archive/di-archive.module';
 import { TarifModule } from './tarif/tarif.module';
 import { RemarqueModule } from './remarque/remarque.module';
 import { ProfileModule } from './profile/profile.module';
@@ -86,6 +87,7 @@ import { ReunionPVModule } from './reunion-pv/reunion-pv.module';
     ComposantCategoryModule,
     DiCategoryModule,
     DiModule,
+    DiArchiveModule,
     TarifModule,
     RemarqueModule,
     StatModule,

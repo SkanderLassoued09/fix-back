@@ -99,6 +99,41 @@ export class DiscordHookService {
     @InjectModel(Profile.name) private readonly profileModel: Model<any>,
   ) {}
 
+  /**
+   * Diagnostic — post a SELF-IDENTIFYING test embed to an ARBITRARY webhook URL.
+   * Used by the `TEST_DISCORD_CHANNELS` action to verify each of the env's 5
+   * Discord channels is wired to the right server/channel. Throws on HTTP
+   * failure so the caller can report per-channel success/failure.
+   */
+  async sendTestEmbed(
+    webhookUrl: string,
+    channelName: string,
+    nodeEnv: string,
+  ): Promise<void> {
+    const envUpper = (nodeEnv || '').toUpperCase();
+    const tunis = new Intl.DateTimeFormat('fr-FR', {
+      timeZone: 'Africa/Tunis',
+      dateStyle: 'short',
+      timeStyle: 'medium',
+    }).format(new Date());
+    await axios.post(webhookUrl, {
+      embeds: [
+        {
+          title: `🔔 TEST WEBHOOK — [${envUpper}]`,
+          description: `Si vous voyez ce message, le canal **${channelName}** de l'environnement **${nodeEnv}** est correctement câblé.`,
+          color: 3447003, // blue
+          fields: [
+            { name: 'Canal', value: channelName, inline: true },
+            { name: 'Environnement', value: envUpper, inline: true },
+            { name: '🕐 Heure (Africa/Tunis)', value: tunis, inline: false },
+          ],
+          footer: { text: 'Fixtronix — diagnostic webhooks' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
   // ─────────────────────────────────────────────────────────────────────
   // Centralized resolvers — every embed routes through these so no raw
   // ObjectIds, UUIDs, or enum values can leak to Discord.

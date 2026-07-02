@@ -8,6 +8,19 @@ import { NotificationsGateway } from 'src/notification.gateway';
 import { StagnationService } from 'src/stagnation/stagnation.service';
 import { SheetSyncService } from 'src/google-sheets/sheet-sync.service';
 import { JiraCronNotificationService } from 'src/jira-cron-notification/jira-cron-notification.service';
+import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
+
+/**
+ * The 5 Discord channels of an environment, mapped to the EXACT env vars read
+ * from `.env.<env>`. Add a channel = one entry here.
+ */
+const DISCORD_TEST_CHANNELS: Array<{ name: string; envVar: string }> = [
+  { name: 'general-atelier', envVar: 'DISCORD_GENERAL_ATELIER_WEBHOOK' },
+  { name: 'demande-pdf', envVar: 'DISCORD_DEMANDE_PDF_WEBHOOK' },
+  { name: 'service-technique', envVar: 'DISCORD_SERVICE_TECHNIQUE_WEBHOOK' },
+  { name: 'error', envVar: 'DISCORD_ERROR_WEBHOOK' },
+  { name: 'app-alert', envVar: 'DISCORD_APP_ALERT_WEBHOOK' },
+];
 
 @Injectable()
 export class AppCronService {
@@ -20,6 +33,7 @@ export class AppCronService {
     private readonly stagnationService: StagnationService,
     private readonly sheetSyncService: SheetSyncService,
     private readonly jiraCronNotificationService: JiraCronNotificationService,
+    private readonly discordHookService: DiscordHookService,
   ) {}
 
   /**
@@ -44,9 +58,66 @@ export class AppCronService {
       case 'SYNC_JIRA_TASKS':
         await this.triggerJiraTasksSync();
         break;
+      case 'TEST_DISCORD_CHANNELS':
+        await this.triggerTestDiscordChannels();
+        break;
       default:
         this.logger.error(`Unknown ACTION: ${action}`);
     }
+  }
+
+  /**
+   * Diagnostic — post a self-identifying test embed to EACH of the active env's
+   * 5 Discord channels, to visually confirm every webhook points to the right
+   * server/channel. Read-only (no DB writes).
+   *
+   * PROD GUARD: disabled in `production` — no test messages in live channels
+   * (the wiring is identical, so dev+preprod OK ⇒ prod OK).
+   *
+   * Robustness: each channel is sent in its own try/catch — a failure logs +
+   * continues, never blocking the others. Sets `process.exitCode = 1` if ≥1
+   * channel failed (0 if all 5 OK), so a misconfigured/revoked webhook is
+   * caught by the exit code. Returns a summary for testability.
+   */
+  async triggerTestDiscordChannels(): Promise<{
+    skipped: boolean;
+    total: number;
+    ok: number;
+    failed: number;
+  }> {
+    const nodeEnv = (process.env.NODE_ENV || 'development').trim();
+
+    if (nodeEnv === 'production') {
+      this.logger.warn(
+        'TEST_DISCORD_CHANNELS désactivé en production — aucun message de test envoyé.',
+      );
+      return { skipped: true, total: 0, ok: 0, failed: 0 };
+    }
+
+    let ok = 0;
+    let failed = 0;
+    for (const ch of DISCORD_TEST_CHANNELS) {
+      const url = (process.env[ch.envVar] || '').trim();
+      try {
+        if (!url) {
+          throw new Error(`webhook non configuré (${ch.envVar})`);
+        }
+        await this.discordHookService.sendTestEmbed(url, ch.name, nodeEnv);
+        ok++;
+        this.logger.log(`✅ [${nodeEnv}] canal « ${ch.name} » : envoi OK`);
+      } catch (err) {
+        failed++;
+        this.logger.error(
+          `❌ [${nodeEnv}] canal « ${ch.name} » : échec — ${(err as Error)?.message ?? err}`,
+        );
+      }
+    }
+
+    this.logger.log(
+      `TEST_DISCORD_CHANNELS [${nodeEnv}] : ${ok}/${DISCORD_TEST_CHANNELS.length} OK, ${failed} échec(s).`,
+    );
+    if (failed > 0) process.exitCode = 1;
+    return { skipped: false, total: DISCORD_TEST_CHANNELS.length, ok, failed };
   }
 
   /**
