@@ -1,10 +1,24 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import axios from 'axios';
 import { Client } from 'src/clients/entities/client.entity';
 import { Company } from 'src/company/entities/company.entity';
 import { Profile } from 'src/profile/entities/profile.entity';
+
+/**
+ * Channels — each `sendXxx` posts through `postEmbed(channel, payload)`.
+ * Every env file (`.env.{development,preprod,production}`) declares one
+ * webhook URL per channel; a missing one is logged ONCE and the post is
+ * silently skipped (never throws) so a partial config can't cascade a
+ * failure through a DI-create call.
+ */
+type ChannelKey =
+  | 'GENERAL_ATELIER'
+  | 'SERVICE_TECHNIQUE'
+  | 'DEMANDE_PDF'
+  | 'ERROR'
+  | 'APP_ALERT';
 
 // Centralized human-readable status labels with color emoji prefix.
 // New raw enum values added to STATUS_DI MUST be added here so embeds
@@ -42,55 +56,70 @@ interface EmbedContext {
   statusLabel: string;
 }
 
-// Hard kill-switch: silences EVERY DI-events post (pause / resume / started /
-// assigned / reparation*) regardless of env. Flip to `false` to re-enable.
-// Reason: user reported the atelier-general channel was still receiving
-// "Diagnostic Paused" pings even after setting DISCORD_DI_EVENTS_ENABLED=false
-// (env values are read once at process start — stale on a non-restarted dev
-// server). Hardcoding here removes the restart dependency.
-const DI_EVENTS_FORCE_OFF = true;
-
 @Injectable()
 export class DiscordHookService {
-  // Critical operational-alerts webhook — now read from env (was hardcoded).
-  private readonly webhookUrl = process.env.DISCORD_WEBHOOK_URL ?? '';
-  // Dedicated channel for DI flow events (affectation / pause / réparation).
-  // Falls back to the critical webhook if unset so behaviour never breaks.
-  // Kill-switches: (a) module-level `DI_EVENTS_FORCE_OFF` above, (b) env
-  // `DISCORD_DI_EVENTS_ENABLED=false`. Either one silences all sendXxx posts
-  // that target this URL — every method guards with `if (!this.diEventsWebhookUrl) return;`.
-  // Implemented as a getter (not a readonly field) so flipping the constant
-  // takes effect on the next call — no re-instantiation needed.
-  private get diEventsWebhookUrl(): string {
-    if (DI_EVENTS_FORCE_OFF) return '';
-    if (
-      String(process.env.DISCORD_DI_EVENTS_ENABLED ?? 'true').toLowerCase() ===
-      'false'
-    ) {
-      return '';
+  private readonly logger = new Logger(DiscordHookService.name);
+  /** Tracks channels whose URL was already reported missing — one warn
+   *  per channel per process to avoid spamming logs on every send. */
+  private readonly warnedMissing = new Set<ChannelKey>();
+
+  /**
+   * Resolve the webhook URL for a given channel from env. Every channel
+   * falls back to the legacy `DISCORD_WEBHOOK_URL` when its dedicated
+   * env var is empty, so a partially migrated `.env` (dev machine still
+   * carrying the old single-webhook) keeps working.
+   */
+  private urlFor(channel: ChannelKey): string {
+    const legacy = process.env.DISCORD_WEBHOOK_URL || '';
+    switch (channel) {
+      case 'GENERAL_ATELIER':
+        return process.env.DISCORD_GENERAL_ATELIER_WEBHOOK || legacy;
+      case 'SERVICE_TECHNIQUE':
+        return process.env.DISCORD_SERVICE_TECHNIQUE_WEBHOOK || legacy;
+      case 'DEMANDE_PDF':
+        return process.env.DISCORD_DEMANDE_PDF_WEBHOOK || legacy;
+      case 'ERROR':
+        return process.env.DISCORD_ERROR_WEBHOOK || legacy;
+      case 'APP_ALERT':
+        return process.env.DISCORD_APP_ALERT_WEBHOOK || legacy;
     }
-    return (
-      process.env.DISCORD_DI_EVENTS_WEBHOOK_URL ||
-      process.env.DISCORD_WEBHOOK_URL ||
-      ''
-    );
   }
 
   /**
-   * Dedicated channel for ReunionPV events. Falls back to the critical
-   * webhook when `DISCORD_PV_WEBHOOK_URL` is unset so the channel split
-   * (dev/test/prod) can be configured at any time without code changes.
+   * Single post entry-point. NEVER throws:
+   *   - missing URL → warn once, skip (a create-DI mutation can no longer
+   *     crash because a webhook env var was forgotten)
+   *   - axios failure → warn (already the pattern in the codebase — the
+   *     Discord post is always best-effort)
    */
-  private get pvWebhookUrl(): string {
-    return (
-      process.env.DISCORD_PV_WEBHOOK_URL || process.env.DISCORD_WEBHOOK_URL || ''
-    );
+  private async postEmbed(
+    channel: ChannelKey,
+    payload: object,
+  ): Promise<void> {
+    const url = this.urlFor(channel);
+    if (!url) {
+      if (!this.warnedMissing.has(channel)) {
+        this.warnedMissing.add(channel);
+        this.logger.warn(
+          `Discord channel "${channel}" webhook is not configured → post skipped`,
+        );
+      }
+      return;
+    }
+    try {
+      await axios.post(url, payload);
+    } catch (err) {
+      this.logger.warn(
+        `Discord post to "${channel}" failed: ${(err as Error)?.message}`,
+      );
+    }
   }
 
-  /** True when a PV/Jira-digest webhook is configured — lets the Jira-notify
-   *  cron skip cleanly (no claim) instead of claiming docs it can't deliver. */
+  /** True when the Jira-digest channel (APP_ALERT) is reachable — lets
+   *  the Jira-notify cron skip cleanly instead of claiming docs it can't
+   *  deliver. Named for backwards compatibility with existing callers. */
   get isPvConfigured(): boolean {
-    return !!this.pvWebhookUrl;
+    return !!this.urlFor('SERVICE_TECHNIQUE');
   }
 
   constructor(
@@ -263,13 +292,10 @@ export class DiscordHookService {
   // ─────────────────────────────────────────────────────────────────────
 
   async sendDiPendingNotification(di: any) {
-    if (!this.webhookUrl) {
-      throw new Error('DISCORD_WEBHOOK_URL is not defined');
-    }
     const ctx = await this.buildContext(di);
     const createdBy = await this.resolveProfileDisplay(di?.createdBy);
 
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '📌 DI Pending',
@@ -301,7 +327,7 @@ export class DiscordHookService {
     });
     const techDisplay = await this.resolveProfileDisplay(technician);
 
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '🛠️ DI Assigned to Technician',
@@ -319,7 +345,7 @@ export class DiscordHookService {
 
   async sendComponentsSentToCoordinator(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '📦 Components Sent for Confirmation',
@@ -338,7 +364,7 @@ export class DiscordHookService {
 
   async sendComponentsConfirmedByCoordinator(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '✅ Components Confirmed by Coordinator',
@@ -358,7 +384,7 @@ export class DiscordHookService {
 
   async sendDiInMagasin(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '🏬 DI Arrived in Magasin',
@@ -374,7 +400,7 @@ export class DiscordHookService {
 
   async sendDiStatusPending3(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '🚚 DI Moved to Pending3',
@@ -390,7 +416,7 @@ export class DiscordHookService {
 
   async sendDiDevisUploaded({ di, fileName }: { di: any; fileName: string }) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('DEMANDE_PDF', {
       embeds: [
         {
           title: '🧾 Devis Uploaded',
@@ -408,7 +434,7 @@ export class DiscordHookService {
 
   async sendDiBCUploaded({ di, fileName }: { di: any; fileName: string }) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('DEMANDE_PDF', {
       embeds: [
         {
           title: '📄 Bon de Commande Uploaded',
@@ -426,7 +452,7 @@ export class DiscordHookService {
 
   async sendDiPriceAssigned({ di, price }: { di: any; price: number }) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '💰 DI Price Assigned',
@@ -444,7 +470,7 @@ export class DiscordHookService {
 
   async sendDiStatusPending2(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '📦 DI Status Updated',
@@ -460,7 +486,7 @@ export class DiscordHookService {
 
   async sendDiPricing(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '💰 DI Ready for Pricing',
@@ -476,7 +502,7 @@ export class DiscordHookService {
 
   async sendDiStatusPending1(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '🆕 DI Created (Pending1)',
@@ -493,7 +519,7 @@ export class DiscordHookService {
   async sendDiIgnored(di: any) {
     const ctx = await this.buildContext(di);
     const isMax = (di?.ignoreCount || 0) >= 3;
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: isMax ? '⚠️ DI Ignored (Limit Reached)' : '⚠️ DI Ignored',
@@ -517,7 +543,7 @@ export class DiscordHookService {
 
   async sendDiFinished(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '🎉 DI Completed',
@@ -540,7 +566,7 @@ export class DiscordHookService {
   async sendDiInReparation(di: any) {
     // Called when status is REPARATION — assigned but not yet started.
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '🛠️ DI Ready for Reparation',
@@ -560,7 +586,7 @@ export class DiscordHookService {
     const repairable = diag?.can_be_repaired
       ? '✅ Repairable'
       : '🚫 Not Repairable';
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '✅ Diagnostic Completed',
@@ -593,10 +619,10 @@ export class DiscordHookService {
   // ── Pause / Resume / Started / Assigned (workflow refinements) ──────
 
   async sendDiagnosticPaused(di: any) {
-    if (!this.diEventsWebhookUrl) return;
+
     const ctx = await this.buildContext(di);
     const note = di?.remarque_tech_diagnostic;
-    await axios.post(this.diEventsWebhookUrl, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '⏸️ Diagnostic Paused',
@@ -616,7 +642,7 @@ export class DiscordHookService {
 
   async sendDiagnosticResumed(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '▶️ Diagnostic Resumed',
@@ -632,7 +658,7 @@ export class DiscordHookService {
 
   async sendDiagnosticStarted(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '🔍 Diagnostic Started',
@@ -647,9 +673,9 @@ export class DiscordHookService {
   }
 
   async sendDiagnosticAssigned(di: any) {
-    if (!this.diEventsWebhookUrl) return;
+
     const ctx = await this.buildContext(di);
-    await axios.post(this.diEventsWebhookUrl, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '🧭 Diagnostic Assigned',
@@ -664,9 +690,9 @@ export class DiscordHookService {
   }
 
   async sendReparationStarted(di: any) {
-    if (!this.diEventsWebhookUrl) return;
+
     const ctx = await this.buildContext(di);
-    await axios.post(this.diEventsWebhookUrl, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '🔧 Reparation Started',
@@ -681,10 +707,10 @@ export class DiscordHookService {
   }
 
   async sendReparationPaused(di: any) {
-    if (!this.diEventsWebhookUrl) return;
+
     const ctx = await this.buildContext(di);
     const note = di?.remarque_tech_repair;
-    await axios.post(this.diEventsWebhookUrl, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '⏸️ Reparation Paused',
@@ -703,9 +729,9 @@ export class DiscordHookService {
   }
 
   async sendReparationResumed(di: any) {
-    if (!this.diEventsWebhookUrl) return;
+
     const ctx = await this.buildContext(di);
-    await axios.post(this.diEventsWebhookUrl, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '▶️ Reparation Resumed',
@@ -721,7 +747,7 @@ export class DiscordHookService {
 
   async sendDiNegotiation1(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '🤝 Negotiation Started (Manager)',
@@ -743,7 +769,7 @@ export class DiscordHookService {
 
   async sendDiNegotiation2(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '🤝 Negotiation Escalated (Admin Manager)',
@@ -770,7 +796,7 @@ export class DiscordHookService {
 
   async sendDiCancelled(di: any) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '❌ DI Cancelled',
@@ -797,7 +823,7 @@ export class DiscordHookService {
       2: 'DI returned a second time.',
       3: 'DI reached the final retour level. Operational attention required.',
     };
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: titles[level],
@@ -819,7 +845,7 @@ export class DiscordHookService {
 
   async sendDiBLUploaded({ di, fileName }: { di: any; fileName: string }) {
     const ctx = await this.buildContext(di);
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('DEMANDE_PDF', {
       embeds: [
         {
           title: '📦 Bon de Livraison Uploaded',
@@ -854,10 +880,6 @@ export class DiscordHookService {
     message: string;
     payload?: Record<string, any>;
   }) {
-    if (!this.webhookUrl) {
-      throw new Error('DISCORD_WEBHOOK_URL is not defined');
-    }
-
     const severityColor: Record<string, number> = {
       CRITICAL: 15158332, // red
       HIGH: 15158332, // red
@@ -879,7 +901,7 @@ export class DiscordHookService {
       payloadPreview = '```json\n' + (json.length > 800 ? json.slice(0, 797) + '...' : json) + '\n```';
     }
 
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('ERROR', {
       embeds: [
         {
           title: `${severityEmoji[entry.severity] ?? '⚠️'} FIXTRONIX Operational Error`,
@@ -913,9 +935,15 @@ export class DiscordHookService {
     messages: { message: string; drift: boolean }[];
     suppressed?: number;
   }) {
+    // Legacy dev-only channel; separate from the 5 channel-migration URLs.
+    // Off in prod (DISCORD_NOTIFY_VALIDATION=false). Skip silently if no
+    // URL configured so a missing var never breaks the drift-watch path.
     const url = process.env.DISCORD_VALIDATION_WEBHOOK_URL;
     if (!url) {
-      throw new Error('DISCORD_VALIDATION_WEBHOOK_URL is not defined');
+      this.logger.warn(
+        'DISCORD_VALIDATION_WEBHOOK_URL not set → validation error not sent',
+      );
+      return;
     }
     const hasDrift = entry.messages.some((m) => m.drift);
     const lines = entry.messages
@@ -964,10 +992,6 @@ export class DiscordHookService {
     metadata?: Record<string, any>;
     createdAt?: Date;
   }) {
-    if (!this.webhookUrl) {
-      throw new Error('DISCORD_WEBHOOK_URL is not defined');
-    }
-
     const meta = alert.metadata ?? {};
     const ageHours =
       typeof meta.ageMs === 'number'
@@ -987,7 +1011,7 @@ export class DiscordHookService {
       INFO: 'ℹ️',
     };
 
-    await axios.post(this.webhookUrl, {
+    await this.postEmbed('APP_ALERT', {
       embeds: [
         {
           title: `${severityEmoji[alert.severity] ?? '⚠️'} FIXTRONIX Operational Alert`,
@@ -1035,14 +1059,14 @@ export class DiscordHookService {
     profile?: any;
     categoryName?: string;
   }) {
-    if (!this.diEventsWebhookUrl) return;
+
     const author = await this.resolveProfileDisplay(profile);
     const role = profile?.role ? ` · ${profile.role}` : '';
     const priceLine = (v: any) =>
       Number.isFinite(Number(v))
         ? `${Number(v).toLocaleString('fr-TN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} TND`
         : '—';
-    await axios.post(this.diEventsWebhookUrl, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '🧩 Nouveau composant catalogue',
@@ -1104,7 +1128,7 @@ export class DiscordHookService {
     assignedBy?: any;
     activeDiCount?: number;
   }) {
-    if (!this.diEventsWebhookUrl) return;
+
     const ctx = await this.buildContext(di);
     const techDisplay = await this.resolveProfileDisplay(technician);
     const assignerDisplay = await this.resolveProfileDisplay(assignedBy);
@@ -1125,7 +1149,7 @@ export class DiscordHookService {
         inline: true,
       });
     }
-    await axios.post(this.diEventsWebhookUrl, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '🛠️ Réparation affectée',
@@ -1155,8 +1179,6 @@ export class DiscordHookService {
     di?: any;
     profile?: any;
   }) {
-    const url = this.pvWebhookUrl;
-    if (!url) return;
     const authorName = profile
       ? `${profile.firstName ?? ''} ${profile.lastName ?? ''}`.trim() ||
         profile.username ||
@@ -1184,7 +1206,7 @@ export class DiscordHookService {
         inline: true,
       });
     }
-    await axios.post(url, {
+    await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
           title: '📄 Procès-Verbal de Réunion',
@@ -1217,11 +1239,6 @@ export class DiscordHookService {
       url?: string;
     }>,
   ): Promise<void> {
-    const url = this.pvWebhookUrl;
-    if (!url) {
-      throw new Error('DISCORD_PV_WEBHOOK_URL not configured');
-    }
-
     // Section by responsable (null/empty → "Non assigné").
     const groups = new Map<string, typeof items>();
     for (const it of items) {
@@ -1250,7 +1267,7 @@ export class DiscordHookService {
         .slice(0, 1024),
     }));
 
-    await axios.post(url, {
+    await this.postEmbed('APP_ALERT', {
       embeds: [
         {
           title: '⏰ Tâches Jira proches échéance',
