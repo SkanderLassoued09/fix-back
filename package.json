@@ -23,6 +23,8 @@
     "action:sync-actions-en-cours:dev": "node bin/fixtronix.js dev --action SYNC_ACTIONS_EN_COURS",
     "action:sync-jira-due-soon:dev": "node bin/fixtronix.js dev --action SYNC_JIRA_DUE_SOON",
     "action:sync-jira-tasks:dev": "node bin/fixtronix.js dev --action SYNC_JIRA_TASKS",
+    "action:test-discord-channels:dev": "node bin/fixtronix.js dev --action TEST_DISCORD_CHANNELS",
+    "action:test-discord-channels:preprod": "node bin/fixtronix.js preprod --action TEST_DISCORD_CHANNELS",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
