@@ -34,6 +34,8 @@ describe('AppCronService — TEST_DISCORD_CHANNELS', () => {
     svc = new AppCronService(
       {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
       discord as any,
+      // DiArchiveDigestService — not used in TEST_DISCORD_CHANNELS specs.
+      {} as any,
     );
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
   });

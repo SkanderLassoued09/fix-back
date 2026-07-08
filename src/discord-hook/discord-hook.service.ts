@@ -92,7 +92,7 @@ export class DiscordHookService {
    *   - axios failure → warn (already the pattern in the codebase — the
    *     Discord post is always best-effort)
    */
-  private async postEmbed(
+  async postEmbed(
     channel: ChannelKey,
     payload: object,
   ): Promise<void> {
