@@ -68,18 +68,13 @@ if (flagIdx !== -1) {
 }
 if (rest.length && !action) fail("Nom d'action manquant après --action.");
 
+// Serve vs action: the CLI `--action NAME` picks the runtime, but an inherited
+// `ACTION=NAME` env (the Unix `ACTION=X npm run start:dev` form) is ALSO honored
+// by main.ts. NOTE (Windows): `set ACTION=NAME` PERSISTS across commands, so it
+// can hijack a later `start:*` into a cron — on Windows prefer `npm run action:*`.
 const [cmd, args] = action ? cfg.action : cfg.serve;
 const childEnv = { ...process.env, NODE_ENV: cfg.nodeEnv };
-if (action) {
-  childEnv.ACTION = action;
-} else {
-  // SERVE mode: DROP any ACTION inherited from the shell. On Windows a
-  // `set ACTION=NAME` persists across commands, so a leftover cron name would
-  // otherwise hijack `start:dev|preprod|prod` into ACTION mode (no HTTP server).
-  // The serve/action choice comes ONLY from the CLI here — to run a cron pass it
-  // EXPLICITLY: `node bin/fixtronix.js <env> --action <NAME>` (or `npm run action:*`).
-  delete childEnv.ACTION;
-}
+if (action) childEnv.ACTION = action;
 
 const child = spawn(cmd, args, {
   stdio: 'inherit',
