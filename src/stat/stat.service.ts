@@ -408,7 +408,10 @@ export class StatService {
           }
         : {};
 
-    const isAdmin = ['ADMIN_MANAGER', 'ADMIN_TECH'].includes(role);
+    // ADMIN_TECH is a hands-on technician: like TECH it must see ONLY its own
+    // assigned DIs (id_tech_diag / id_tech_rep), so the tech list + its per-row
+    // diag/rep buttons work for it. Only ADMIN_MANAGER gets the full "see all".
+    const isAdmin = role === 'ADMIN_MANAGER';
 
     const techFilter = isAdmin
       ? {}
@@ -627,7 +630,10 @@ export class StatService {
         : {};
 
     // Check if user has admin roles
-    const isAdmin = ['ADMIN_MANAGER', 'ADMIN_TECH'].includes(role);
+    // ADMIN_TECH is a hands-on technician: like TECH it must see ONLY its own
+    // assigned DIs (id_tech_diag / id_tech_rep), so the tech list + its per-row
+    // diag/rep buttons work for it. Only ADMIN_MANAGER gets the full "see all".
+    const isAdmin = role === 'ADMIN_MANAGER';
 
     // Build the technician filter based on role
     const techFilter = isAdmin
