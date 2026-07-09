@@ -2,11 +2,29 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
-import {
-  DiArchiveDocument,
-  StatutCompletude,
-} from './entities/di-archive.entity';
+import { DiArchiveDocument } from './entities/di-archive.entity';
 import { DigestSnapshotDocument } from './entities/digest-snapshot.entity';
+
+/**
+ * A document text-ref is MISSING when the registry value is one of the
+ * "empty" sentinels: null / undefined / empty / whitespace-only / `_` /
+ * `Sans` (any case). Anything else — a real reference, a business marker
+ * (`ANNULER`, `IRREPARABLE`), a payment mode (`EMAIL`, `ESP`), a phone
+ * (`6200…`), an OK stamp — is PRESENT. Trim + case-insensitive so
+ * `Sans`/`SANS`/`  sans  ` all fall to missing.
+ *
+ * The rule intentionally ignores the paired `DriveDocRef` (`bc`/`bl`/…)
+ * — a future job will chase the actual uploads; this digest reports the
+ * registry-side gap.
+ */
+export function isDocMissing(value: unknown): boolean {
+  if (value == null) return true;
+  const s = String(value).trim();
+  if (s === '') return true;
+  if (s === '_') return true;
+  if (/^sans$/i.test(s)) return true;
+  return false;
+}
 
 /**
  * DIGEST_DI_ARCHIVE_INCOMPLETES — daily documentary-completion report.
@@ -61,26 +79,34 @@ export class DiArchiveDigestService {
     posted: boolean;
   }> {
     // ── 1. Read metrics ────────────────────────────────────────────
-    // Total across every statutCompletude (COMPLET + CLOTURE + INCOMPLET)
-    // — needed for the completion percentage denominator.
-    const total = await this.diArchiveModel.countDocuments({});
-
-    // Only the incompletes carry a per-doc breakdown, so we project
-    // just the 4 doc slots for those rows. Read-only; no side effects.
-    const incompletes = await this.diArchiveModel
-      .find(
-        { statutCompletude: StatutCompletude.INCOMPLET },
-        { bc: 1, bl: 1, devis: 1, facture: 1 },
-      )
+    // Single pass over the whole collection. `.lean()` returns plain
+    // objects (no Mongoose overhead) and we project only the 4 text refs
+    // we need — the `DriveDocRef` slots are intentionally IGNORED here
+    // (uploads are tracked by a separate future job).
+    //
+    // Read-only: no writes on DiArchive anywhere in this flow.
+    const rows = await this.diArchiveModel
+      .find({}, { bcRef: 1, blRef: 1, devisRef: 1, factureRef: 1 })
       .lean();
 
-    const totalIncompletes = incompletes.length;
+    const total = rows.length;
     const missing = { bc: 0, bl: 0, devis: 0, facture: 0 };
-    for (const r of incompletes as Array<any>) {
-      if (!r?.bc) missing.bc++;
-      if (!r?.bl) missing.bl++;
-      if (!r?.devis) missing.devis++;
-      if (!r?.facture) missing.facture++;
+    let totalIncompletes = 0;
+    for (const r of rows as Array<any>) {
+      // Per-doc missing → per-doc counter (the 4 counters can and should
+      // differ, because the missing pattern is different per column).
+      const bcMissing = isDocMissing(r?.bcRef);
+      const blMissing = isDocMissing(r?.blRef);
+      const devisMissing = isDocMissing(r?.devisRef);
+      const factureMissing = isDocMissing(r?.factureRef);
+      if (bcMissing) missing.bc++;
+      if (blMissing) missing.bl++;
+      if (devisMissing) missing.devis++;
+      if (factureMissing) missing.facture++;
+      // Complétude d'une DI : au moins un manquant ⇒ INCOMPLET.
+      if (bcMissing || blMissing || devisMissing || factureMissing) {
+        totalIncompletes++;
+      }
     }
 
     // Guard division-by-zero: empty archive = trivially 100% complete.

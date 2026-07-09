@@ -249,10 +249,14 @@ export class DiResolver {
     return this.diService.addPDFFile(_id, facture, bl);
   }
   @Mutation(() => Boolean)
-  tech_startDiagnostic(
+  @UseGuards(JwtAuthGuard)
+  async tech_startDiagnostic(
+    @CurrentUser() user: Profile,
     @Args('_id') _id: string,
     @Args('diag') diag: DiagUpdate,
   ) {
+    // Only the technician the DI is assigned to (diagnostic) may start it.
+    await this.statService.assertTechOwnsDi(_id, user, 'diag');
     const isDiag = this.diService.tech_startDiagnostic(_id, diag);
     if (isDiag) {
       return true;
@@ -272,7 +276,13 @@ export class DiResolver {
   }
 
   @Mutation(() => Boolean)
-  tech_startReperation(@Args('_id') _id: string) {
+  @UseGuards(JwtAuthGuard)
+  async tech_startReperation(
+    @CurrentUser() user: Profile,
+    @Args('_id') _id: string,
+  ) {
+    // Only the technician the DI is assigned to (réparation) may start it.
+    await this.statService.assertTechOwnsDi(_id, user, 'rep');
     const isDiag = this.diService.tech_startReperation(_id);
     if (isDiag) {
       return true;
@@ -282,10 +292,13 @@ export class DiResolver {
   }
 
   @Mutation(() => Di)
-  tech_finishReperation(
+  @UseGuards(JwtAuthGuard)
+  async tech_finishReperation(
+    @CurrentUser() user: Profile,
     @Args('_id') _id: string,
     @Args('remarque') remarque: string,
   ) {
+    await this.statService.assertTechOwnsDi(_id, user, 'rep');
     return this.diService.tech_finishReperation(_id, remarque);
   }
 
@@ -348,7 +361,13 @@ export class DiResolver {
     return true;
   }
   @Mutation(() => Boolean)
-  async changeStatusInDiagnostic(@Args('_id') _id: string) {
+  @UseGuards(JwtAuthGuard)
+  async changeStatusInDiagnostic(
+    @CurrentUser() user: Profile,
+    @Args('_id') _id: string,
+  ) {
+    // Resume-into-diagnostic is a tech work-action → assignee only.
+    await this.statService.assertTechOwnsDi(_id, user, 'diag');
     await this.diService.changeStatusInDiagnostic(_id);
     return true;
   }
@@ -396,7 +415,13 @@ export class DiResolver {
   }
 
   @Mutation(() => Boolean)
-  async changeStatusInRepair(@Args('_id') _id: string) {
+  @UseGuards(JwtAuthGuard)
+  async changeStatusInRepair(
+    @CurrentUser() user: Profile,
+    @Args('_id') _id: string,
+  ) {
+    // Resume-into-repair is a tech work-action → assignee only.
+    await this.statService.assertTechOwnsDi(_id, user, 'rep');
     // TEMP-LOG: trace resume mutation entry to confirm the resolver fires
     // and that the `_id` arrived intact from the GraphQL query.
     console.log('[changeStatusInRepair][resolver] called with _id=', _id);
@@ -456,13 +481,25 @@ export class DiResolver {
   }
   //Diagnostique in Pause
   @Mutation(() => Di)
-  changeToDiagnosticInPause(@Args('_idDI') _idDI: string) {
+  @UseGuards(JwtAuthGuard)
+  async changeToDiagnosticInPause(
+    @CurrentUser() user: Profile,
+    @Args('_idDI') _idDI: string,
+  ) {
+    // Pausing the diagnostic is a tech work-action → assignee only.
+    await this.statService.assertTechOwnsDi(_idDI, user, 'diag');
     return this.diService.changeToDiagnosticInPause(_idDI);
   }
 
   //Repair in Pause
   @Mutation(() => Di)
-  async changeToReparationInPause(@Args('_idDI') _idDI: string) {
+  @UseGuards(JwtAuthGuard)
+  async changeToReparationInPause(
+    @CurrentUser() user: Profile,
+    @Args('_idDI') _idDI: string,
+  ) {
+    // Pausing the repair is a tech work-action → assignee only.
+    await this.statService.assertTechOwnsDi(_idDI, user, 'rep');
     const diRepairPause = await this.diService.changeStateInReparationPause(
       _idDI,
     );

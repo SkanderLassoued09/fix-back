@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -24,9 +25,60 @@ import {
   DiStatConsistencyMismatch,
   DiStatConsistencyReport,
 } from './entities/stat.entity';
+import {
+  TechAssignmentKind,
+  TechIdentity,
+  techIdentityMatches,
+} from 'src/auth/tech-ownership';
 @Injectable()
 export class StatService {
   private readonly logger = new Logger(StatService.name);
+
+  /**
+   * Authorization guard for technician work-actions (start / pause / resume /
+   * finish of Diagnostic & Réparation). Throws `ForbiddenException` unless the
+   * acting user is the technician the DI is assigned to for the given `kind`.
+   *
+   * This is the REAL security boundary: the frontend only greys the button, so
+   * a direct GraphQL call to `changeStatusInRepair` / `changeStatusInDiagnostic`
+   * / `tech_start*` would otherwise let anyone act on anyone's DI. Wired into
+   * DiResolver before the DiService transition runs.
+   *
+   * The latest Stat for the DI is used (retour cycles create several); the
+   * active work-action always targets the most recent one.
+   */
+  async assertTechOwnsDi(
+    idDi: string,
+    user: TechIdentity | undefined | null,
+    kind: TechAssignmentKind,
+  ): Promise<void> {
+    if (!user) {
+      throw new ForbiddenException('Authentification requise.');
+    }
+
+    const stat: any = await this.StatModel.findOne({ _idDi: idDi })
+      .select('id_tech_diag id_tech_rep')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (!stat) {
+      throw new ForbiddenException(
+        `Aucune affectation technicien trouvée pour la DI '${idDi}'.`,
+      );
+    }
+
+    const assigned = kind === 'diag' ? stat.id_tech_diag : stat.id_tech_rep;
+
+    if (techIdentityMatches(assigned, user)) {
+      return;
+    }
+
+    throw new ForbiddenException(
+      kind === 'diag'
+        ? "Diagnostic refusé : cette DI est affectée à un autre technicien."
+        : "Réparation refusée : cette DI est affectée à un autre technicien.",
+    );
+  }
 
   constructor(
     @InjectModel('Stat') private StatModel: Model<Stat>,
