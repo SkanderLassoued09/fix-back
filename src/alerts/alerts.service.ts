@@ -27,7 +27,10 @@ export class DiAlertService {
     private readonly discordHookService: DiscordHookService,
   ) {}
 
-  async createAlert(input: CreateAlertInput): Promise<DiAlertDocument> {
+  async createAlert(
+    input: CreateAlertInput,
+    opts?: { silent?: boolean },
+  ): Promise<DiAlertDocument> {
     let metadata: Record<string, any> = {};
     if (input.metadataJson) {
       try {
@@ -56,23 +59,28 @@ export class DiAlertService {
 
     // Discord broadcast — best-effort. A failed webhook NEVER fails the alert
     // (persistence is the source of truth) and never breaks the caller flow.
-    try {
-      await this.discordHookService.sendStagnationAlert({
-        _id: doc._id as string,
-        diId: doc.diId,
-        type: doc.type,
-        severity: doc.severity,
-        message: doc.message,
-        metadata: doc.metadata,
-        createdAt: doc.createdAt,
-      });
-      this.logger.log(`Discord notification sent · _id=${doc._id}`);
-    } catch (err) {
-      this.logger.error(
-        `Discord notification failed · _id=${doc._id}: ${
-          (err as Error).message ?? err
-        }`,
-      );
+    // `silent` skips the per-alert embed: the stagnation monitor now sends ONE
+    // grouped DAILY digest instead of one embed per DI. Future alert generators
+    // can still get a per-alert ping by omitting the flag.
+    if (!opts?.silent) {
+      try {
+        await this.discordHookService.sendStagnationAlert({
+          _id: doc._id as string,
+          diId: doc.diId,
+          type: doc.type,
+          severity: doc.severity,
+          message: doc.message,
+          metadata: doc.metadata,
+          createdAt: doc.createdAt,
+        });
+        this.logger.log(`Discord notification sent · _id=${doc._id}`);
+      } catch (err) {
+        this.logger.error(
+          `Discord notification failed · _id=${doc._id}: ${
+            (err as Error).message ?? err
+          }`,
+        );
+      }
     }
 
     return doc;
@@ -86,6 +94,7 @@ export class DiAlertService {
    */
   async createAlertIfMissing(
     input: CreateAlertInput,
+    opts?: { silent?: boolean },
   ): Promise<{ alert: DiAlertDocument; created: boolean }> {
     const existing = await this.alertModel.findOne({
       diId: input.diId,
@@ -98,7 +107,7 @@ export class DiAlertService {
       );
       return { alert: existing, created: false };
     }
-    const created = await this.createAlert(input);
+    const created = await this.createAlert(input, opts);
     return { alert: created, created: true };
   }
 
