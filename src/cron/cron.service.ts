@@ -241,15 +241,30 @@ export class AppCronService {
   }
 
   /**
-   * Trigger-only — every business decision lives in StagnationService so the
-   * same logic can run via cron, the ACTION runtime, or a future manual
-   * "run now" admin button. Errors are caught so a transient DB issue can't
-   * break the cron loop.
+   * Daily stagnation reminder — runs once a day at 08:00 Africa/Tunis. Detection
+   * logic lives in StagnationService (same method runs via cron, the ACTION
+   * runtime `ACTION=DETECT_STAGNANT_DI`, or a future "run now" button). It
+   * persists/escalates alerts SILENTLY, then this sends ONE grouped Discord
+   * digest (24h / 72h / >7j) — no per-DI spam. Errors are caught so a transient
+   * DB/webhook issue can't break the cron loop; a 0-stagnant day sends nothing.
    */
-  @Cron(CronExpression.EVERY_10_HOURS)
+  @Cron('0 8 * * *', { timeZone: 'Africa/Tunis' })
   async triggerStagnationDetection() {
     try {
-      await this.stagnationService.detectStagnantDi();
+      const result = await this.stagnationService.detectStagnantDi();
+      const total = result.buckets.reduce((sum, b) => sum + b.count, 0);
+      if (total > 0) {
+        await this.discordHookService.sendStagnationDigest({
+          total,
+          buckets: result.buckets,
+        });
+        this.logger.log(
+          `Stagnation digest sent · total=${total} · ` +
+            result.buckets.map((b) => `${b.type}=${b.count}`).join(' '),
+        );
+      } else {
+        this.logger.log('Stagnation digest skipped · 0 stagnant DI');
+      }
     } catch (err) {
       this.logger.error(
         `Stagnation cron failed: ${(err as Error).stack ?? err}`,

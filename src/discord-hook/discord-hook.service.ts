@@ -1044,6 +1044,75 @@ export class DiscordHookService {
   }
 
   /**
+   * Daily grouped stagnation reminder — ONE embed summarizing the currently
+   * stagnant DIs by age band (24h / 72h / >7j). Replaces the per-DI ping
+   * (stagnation alerts are now created `silent`); fired by the 08:00
+   * Africa/Tunis cron. Best-effort like the other DI notifications — routes
+   * through `postEmbed` (APP_ALERT), which logs + skips on a missing/failed hook.
+   */
+  async sendStagnationDigest(digest: {
+    total: number;
+    buckets: Array<{
+      label: string;
+      severity: string;
+      count: number;
+      examples: string[];
+    }>;
+    generatedAt?: Date;
+  }): Promise<void> {
+    const severityColor: Record<string, number> = {
+      CRITICAL: 15158332, // red
+      WARNING: 16289308, // orange
+      INFO: 3447003, // blue
+    };
+    const severityEmoji: Record<string, string> = {
+      CRITICAL: '🔴',
+      WARNING: '🟠',
+      INFO: '🟡',
+    };
+    // Embed color follows the worst severity that actually has DIs in it.
+    const rank: Record<string, number> = { INFO: 0, WARNING: 1, CRITICAL: 2 };
+    const worst = digest.buckets
+      .filter((b) => b.count > 0)
+      .reduce(
+        (acc, b) =>
+          (rank[b.severity] ?? 0) > (rank[acc] ?? 0) ? b.severity : acc,
+        'INFO',
+      );
+
+    const when = new Intl.DateTimeFormat('fr-FR', {
+      timeZone: 'Africa/Tunis',
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(digest.generatedAt ?? new Date());
+
+    const fields = digest.buckets.map((b) => ({
+      name: `${severityEmoji[b.severity] ?? '•'} ${b.label} — ${b.count}`,
+      value: b.count
+        ? (
+            b.examples.map((ref) => `• ${ref}`).join('\n') +
+            (b.count > b.examples.length
+              ? `\n… +${b.count - b.examples.length} autre(s)`
+              : '')
+          ).slice(0, 1024)
+        : '_aucune_',
+    }));
+
+    await this.postEmbed('APP_ALERT', {
+      embeds: [
+        {
+          title: '📊 Rappel quotidien — DI stagnantes',
+          description: `${digest.total} DI en attente, regroupées par ancienneté · ${when} (Africa/Tunis).`,
+          color: severityColor[worst] ?? severityColor.INFO,
+          fields,
+          footer: { text: 'Fixtronix · Rappel stagnation' },
+          timestamp: (digest.generatedAt ?? new Date()).toISOString(),
+        },
+      ],
+    });
+  }
+
+  /**
    * Catalog event — a NEW composant was added to the parts catalog (NOT an
    * update). Useful for procurement / admin visibility: who added what, at
    * what price, in what category. Routes through the DI events webhook to

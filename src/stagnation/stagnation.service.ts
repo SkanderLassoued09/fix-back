@@ -6,6 +6,19 @@ import { DiAlertService } from 'src/alerts/alerts.service';
 import { DiDocument } from 'src/di/entities/di.entity';
 import { STATUS_DI } from 'src/di/di.status';
 
+/** One bucket of the daily stagnation digest (grouped Discord reminder). */
+export interface StagnationDigestBucket {
+  type: AlertType;
+  label: string;
+  severity: AlertSeverity;
+  count: number;
+  /** Up to a few example DI refs (`_idnum`) shown in the embed. */
+  examples: string[];
+}
+
+/** How many example DI refs to surface per bucket in the digest embed. */
+const DIGEST_EXAMPLE_COUNT = 8;
+
 /**
  * Generic stagnation monitor. Detects DIs that have remained in the same
  * workflow status for longer than a set of thresholds (24h / 72h / 7d) and
@@ -43,6 +56,7 @@ export class StagnationService {
       lowerMs: 7 * 24 * 60 * 60 * 1000, // ≥ 7 days
       upperMs: Infinity,
       label: '7 days',
+      digestLabel: '> 7 jours',
       resolveOnEscalation: [AlertType.DI_STAGNANT_72H, AlertType.DI_STAGNANT_24H],
     },
     {
@@ -51,6 +65,7 @@ export class StagnationService {
       lowerMs: 72 * 60 * 60 * 1000, // ≥ 72h, < 7d
       upperMs: 7 * 24 * 60 * 60 * 1000,
       label: '72 hours',
+      digestLabel: '72 h – 7 j',
       resolveOnEscalation: [AlertType.DI_STAGNANT_24H],
     },
     {
@@ -59,6 +74,7 @@ export class StagnationService {
       lowerMs: 24 * 60 * 60 * 1000, // ≥ 24h, < 72h
       upperMs: 72 * 60 * 60 * 1000,
       label: '24 hours',
+      digestLabel: '24 h – 72 h',
       resolveOnEscalation: [],
     },
   ];
@@ -78,6 +94,7 @@ export class StagnationService {
     created: Record<string, number>;
     resolvedFromEscalation: number;
     elapsedMs: number;
+    buckets: StagnationDigestBucket[];
   }> {
     this.logger.log('START detectStagnantDi');
     const startedAt = Date.now();
@@ -88,6 +105,9 @@ export class StagnationService {
       DI_STAGNANT_72H: 0,
       DI_STAGNANT_7D: 0,
     };
+    // Per-bucket snapshot for the daily grouped Discord digest — the CURRENT
+    // count of stagnant DIs in each band (not just newly-created alerts).
+    const digestByType: Record<string, StagnationDigestBucket> = {};
     let scanned = 0;
     let resolvedFromEscalation = 0;
 
@@ -132,25 +152,41 @@ export class StagnationService {
       );
       scanned += stagnant.length;
 
+      // Snapshot this band for the grouped daily digest (count + a few refs).
+      digestByType[bucket.type] = {
+        type: bucket.type,
+        label: bucket.digestLabel,
+        severity: bucket.severity,
+        count: stagnant.length,
+        examples: stagnant
+          .slice(0, DIGEST_EXAMPLE_COUNT)
+          .map((di: any) => di._idnum ?? di._id),
+      };
+
       for (const di of stagnant) {
         const stagnationStarted = di.statusUpdatedAt ?? di.updatedAt;
         const ageMs = now.getTime() - new Date(stagnationStarted).getTime();
         const ageHours = Math.round(ageMs / (60 * 60 * 1000));
 
-        const result = await this.alertService.createAlertIfMissing({
-          diId: di._id,
-          type: bucket.type,
-          severity: bucket.severity,
-          message: `DI ${di._idnum ?? di._id} stagnant in ${di.status} for ${ageHours}h (threshold: ${bucket.label}).`,
-          assignedRoles: ['Manager', 'Admin_Manager', 'Coordinator'],
-          metadataJson: JSON.stringify({
-            diIdnum: di._idnum ?? null,
-            status: di.status,
-            stagnationStartedAt: stagnationStarted,
-            ageMs,
-            threshold: bucket.type,
-          }),
-        });
+        const result = await this.alertService.createAlertIfMissing(
+          {
+            diId: di._id,
+            type: bucket.type,
+            severity: bucket.severity,
+            message: `DI ${di._idnum ?? di._id} stagnant in ${di.status} for ${ageHours}h (threshold: ${bucket.label}).`,
+            assignedRoles: ['Manager', 'Admin_Manager', 'Coordinator'],
+            metadataJson: JSON.stringify({
+              diIdnum: di._idnum ?? null,
+              status: di.status,
+              stagnationStartedAt: stagnationStarted,
+              ageMs,
+              threshold: bucket.type,
+            }),
+          },
+          // Digest-only: no per-DI Discord ping. The daily 08:00 cron sends ONE
+          // grouped embed instead. Alerts are still persisted + escalated.
+          { silent: true },
+        );
 
         if (result.created) {
           created[bucket.type]++;
@@ -176,7 +212,16 @@ export class StagnationService {
         `escalated=${resolvedFromEscalation} elapsedMs=${elapsedMs}`,
     );
 
-    return { scanned, created, resolvedFromEscalation, elapsedMs };
+    // Ascending severity order for the digest embed: 24h → 72h → >7j.
+    const buckets = [
+      AlertType.DI_STAGNANT_24H,
+      AlertType.DI_STAGNANT_72H,
+      AlertType.DI_STAGNANT_7D,
+    ]
+      .map((type) => digestByType[type])
+      .filter(Boolean);
+
+    return { scanned, created, resolvedFromEscalation, elapsedMs, buckets };
   }
 
   /**
