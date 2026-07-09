@@ -30,12 +30,6 @@ export class AuthResolver {
    */
   @Mutation(() => Boolean)
   async logout(@Args('token') token: string) {
-    console.log(
-      '[AuthResolver.logout] hit, token len =',
-      token?.length ?? 0,
-    );
-    const result = await this.authService.logout({ token });
-    console.log('[AuthResolver.logout] returning', result);
-    return result;
+    return this.authService.logout({ token });
   }
 }

@@ -97,37 +97,22 @@ export class AuthService {
    * a no-op so a stale logout call can never throw a 500 at the user.
    */
   async logout(payload: { token: string }): Promise<boolean> {
-    console.log(
-      '[AuthService.logout] token len =',
-      payload?.token?.length ?? 0,
-    );
     if (!payload?.token) {
-      console.log('[AuthService.logout] no token → returning false');
       return false;
     }
     let _id: string | undefined;
     try {
       const decoded: any = this.jwtService.verify(payload.token);
       _id = decoded?._id;
-      console.log('[AuthService.logout] decoded _id =', _id);
-    } catch (e) {
-      console.log(
-        '[AuthService.logout] token verify failed:',
-        (e as Error)?.message,
-      );
+    } catch {
       return false;
     }
     if (!_id) {
-      console.log('[AuthService.logout] decoded payload had no _id');
       return false;
     }
-    const writeResult = await this.profileModel.updateOne(
+    await this.profileModel.updateOne(
       { _id },
       { $set: { isConnected: false } },
-    );
-    console.log(
-      '[AuthService.logout] updateOne result =',
-      JSON.stringify(writeResult),
     );
     return true;
   }

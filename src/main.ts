@@ -27,7 +27,10 @@ import { buildActionBanner, buildStartupBanner } from './config/env-banner';
  * AppCronService.runAction().
  */
 async function bootstrap() {
-  const action = process.env.ACTION;
+  // Trim so a stray trailing space/CR (e.g. Windows CMD `set ACTION=NAME `,
+  // or a CRLF-terminated value) can't turn a valid action into "Unknown ACTION"
+  // — and a whitespace-only value falls back to the HTTP server, not ACTION mode.
+  const action = process.env.ACTION?.trim() || undefined;
 
   if (action) {
     const logger = new Logger('Action');

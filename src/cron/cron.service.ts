@@ -44,7 +44,9 @@ export class AppCronService {
    * method on this service. No bootstrap file gets touched.
    */
   async runAction(action: string): Promise<void> {
-    switch (action) {
+    // Defensive trim: the switch strict-matches, so a stray trailing space/CR
+    // in the ACTION env value must not fall through to "Unknown ACTION".
+    switch ((action ?? '').trim()) {
       case 'DETECT_STAGNANT_DI':
         await this.triggerStagnationDetection();
         break;

@@ -64,24 +64,24 @@ export class DiscordHookService {
   private readonly warnedMissing = new Set<ChannelKey>();
 
   /**
-   * Resolve the webhook URL for a given channel from env. Every channel
-   * falls back to the legacy `DISCORD_WEBHOOK_URL` when its dedicated
-   * env var is empty, so a partially migrated `.env` (dev machine still
-   * carrying the old single-webhook) keeps working.
+   * Resolve the webhook URL for a given channel from env. Each of the 3
+   * environments (`.env.{development,preprod,production}`) declares one
+   * DEDICATED webhook per channel — there is NO shared/legacy
+   * `DISCORD_WEBHOOK_URL` fallback. A channel with no URL configured is
+   * skipped by `postEmbed` (warned once, never throws).
    */
   private urlFor(channel: ChannelKey): string {
-    const legacy = process.env.DISCORD_WEBHOOK_URL || '';
     switch (channel) {
       case 'GENERAL_ATELIER':
-        return process.env.DISCORD_GENERAL_ATELIER_WEBHOOK || legacy;
+        return process.env.DISCORD_GENERAL_ATELIER_WEBHOOK || '';
       case 'SERVICE_TECHNIQUE':
-        return process.env.DISCORD_SERVICE_TECHNIQUE_WEBHOOK || legacy;
+        return process.env.DISCORD_SERVICE_TECHNIQUE_WEBHOOK || '';
       case 'DEMANDE_PDF':
-        return process.env.DISCORD_DEMANDE_PDF_WEBHOOK || legacy;
+        return process.env.DISCORD_DEMANDE_PDF_WEBHOOK || '';
       case 'ERROR':
-        return process.env.DISCORD_ERROR_WEBHOOK || legacy;
+        return process.env.DISCORD_ERROR_WEBHOOK || '';
       case 'APP_ALERT':
-        return process.env.DISCORD_APP_ALERT_WEBHOOK || legacy;
+        return process.env.DISCORD_APP_ALERT_WEBHOOK || '';
     }
   }
 
@@ -1239,6 +1239,15 @@ export class DiscordHookService {
       url?: string;
     }>,
   ): Promise<void> {
+    // DEDICATED APP_ALERT channel only — NO legacy fallback. Resolve + guard
+    // here (not via the best-effort `postEmbed`) so a missing URL or an HTTP
+    // failure THROWS: the SYNC_JIRA_DUE_SOON caller reverts the claimed rows to
+    // PENDING instead of marking them PROCESSED with nothing delivered.
+    const url = this.urlFor('APP_ALERT');
+    if (!url) {
+      throw new Error('Discord APP_ALERT webhook not configured');
+    }
+
     // Section by responsable (null/empty → "Non assigné").
     const groups = new Map<string, typeof items>();
     for (const it of items) {
@@ -1267,7 +1276,7 @@ export class DiscordHookService {
         .slice(0, 1024),
     }));
 
-    await this.postEmbed('APP_ALERT', {
+    await axios.post(url, {
       embeds: [
         {
           title: '⏰ Tâches Jira proches échéance',
