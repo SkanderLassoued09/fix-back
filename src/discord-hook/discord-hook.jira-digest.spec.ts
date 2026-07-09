@@ -5,20 +5,20 @@ import { DiscordHookService } from './discord-hook.service';
 /**
  * Focused test for the grouped Jira digest embed (axios mocked — no network).
  * Proves the SYNC_JIRA_DUE_SOON notification is ONE embed sectioned by
- * responsable (one field per responsable, each listing its tasks as links).
+ * responsable (one field per responsable, each listing its tasks as links),
+ * posted to the DEDICATED APP_ALERT channel (no legacy fallback).
  */
 describe('DiscordHookService.sendJiraTasksDigest', () => {
-  const OLD_PV = process.env.DISCORD_PV_WEBHOOK_URL;
-  const OLD_MAIN = process.env.DISCORD_WEBHOOK_URL;
+  const OLD_APP_ALERT = process.env.DISCORD_APP_ALERT_WEBHOOK;
 
   beforeEach(() => {
     (axios.post as jest.Mock).mockReset();
     (axios.post as jest.Mock).mockResolvedValue({ data: {} });
-    process.env.DISCORD_PV_WEBHOOK_URL = 'https://discord.test/webhook';
+    process.env.DISCORD_APP_ALERT_WEBHOOK = 'https://discord.test/webhook';
   });
   afterAll(() => {
-    process.env.DISCORD_PV_WEBHOOK_URL = OLD_PV;
-    process.env.DISCORD_WEBHOOK_URL = OLD_MAIN;
+    if (OLD_APP_ALERT === undefined) delete process.env.DISCORD_APP_ALERT_WEBHOOK;
+    else process.env.DISCORD_APP_ALERT_WEBHOOK = OLD_APP_ALERT;
   });
 
   // Constructor models are unused by this method → harmless stubs.
@@ -55,8 +55,7 @@ describe('DiscordHookService.sendJiraTasksDigest', () => {
   });
 
   it('throw si aucun webhook configuré (pour que l’appelant revert)', async () => {
-    delete process.env.DISCORD_PV_WEBHOOK_URL;
-    delete process.env.DISCORD_WEBHOOK_URL;
+    delete process.env.DISCORD_APP_ALERT_WEBHOOK;
     await expect(
       svc().sendJiraTasksDigest([{ issueKey: 'X', url: 'u' }]),
     ).rejects.toThrow(/not configured/);

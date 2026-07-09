@@ -68,6 +68,10 @@ if (flagIdx !== -1) {
 }
 if (rest.length && !action) fail("Nom d'action manquant après --action.");
 
+// Serve vs action: the CLI `--action NAME` picks the runtime, but an inherited
+// `ACTION=NAME` env (the Unix `ACTION=X npm run start:dev` form) is ALSO honored
+// by main.ts. NOTE (Windows): `set ACTION=NAME` PERSISTS across commands, so it
+// can hijack a later `start:*` into a cron — on Windows prefer `npm run action:*`.
 const [cmd, args] = action ? cfg.action : cfg.serve;
 const childEnv = { ...process.env, NODE_ENV: cfg.nodeEnv };
 if (action) childEnv.ACTION = action;

@@ -9,6 +9,7 @@ import { StagnationService } from 'src/stagnation/stagnation.service';
 import { SheetSyncService } from 'src/google-sheets/sheet-sync.service';
 import { JiraCronNotificationService } from 'src/jira-cron-notification/jira-cron-notification.service';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
+import { DiArchiveDigestService } from 'src/di-archive/di-archive-digest.service';
 
 /**
  * The 5 Discord channels of an environment, mapped to the EXACT env vars read
@@ -34,6 +35,7 @@ export class AppCronService {
     private readonly sheetSyncService: SheetSyncService,
     private readonly jiraCronNotificationService: JiraCronNotificationService,
     private readonly discordHookService: DiscordHookService,
+    private readonly diArchiveDigestService: DiArchiveDigestService,
   ) {}
 
   /**
@@ -42,7 +44,9 @@ export class AppCronService {
    * method on this service. No bootstrap file gets touched.
    */
   async runAction(action: string): Promise<void> {
-    switch (action) {
+    // Defensive trim: the switch strict-matches, so a stray trailing space/CR
+    // in the ACTION env value must not fall through to "Unknown ACTION".
+    switch ((action ?? '').trim()) {
       case 'DETECT_STAGNANT_DI':
         await this.triggerStagnationDetection();
         break;
@@ -61,9 +65,31 @@ export class AppCronService {
       case 'TEST_DISCORD_CHANNELS':
         await this.triggerTestDiscordChannels();
         break;
+      case 'DIGEST_DI_ARCHIVE_INCOMPLETES':
+        await this.triggerDiArchiveIncompletesDigest();
+        break;
       default:
         this.logger.error(`Unknown ACTION: ${action}`);
     }
+  }
+
+  /**
+   * Trigger-only — DIGEST_DI_ARCHIVE_INCOMPLETES. Runs a Discord digest
+   * summarizing DiArchive rows still marked INCOMPLET (missing bc / bl /
+   * devis / facture), grouped by missing document with a few example
+   * `refOrigine`s per bucket. READ-ONLY on `DiArchive`; no mutation.
+   *
+   * Run via `ACTION=DIGEST_DI_ARCHIVE_INCOMPLETES node dist/main`
+   * (aliases: `action:digest-di-archive-incompletes[:preprod|:dev]`).
+   * A Discord failure is swallowed at the service layer (postEmbed logs
+   * + skips), so the action always exits cleanly — a monitorable no-op
+   * is preferable to a zombie 08:00 cron.
+   */
+  async triggerDiArchiveIncompletesDigest() {
+    const res = await this.diArchiveDigestService.buildAndSend();
+    this.logger.log(
+      `DiArchive digest: total=${res.total} facture=${res.missing.facture} bc=${res.missing.bc} bl=${res.missing.bl} devis=${res.missing.devis} posted=${res.posted}`,
+    );
   }
 
   /**
