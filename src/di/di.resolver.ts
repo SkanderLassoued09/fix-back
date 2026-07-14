@@ -307,6 +307,13 @@ export class DiResolver {
     return this.diService.changeStatusTofinsh(_id);
   }
 
+  // « Renvoyer au diagnostic » — bounce a DI being priced back to the
+  // coordinator (PRICING → PENDING1) so a technician is re-assigned.
+  @Mutation(() => Di)
+  sendDiBackToDiagnostic(@Args('_id') _id: string) {
+    return this.diService.sendDiBackToDiagnostic(_id);
+  }
+
   @Mutation(() => Boolean)
   affectinitialPrice(@Args('_id') _id: string, @Args('price') price: number) {
     const priceaffecting = this.diService.affectinitialPrice(_id, price);

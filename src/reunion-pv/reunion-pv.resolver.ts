@@ -1,5 +1,8 @@
 import { Args, Mutation, Query, Resolver, Context } from '@nestjs/graphql';
-import { CreateReunionPVInput } from './dto/reunion-pv.input';
+import {
+  CreateReunionPVInput,
+  UpdateReunionPVDetailsInput,
+} from './dto/reunion-pv.input';
 import { ReunionPV } from './entities/reunion-pv.entity';
 import { ReunionPVService } from './reunion-pv.service';
 
@@ -27,6 +30,22 @@ export class ReunionPVResolver {
       skipDiscord: testRun,
       skipJira: testRun,
     });
+  }
+
+  /**
+   * Phase-2 "document the meeting" write — fills the detailed sections from the
+   * detail modal and pushes each action to Jira (idempotent). Like create, the
+   * `x-test-run: 1` header skips the Jira side-effect on QA traffic.
+   */
+  @Mutation(() => ReunionPV)
+  async updateReunionPVDetails(
+    @Args('input') input: UpdateReunionPVDetailsInput,
+    @Context() ctx: any,
+  ) {
+    const headers = ctx?.req?.headers ?? {};
+    const testRun =
+      String(headers['x-test-run'] ?? headers['X-Test-Run'] ?? '') === '1';
+    return this.service.updateReunionDetails(input, { skipJira: testRun });
   }
 
   @Query(() => ReunionPV)

@@ -1112,6 +1112,25 @@ export class DiService {
   }
 
   // workage
+  /**
+   * Map the Mongo `driveDocs` object → the GraphQL `documents` array (real
+   * uploaded file name + Drive link per type). Read-only projection; only real
+   * files (with a `driveFileId`) are kept. Lets the UI show the true file name
+   * instead of a generic type label.
+   */
+  private buildDocuments(
+    driveDocs: any,
+  ): Array<{ type: string; name: string; webViewLink: string }> {
+    const d = driveDocs || {};
+    return Object.keys(d)
+      .filter((type) => d[type] && d[type].driveFileId)
+      .map((type) => ({
+        type,
+        name: d[type]?.name ?? null,
+        webViewLink: d[type]?.webViewLink ?? null,
+      }));
+  }
+
   async getAllDi(
     paginationConfig: PaginationConfigDi,
     filterConfig?: FilterConfigDi,
@@ -1200,6 +1219,8 @@ export class DiService {
           techRep: stat?.id_tech_rep
             ? await this.profileService.getTech(stat?.id_tech_rep)
             : 'N/A',
+          // Real uploaded documents (name + Drive link) for the detail modal.
+          documents: this.buildDocuments((di as any).driveDocs),
           // Include logs related to this DI
           logs: logsDi.length > 0 ? logsDi : [],
         };
@@ -1420,7 +1441,18 @@ export class DiService {
     }
 
     try {
-      await this.discordHookService.sendDiagnosticAssigned(diagnostic);
+      // Resolve the assigned diagnostic technician (stored on the Stat created
+      // just before by `createStat`) so the SINGLE Discord embed is complete.
+      let techId: string | null = null;
+      try {
+        const stat: any = await this.statsService.findUserLinkedToConcernedDi(
+          _idDI,
+        );
+        techId = stat?.id_tech_diag ?? null;
+      } catch {
+        /* tech is best-effort context — never block the notification */
+      }
+      await this.discordHookService.sendDiagnosticAssigned(diagnostic, techId);
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
@@ -1722,6 +1754,25 @@ export class DiService {
   }
 
   async changeStatusTofinsh(_id: string) {
+    // Non-repairable routing. A non-repairable DI still needs its diagnostic
+    // billed when it's in the ORIGINAL flow → route to PENDING2 ("facturer le
+    // diagnostic") instead of closing. In a RETOUR cycle (ignoreCount > 0) it
+    // closes directly (FINISHED), unchanged. Guard: only redirect when we're
+    // actually leaving the DIAGNOSTIC phase — a reparation-finish also lands
+    // here and must keep going to FINISHED.
+    const di: any = await this.diModel.findOne({ _id }).lean();
+    const fromDiagnostic = [
+      STATUS_DI.Diagnostic.status,
+      STATUS_DI.InDiagnostic.status,
+      STATUS_DI.DiagnosticInPause.status,
+    ].includes(di?.status);
+    const isOriginalFlow = !(di?.ignoreCount > 0);
+    if (fromDiagnostic && isOriginalFlow) {
+      // Original-flow, non-repairable → bill the diagnostic (PENDING2).
+      return this.magasinTech_Pending2(_id) as any;
+    }
+
+    // Retour non-repairable, or a reparation finish → FINISHED.
     await this.assertTransitionAllowed(_id, STATUS_DI.Finished.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
@@ -1753,6 +1804,51 @@ export class DiService {
 
     return result;
   }
+
+  /**
+   * « Renvoyer au diagnostic » — an admin who is pricing a DI (typically a
+   * non-repairable verdict they want re-checked) bounces it back to the
+   * coordinator so a technician is re-assigned for a fresh diagnostic:
+   * PRICING → PENDING1 (arc added to the transition guard). `can_be_repaired`
+   * is intentionally left untouched — the technician overwrites it on the new
+   * diagnostic. The Stat status is kept in sync like every other transition.
+   */
+  async sendDiBackToDiagnostic(_id: string) {
+    // « Renvoyer au diagnostic » is ONLY for a DI that reached pricing via the
+    // NON-REPAIRABLE path (marked `can_be_repaired: false` at diagnosis). A
+    // reparable DI in normal pricing has no reason to be bounced back — refuse
+    // it server-side (not just hidden in the UI).
+    const guardDi: any = await this.diModel
+      .findOne({ _id })
+      .select('can_be_repaired')
+      .lean();
+    if (guardDi && guardDi.can_be_repaired !== false) {
+      throw new GraphQLError(
+        'Renvoi au diagnostic impossible : seule une DI marquée non réparable peut être renvoyée depuis la tarification.',
+        { extensions: { code: 'BACK_TO_DIAG_NOT_NON_REPARABLE' } },
+      );
+    }
+    await this.assertTransitionAllowed(_id, STATUS_DI.Pending1.status);
+    const result = await this.diModel.findOneAndUpdate(
+      { _id },
+      { $set: { status: STATUS_DI.Pending1.status } },
+      { new: true },
+    );
+    if (!result) {
+      throw new Error('Issue in sendDiBackToDiagnostic');
+    }
+    if (result.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        _id,
+        STATUS_DI.Pending1.status,
+        result.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(_id, STATUS_DI.Pending1.status);
+    }
+    return result;
+  }
+
   //Coordiantor sending to the Admins for affecting price
   // PENDING2 => Pricing
   async coordinator_ToPricing(_idDI: string) {
@@ -2047,6 +2143,7 @@ export class DiService {
           techRep: stat?.id_tech_rep
             ? await this.profileService.getTech(stat.id_tech_rep)
             : 'N/A',
+          documents: this.buildDocuments((di as any).driveDocs),
           logs,
         };
       }),
@@ -2095,6 +2192,7 @@ export class DiService {
         contain_pdr: di.contain_pdr,
         current_roles: di.current_roles,
         array_composants: di.array_composants,
+        documents: this.buildDocuments((di as any).driveDocs),
         di_category_id: di.di_category_id?.category,
         remarque_admin_manager: null,
         remarque_admin_tech: di.remarque_admin_tech,
@@ -2116,9 +2214,18 @@ export class DiService {
         retourReason: di.retourReason,
         retourDate: di.retourDate,
         pricingRequestSentAt: di.pricingRequestSentAt,
-        pricingRequestSentBy: di.pricingRequestSentBy,
+        // Resolve the actor profile ids to NAMES — the flow timeline must never
+        // render a raw ObjectId (getTech returns 'Unknown' for a missing/​deleted
+        // profile, never the id).
+        pricingRequestSentBy: di.pricingRequestSentBy
+          ? await this.profileService.getTech(di.pricingRequestSentBy)
+          : null,
         componentsConfirmedAt: di.componentsConfirmedAt,
-        componentsConfirmedBy: di.componentsConfirmedBy,
+        componentsConfirmedBy: di.componentsConfirmedBy
+          ? await this.profileService.getTech(di.componentsConfirmedBy)
+          : null,
+        // Single source of truth for the flow-timeline per-step dates.
+        statusHistory: di.statusHistory ?? [],
         image: di.image,
         handleSendingNotificationBetweenCoordinatorAndMagasin:
           di.handleSendingNotificationBetweenCoordinatorAndMagasin,
@@ -2443,6 +2550,24 @@ export class DiService {
   }
 
   async changeStatusMagasinEstimation(_id: string) {
+    // PDR-based routing (single source of truth for the diagnostic exit).
+    // If the diagnostic found NO parts/components to order, Magasin has nothing
+    // to do → skip it and go straight to PENDING2 ("facturer le diagnostic").
+    // Criterion is PDR (contain_pdr / array_composants), NOT can_be_repaired —
+    // it applies whether the DI is repairable or not. The transition guard
+    // already permits INDIAGNOSTIC → PENDING2, so no guard change is needed.
+    const di: any = await this.diModel.findOne({ _id }).lean();
+    const hasPdr =
+      di?.contain_pdr === true &&
+      Array.isArray(di?.array_composants) &&
+      di.array_composants.length > 0;
+    if (!hasPdr) {
+      // No PDR → directly to billing (PENDING2), skipping Magasin. Reuses the
+      // existing diagnostic-completed transition (+ its Discord embed).
+      return this.magasinTech_Pending2(_id);
+    }
+
+    // Has PDR → Magasin estimation, unchanged behaviour.
     await this.assertTransitionAllowed(_id, STATUS_DI.MagasinEstimation.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },

@@ -494,6 +494,32 @@ export class GoogleDriveService {
     };
   }
 
+  /**
+   * Stream a Drive file's bytes by id (read-only), via the same authenticated
+   * client used for uploads. Returns the content stream plus its mimeType/name
+   * so a controller can proxy it to the browser (Drive files are private, so
+   * `<img>` cannot fetch them directly — the backend fetches on its behalf).
+   */
+  async downloadFile(
+    fileId: string,
+  ): Promise<{ stream: Readable; mimeType: string; name: string }> {
+    const drive = await this.ensureClient();
+    const meta = await drive.files.get({
+      fileId,
+      fields: 'mimeType, name',
+      supportsAllDrives: true,
+    });
+    const res = await drive.files.get(
+      { fileId, alt: 'media', supportsAllDrives: true },
+      { responseType: 'stream' },
+    );
+    return {
+      stream: res.data as unknown as Readable,
+      mimeType: meta.data.mimeType || 'application/octet-stream',
+      name: meta.data.name || 'file',
+    };
+  }
+
   /** Recognize the service-account "no storage quota" failure (any of the shapes
    *  googleapis surfaces it as). */
   private isQuotaError(err: unknown): boolean {

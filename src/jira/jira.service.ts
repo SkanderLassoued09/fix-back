@@ -23,6 +23,13 @@ import { OperationalErrorService } from 'src/operational-error/operational-error
 export interface JiraIssueResult {
   issueKey: string;
   url: string;
+  /**
+   * True when an assignee accountId was resolved AND applied. When the action
+   * carried a responsable email but Jira couldn't map it to an account, the
+   * issue is still created/updated (unassigned) and this is `false` — the
+   * caller flags `jira.assignFailed` so the task is never silently lost.
+   */
+  assigned: boolean;
 }
 
 /** The subset of an Action à mener Jira needs, plus the resolved assignee email. */
@@ -218,13 +225,18 @@ export class JiraService {
     if (due) fields.duedate = due;
     if (accountId) fields.assignee = { id: accountId };
 
+    // assignFailed signal: a responsable email was given but no account matched.
+    const assigned = !!accountId;
+
     try {
-      return await this.postIssue(fields, meeting, false);
+      const res = await this.postIssue(fields, meeting, false);
+      return { ...res, assigned };
     } catch (err: any) {
       if (err?.response?.status === 400) {
-        // Optional fields not configured on the project → retry minimal.
+        // Optional fields not configured on the project → retry minimal. The
+        // assignee is dropped in the minimal payload → assigned=false.
         try {
-          return await this.postIssue(
+          const res = await this.postIssue(
             {
               project: fields.project,
               summary: fields.summary,
@@ -234,6 +246,69 @@ export class JiraService {
             meeting,
             true,
           );
+          return { ...res, assigned: false };
+        } catch (retryErr) {
+          await this.capture(action, meeting, retryErr);
+          return null;
+        }
+      }
+      await this.capture(action, meeting, err);
+      return null;
+    }
+  }
+
+  /**
+   * Idempotent counterpart of `createIssueForAction`: UPDATE an existing issue
+   * (identified by `issueKey`) in place — `PUT /rest/api/{v}/issue/{key}`. Used
+   * when a meeting action is re-saved from the detail modal, so editing an
+   * action N times keeps ONE Jira issue instead of creating N.
+   *
+   * Same resilience contract: best-effort, never throws, returns null on any
+   * failure / when unconfigured / empty title. Returns `{ issueKey, url,
+   * assigned }` with the SAME issueKey on success. Assignee is only (re)set when
+   * an accountId resolves; when a responsable email is present but unresolved,
+   * the existing assignee is left untouched and `assigned=false` (→ the caller
+   * keeps/sets `assignFailed`). The 400-minimal retry mirrors create.
+   */
+  async updateIssueForAction(
+    issueKey: string,
+    action: JiraActionInput,
+    meeting: JiraMeetingContext,
+  ): Promise<JiraIssueResult | null> {
+    if (!this.isConfigured) return null;
+    const key = (issueKey ?? '').trim();
+    const summary = (action.titre ?? '').trim();
+    if (!key || !summary) return null;
+
+    const accountId = await this.resolveAccountId(action.assigneeEmail);
+    const assigned = !!accountId;
+
+    const fields: any = {
+      summary: summary.slice(0, 254),
+      description: this.buildDescription(action, meeting),
+    };
+    const priority = this.mapPriority(action.priorite);
+    if (priority) fields.priority = { name: priority };
+    const due = this.toDueDate(action.echeance);
+    if (due) fields.duedate = due;
+    if (accountId) fields.assignee = { id: accountId };
+
+    const url = `${this.baseUrl}/browse/${key}`;
+    try {
+      await this.putIssue(key, fields);
+      this.logger.log(
+        `Updated Jira issue ${key} for PV ${meeting.reference ?? meeting._id}`,
+      );
+      return { issueKey: key, url, assigned };
+    } catch (err: any) {
+      if (err?.response?.status === 400) {
+        try {
+          await this.putIssue(key, {
+            summary: fields.summary,
+            description: fields.description,
+          });
+          this.logger.log(`Updated Jira issue ${key} (minimal payload)`);
+          return { issueKey: key, url, assigned: false };
         } catch (retryErr) {
           await this.capture(action, meeting, retryErr);
           return null;
@@ -290,7 +365,7 @@ export class JiraService {
     fields: any,
     meeting: JiraMeetingContext,
     minimal: boolean,
-  ): Promise<JiraIssueResult> {
+  ): Promise<{ issueKey: string; url: string }> {
     const res = await axios.post(
       this.issueUrlBase,
       { fields },
@@ -304,6 +379,16 @@ export class JiraService {
       }${minimal ? ' (minimal payload)' : ''}`,
     );
     return { issueKey, url };
+  }
+
+  /** PUT the given fields onto an existing issue. Throws on HTTP error (the
+   *  caller handles 400-minimal retry / capture). Jira returns 204 No Content. */
+  private async putIssue(issueKey: string, fields: any): Promise<void> {
+    await axios.put(
+      `${this.issueUrlBase}/${encodeURIComponent(issueKey)}`,
+      { fields },
+      { headers: this.authHeaders(), timeout: this.timeout },
+    );
   }
 
   /** Structured, PII-free capture (no emails/tokens in the payload). */

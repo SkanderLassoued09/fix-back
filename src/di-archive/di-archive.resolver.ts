@@ -1,7 +1,12 @@
 import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
 import { DiArchiveService } from './di-archive.service';
 import { DiArchive, DiArchiveDocType } from './entities/di-archive.entity';
+import { DiArchivePage } from './entities/di-archive-page.output';
 import { CreateDiArchiveInput } from './dto/create-di-archive.input';
+import {
+  DiArchivesFilterInput,
+  DiArchivesPageInput,
+} from './dto/di-archives-filter.input';
 
 @Resolver(() => DiArchive)
 export class DiArchiveResolver {
@@ -41,9 +46,25 @@ export class DiArchiveResolver {
     return this.diArchiveService.cloture(diArchiveId);
   }
 
-  @Query(() => [DiArchive])
-  diArchives(): Promise<DiArchive[]> {
-    return this.diArchiveService.findAll();
+  /**
+   * Paginated + filtered `/archives` list. All filter criteria are cumulative
+   * (AND) and applied SERVER-SIDE (the collection is never fully loaded).
+   * Returns the page rows + the total count matching the filter.
+   */
+  @Query(() => DiArchivePage)
+  diArchives(
+    @Args('filter', { type: () => DiArchivesFilterInput, nullable: true })
+    filter?: DiArchivesFilterInput,
+    @Args('page', { type: () => DiArchivesPageInput, nullable: true })
+    page?: DiArchivesPageInput,
+  ): Promise<DiArchivePage> {
+    return this.diArchiveService.findPage(filter, page);
+  }
+
+  /** Distinct historical-status values — options for the « Statut » dropdown. */
+  @Query(() => [String])
+  diArchiveStatuts(): Promise<string[]> {
+    return this.diArchiveService.distinctStatutsHistorique();
   }
 
   @Query(() => DiArchive, { nullable: true })

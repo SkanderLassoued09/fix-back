@@ -184,6 +184,49 @@ describe('DiWorkflowService', () => {
     );
   });
 
+  // ── Status-divergence fix (T281/T282) ──────────────────────────────────
+  // The Tech list renders Stat.status while the Coordinator view renders
+  // Di.status. These two transitions used to leave Stat.status behind
+  // (updateStatStatus:false) → the same DI showed PENDING2 to the coordinator
+  // but INDIAGNOSTIC/DIAGNOSTIC_Pause to the tech. Now both sync the Stat.
+  it('MAGASIN_TECH_TO_PENDING2 syncs Stat.status to PENDING2 (was the T281 bug)', async () => {
+    const existingDi = makeDi({ status: STATUS_DI.InDiagnostic.status });
+    const updatedDi = makeDi({ status: STATUS_DI.Pending2.status });
+    diModel.findOne.mockResolvedValue(existingDi);
+    diModel.findOneAndUpdate.mockResolvedValue(updatedDi);
+    statService.updateStatus.mockResolvedValue({});
+
+    await service.transition({
+      diId: existingDi._id,
+      transitionKey: 'MAGASIN_TECH_TO_PENDING2',
+      actorRole: Role.TECH,
+    });
+
+    expect(statService.updateStatus).toHaveBeenCalledWith(
+      existingDi._id,
+      STATUS_DI.Pending2.status,
+    );
+  });
+
+  it('MANAGER_ADMIN_TO_PENDING3 syncs Stat.status to PENDING3', async () => {
+    const existingDi = makeDi({ status: STATUS_DI.Negotiation1.status });
+    const updatedDi = makeDi({ status: STATUS_DI.Pending3.status });
+    diModel.findOne.mockResolvedValue(existingDi);
+    diModel.findOneAndUpdate.mockResolvedValue(updatedDi);
+    statService.updateStatus.mockResolvedValue({});
+
+    await service.transition({
+      diId: existingDi._id,
+      transitionKey: 'MANAGER_ADMIN_TO_PENDING3',
+      actorRole: Role.MANAGER,
+    });
+
+    expect(statService.updateStatus).toHaveBeenCalledWith(
+      existingDi._id,
+      STATUS_DI.Pending3.status,
+    );
+  });
+
   it('logs and rethrows Stat.status synchronization failures', async () => {
     const existingDi = makeDi({ status: STATUS_DI.Diagnostic.status });
     const updatedDi = makeDi({ status: STATUS_DI.InDiagnostic.status });

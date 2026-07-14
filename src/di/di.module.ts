@@ -35,9 +35,10 @@ import { ClientsModule } from 'src/clients/clients.module';
 import { LocationModule } from 'src/location/location.module';
 import { DiImportController } from './import/di-import.controller';
 import { DiImportService } from './import/di-import.service';
+import { DiImageController } from './di-image.controller';
 
 @Module({
-  controllers: [DiImportController],
+  controllers: [DiImportController, DiImageController],
   providers: [
     DiResolver,
     DiService,
