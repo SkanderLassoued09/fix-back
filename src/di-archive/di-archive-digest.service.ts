@@ -4,27 +4,12 @@ import { Model } from 'mongoose';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { DiArchiveDocument } from './entities/di-archive.entity';
 import { DigestSnapshotDocument } from './entities/digest-snapshot.entity';
+import { isDocMissing } from './di-archive-filter.util';
 
-/**
- * A document text-ref is MISSING when the registry value is one of the
- * "empty" sentinels: null / undefined / empty / whitespace-only / `_` /
- * `Sans` (any case). Anything else — a real reference, a business marker
- * (`ANNULER`, `IRREPARABLE`), a payment mode (`EMAIL`, `ESP`), a phone
- * (`6200…`), an OK stamp — is PRESENT. Trim + case-insensitive so
- * `Sans`/`SANS`/`  sans  ` all fall to missing.
- *
- * The rule intentionally ignores the paired `DriveDocRef` (`bc`/`bl`/…)
- * — a future job will chase the actual uploads; this digest reports the
- * registry-side gap.
- */
-export function isDocMissing(value: unknown): boolean {
-  if (value == null) return true;
-  const s = String(value).trim();
-  if (s === '') return true;
-  if (s === '_') return true;
-  if (/^sans$/i.test(s)) return true;
-  return false;
-}
+// The « document manquant » rule now lives in `di-archive-filter.util` so the
+// digest AND the /archives filter share ONE definition. Re-exported here to keep
+// the existing import path (`from './di-archive-digest.service'`) working.
+export { isDocMissing };
 
 /**
  * DIGEST_DI_ARCHIVE_INCOMPLETES — daily documentary-completion report.

@@ -21,10 +21,13 @@ export const DI_TRANSITIONS = {
   },
   /**
    * Existing mutation: magasinTech_Pending2
-   * Existing behavior: update status + current_roles only.
+   * Existing behavior: update status + current_roles.
    *
-   * This intentionally does not update Stat.status yet because the legacy
-   * method did not call StatService.
+   * MUST sync Stat.status: the Tech list view (`getDiForTech`) renders
+   * `stat.status`, while the Coordinator/KPI views render `Di.status`. Leaving
+   * `updateStatStatus:false` here left the DI at PENDING2 (coordinator) while
+   * the Stat stayed INDIAGNOSTIC/DIAGNOSTIC_Pause (tech) → the T281/T282
+   * status-divergence bug. The sync is best-effort (try/catch in the engine).
    */
   MAGASIN_TECH_TO_PENDING2: {
     key: 'MAGASIN_TECH_TO_PENDING2',
@@ -36,13 +39,16 @@ export const DI_TRANSITIONS = {
     to: STATUS_DI.Pending2.status,
     currentRoles: STATUS_DI.Pending2.role,
     allowedActorRoles: [Role.MAGASIN, Role.TECH],
-    updateStatStatus: false,
+    updateStatStatus: true,
     strictFrom: false,
     strictRole: false,
   },
   /**
    * Existing mutation: managerAdminManager_Pending3
-   * Existing behavior: update status + current_roles only.
+   * Existing behavior: update status + current_roles.
+   *
+   * Same reason as MAGASIN_TECH_TO_PENDING2: keep Stat.status in lock-step with
+   * Di.status so the tech list never diverges from the coordinator view.
    */
   MANAGER_ADMIN_TO_PENDING3: {
     key: 'MANAGER_ADMIN_TO_PENDING3',
@@ -50,7 +56,7 @@ export const DI_TRANSITIONS = {
     to: STATUS_DI.Pending3.status,
     currentRoles: STATUS_DI.Pending3.role,
     allowedActorRoles: [Role.MANAGER, Role.ADMIN_MANAGER],
-    updateStatStatus: false,
+    updateStatStatus: true,
     strictFrom: false,
     strictRole: false,
   },

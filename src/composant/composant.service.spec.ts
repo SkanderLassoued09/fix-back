@@ -4,6 +4,7 @@ import { GraphQLError } from 'graphql';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
 import { ComposantService } from './composant.service';
 import { GoogleDriveService } from 'src/google-drive/google-drive.service';
+import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 
 /**
  * Unit tests for the « Enregistrer » save path (`addComposantInfo`).
@@ -65,6 +66,13 @@ describe('ComposantService.addComposantInfo', () => {
             buildDocFileName: jest.fn(),
             uploadFile: jest.fn(),
           },
+        },
+        // ComposantService gained a DiscordHookService dependency (create path
+        // → sendComposantCreated). addComposantInfo (the tested update path)
+        // never calls it, so a stub is enough to satisfy DI.
+        {
+          provide: DiscordHookService,
+          useValue: { sendComposantCreated: jest.fn() },
         },
       ],
     }).compile();

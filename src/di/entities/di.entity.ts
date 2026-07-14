@@ -156,6 +156,15 @@ export class DiDocument extends Document {
   // is all the detector needs.
   @Prop({ default: null })
   statusUpdatedAt: Date | null;
+
+  // Transition history — the SINGLE source of truth for per-step dates in the
+  // "Contrôle du Flow" timeline. Appended by the same status-change hooks that
+  // stamp `statusUpdatedAt`, so EVERY transition (via save or $set update) is
+  // recorded with no per-step date field and no call-site remembering.
+  // Author is NOT stored here (the Mongoose hook has no request context) — the
+  // per-phase actor is resolved from the existing *_By / tech fields.
+  @Prop({ type: [{ status: String, at: Date }], _id: false, default: [] })
+  statusHistory: Array<{ status: string; at: Date }>;
   // ------------------------------------------------------------------------
 
   // Retour (return) tracking — motif + timestamp of the latest retour, shown
@@ -194,7 +203,12 @@ DiSchema.pre('save', function (next) {
   // `this` is the document; `isModified` covers creates and direct edits.
   // For a brand-new doc we still want statusUpdatedAt populated.
   if (this.isNew || this.isModified('status')) {
-    this.set('statusUpdatedAt', new Date());
+    const at = new Date();
+    this.set('statusUpdatedAt', at);
+    // Same central point → append the transition to the history.
+    const hist = (this.get('statusHistory') as any[]) ?? [];
+    hist.push({ status: this.get('status'), at });
+    this.set('statusHistory', hist);
   }
   next();
 });
@@ -208,10 +222,19 @@ function stampStatusUpdatedAtOnQueryUpdate(this: any, next: () => void) {
   if (!update) return next();
   const set = update.$set ?? update;
   if (set && Object.prototype.hasOwnProperty.call(set, 'status')) {
+    const at = new Date();
     if (update.$set) {
-      update.$set.statusUpdatedAt = new Date();
+      update.$set.statusUpdatedAt = at;
+      // `$push` and `$set` are both operators → safe to combine. Every app
+      // transition uses the `$set` form, so the history captures them all.
+      update.$push = {
+        ...(update.$push ?? {}),
+        statusHistory: { status: set.status, at },
+      };
     } else {
-      update.statusUpdatedAt = new Date();
+      // Legacy direct-field form (no operators): can't mix `$push` here, so
+      // only the timestamp is stamped. Not used by the workflow transitions.
+      update.statusUpdatedAt = at;
     }
     this.setUpdate(update);
   }
@@ -222,12 +245,42 @@ DiSchema.pre('updateOne', stampStatusUpdatedAtOnQueryUpdate);
 DiSchema.pre('updateMany', stampStatusUpdatedAtOnQueryUpdate);
 // ------------------------------------------------------------------------
 
+/**
+ * One transition-history entry — the single source of truth for per-step dates
+ * in the "Contrôle du Flow" timeline. Populated by the status-change hooks.
+ */
+@ObjectType()
+export class StatusHistoryEntry {
+  @Field({ nullable: true })
+  status: string;
+  @Field(() => Date, { nullable: true })
+  at: Date;
+}
+
+/**
+ * Read-only GraphQL projection of one `driveDocs` entry (BC/Devis/BL/Facture/
+ * Image). Exposes the REAL uploaded file name so the UI can show it instead of
+ * a generic type label. Derived from the Mongo `driveDocs` map — never written.
+ */
+@ObjectType()
+export class DriveDoc {
+  @Field()
+  type: string;
+  @Field({ nullable: true })
+  name: string;
+  @Field({ nullable: true })
+  webViewLink: string;
+}
+
 @ObjectType()
 export class Di {
   @Field({ nullable: true })
   _id: string;
   @Field({ nullable: true })
   _idnum: string;
+  // Real uploaded documents (name + Drive link) derived from `driveDocs`.
+  @Field(() => [DriveDoc], { nullable: true })
+  documents: DriveDoc[];
   @Field({ nullable: true })
   comment: string;
   @Field({ nullable: true })
@@ -442,6 +495,9 @@ export class DiTable {
   _id: string;
   @Field({ nullable: true })
   _idnum: string;
+  // Real uploaded documents (name + Drive link) derived from `driveDocs`.
+  @Field(() => [DriveDoc], { nullable: true })
+  documents: DriveDoc[];
   @Field({ nullable: true })
   comment: string;
   @Field({ nullable: true })
@@ -541,6 +597,10 @@ export class DiTable {
   retourReason?: string;
   @Field({ nullable: true })
   retourDate?: Date;
+
+  // Transition history — single source of truth for the flow timeline dates.
+  @Field(() => [StatusHistoryEntry], { nullable: true })
+  statusHistory?: StatusHistoryEntry[];
 }
 @ObjectType()
 export class DiTableData {

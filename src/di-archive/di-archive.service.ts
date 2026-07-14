@@ -10,6 +10,12 @@ import {
   StatutCompletude,
 } from './entities/di-archive.entity';
 import { CreateDiArchiveInput } from './dto/create-di-archive.input';
+import {
+  DiArchivesFilterInput,
+  DiArchivesPageInput,
+} from './dto/di-archives-filter.input';
+import { DiArchivePage } from './entities/di-archive-page.output';
+import { buildArchiveFilter } from './di-archive-filter.util';
 import { GoogleDriveService } from '../google-drive/google-drive.service';
 import { getFileExtension } from '../di/shared.files';
 
@@ -273,6 +279,67 @@ export class DiArchiveService {
       .find()
       .sort({ createdAt: -1 })
       .lean() as unknown as Promise<DiArchive[]>;
+  }
+
+  /** Whitelist of columns a client may sort on (guards against injection). */
+  private static readonly SORTABLE = new Set([
+    'refOrigine',
+    'title',
+    'numSerie',
+    'clientNom',
+    'societeNom',
+    'statutHistorique',
+    'statutCompletude',
+    'arrangement',
+    'createdAt',
+    'updatedAt',
+  ]);
+
+  /**
+   * Server-side page for `/archives`: applies the cumulative filter
+   * ([[di-archive-filter.util]] · buildArchiveFilter), then counts + fetches ONE
+   * page. `count` and `find` share the SAME query so the total always matches
+   * the rows. Never loads the whole (~1400-row) collection into memory.
+   */
+  async findPage(
+    filter?: DiArchivesFilterInput,
+    page?: DiArchivesPageInput,
+  ): Promise<DiArchivePage> {
+    const query = buildArchiveFilter(filter);
+    const limit = Math.min(Math.max(page?.limit ?? 12, 1), 200);
+    const pageNum = Math.max(page?.page ?? 1, 1);
+    const skip = (pageNum - 1) * limit;
+    const sortField =
+      page?.sortField && DiArchiveService.SORTABLE.has(page.sortField)
+        ? page.sortField
+        : 'createdAt';
+    const sortOrder = page?.sortOrder === 1 ? 1 : -1;
+
+    const [rows, totalCount] = await Promise.all([
+      this.diArchiveModel
+        .find(query)
+        .sort({ [sortField]: sortOrder })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      this.diArchiveModel.countDocuments(query),
+    ]);
+    return { rows: rows as unknown as DiArchive[], totalCount };
+  }
+
+  /**
+   * Distinct non-empty historical statuses — powers the « Statut » dropdown so
+   * it self-populates from whatever vocabulary the registry actually contains
+   * (returns `[]` while `statutHistorique` is unset on every row).
+   */
+  async distinctStatutsHistorique(): Promise<string[]> {
+    const values: unknown[] = await this.diArchiveModel.distinct(
+      'statutHistorique',
+      { statutHistorique: { $nin: [null, ''] } },
+    );
+    return (values as string[])
+      .filter((v) => v != null && String(v).trim() !== '')
+      .sort((a, b) => a.localeCompare(b));
   }
 
   async findOne(_id: string): Promise<DiArchive | null> {

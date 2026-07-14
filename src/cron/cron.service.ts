@@ -10,6 +10,7 @@ import { SheetSyncService } from 'src/google-sheets/sheet-sync.service';
 import { JiraCronNotificationService } from 'src/jira-cron-notification/jira-cron-notification.service';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { DiArchiveDigestService } from 'src/di-archive/di-archive-digest.service';
+import { ReunionPVService } from 'src/reunion-pv/reunion-pv.service';
 
 /**
  * The 5 Discord channels of an environment, mapped to the EXACT env vars read
@@ -36,6 +37,7 @@ export class AppCronService {
     private readonly jiraCronNotificationService: JiraCronNotificationService,
     private readonly discordHookService: DiscordHookService,
     private readonly diArchiveDigestService: DiArchiveDigestService,
+    private readonly reunionPVService: ReunionPVService,
   ) {}
 
   /**
@@ -68,6 +70,9 @@ export class AppCronService {
       case 'DIGEST_DI_ARCHIVE_INCOMPLETES':
         await this.triggerDiArchiveIncompletesDigest();
         break;
+      case 'REUNION_REMINDER':
+        await this.triggerReunionReminder();
+        break;
       default:
         this.logger.error(`Unknown ACTION: ${action}`);
     }
@@ -90,6 +95,22 @@ export class AppCronService {
     this.logger.log(
       `DiArchive digest: total=${res.total} facture=${res.missing.facture} bc=${res.missing.bc} bl=${res.missing.bl} devis=${res.missing.devis} posted=${res.posted}`,
     );
+  }
+
+  /**
+   * Trigger-only — REUNION_REMINDER. Finds meetings starting within the next
+   * ~5 min (REUNION_REMINDER_WINDOW_MIN) not yet reminded, atomically claims
+   * each (`reminderSent` false→true), and posts ONE Discord reminder each with
+   * a deep-link that opens the detail modal. Idempotent: designed to run every
+   * 1-2 min (`ACTION=REUNION_REMINDER`, alias `action:reunion-reminder`) without
+   * ever double-notifying. Business logic lives in ReunionPVService.
+   */
+  async triggerReunionReminder() {
+    const res = await this.reunionPVService.sendDueReminders();
+    this.logger.log(
+      `Reunion reminder: candidates=${res.candidates} sent=${res.sent} failed=${res.failed}`,
+    );
+    if (res.failed > 0) process.exitCode = 1;
   }
 
   /**

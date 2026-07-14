@@ -9,6 +9,7 @@ import { GoogleSheetsModule } from 'src/google-sheets/google-sheets.module';
 import { JiraCronNotificationModule } from 'src/jira-cron-notification/jira-cron-notification.module';
 import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
 import { DiArchiveModule } from 'src/di-archive/di-archive.module';
+import { ReunionPVModule } from 'src/reunion-pv/reunion-pv.module';
 
 @Module({
   imports: [
@@ -21,6 +22,9 @@ import { DiArchiveModule } from 'src/di-archive/di-archive.module';
     // Exposes DiArchiveDigestService, consumed by
     // AppCronService.triggerDiArchiveIncompletesDigest.
     DiArchiveModule,
+    // Exposes ReunionPVService, consumed by
+    // AppCronService.triggerReunionReminder (REUNION_REMINDER).
+    ReunionPVModule,
     ScheduleModule.forRoot(),
   ],
   providers: [AppCronService, NotificationsGateway],

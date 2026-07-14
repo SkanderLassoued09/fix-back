@@ -134,6 +134,29 @@ export class StatService {
   }
 
   async createStat(createStatInput: CreateStatInput): Promise<Stat> {
+    // ── Manager gate ──────────────────────────────────────────────────────
+    // After a Retour, the diagnostic technician can NOT be (re)assigned until
+    // the manager relaunches the DI into the flow (status → PENDING1). Enforced
+    // server-side (not just greyed in the UI) so a direct API call can't bypass
+    // it. Only the diagnostic assignment (`id_tech_diag`) is gated — repair
+    // assignment happens at PENDING3 and is unaffected. Placed before the
+    // try/catch so this expected business rejection isn't logged as an
+    // operational error.
+    if (createStatInput?.id_tech_diag) {
+      const RETOUR_STATUSES = [
+        STATUS_DI.Retour1.status,
+        STATUS_DI.Retour2.status,
+        STATUS_DI.Retour3.status,
+      ];
+      const gateDi = await this.diModel.findOne({
+        _id: createStatInput._idDi,
+      });
+      if (gateDi && RETOUR_STATUSES.includes(gateDi.status)) {
+        throw new ForbiddenException(
+          "Affectation du technicien diagnostic impossible pendant un retour : la DI doit d'abord être relancée par le manager (statut PENDING1).",
+        );
+      }
+    }
     try {
       const index = await this.generateStatId();
 
@@ -163,19 +186,14 @@ export class StatService {
         result.id_tech_diag,
       );
 
-      // 🔔 Discord notification — best-effort, routed through capture pipeline.
-      try {
-        await this.discordHookService.sendDiAssignedToTech({
-          di,
-          stat: statWithStatus,
-          technician: profile,
-        });
-      } catch (err) {
-        await this.captureDiscordFailure('createStat', err, {
-          diId: createStatInput._idDi,
-          techId: result.id_tech_diag,
-        });
-      }
+      // NO Discord notification here. Diagnostic assignment is a two-mutation
+      // flow (createStat → coordinator_ToDiag); the SINGLE, complete Discord
+      // embed is fired by `coordinator_ToDiag` via `sendDiagnosticAssigned`
+      // (real DI number/title/client + technician). The old
+      // `sendDiAssignedToTech` call here ran first — before the DI was moved to
+      // DIAGNOSTIC — and, worse, spread a Mongoose document (`{...di}`) which
+      // drops the data fields → a duplicate "DI Assigned to Technician" embed
+      // with N/A DI Number/Title/Client. Removed to leave exactly one notif.
 
       // existing socket notification
       this.notificationGateway.updateTicket({

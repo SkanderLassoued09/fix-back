@@ -25,6 +25,10 @@ export class PointDiscuteInput {
 
 @InputType()
 export class ActionItemInput {
+  // Echoed by the detail modal for an EXISTING action so the Jira writer
+  // updates its issue instead of creating a duplicate. Absent = new action.
+  @Field({ nullable: true })
+  _id?: string;
   @Field()
   titre: string;
   @Field({ nullable: true })
@@ -118,6 +122,35 @@ export class CreateReunionPVInput {
 
   @Field({ nullable: true })
   prochaineReunion?: Date;
+  @Field(() => PvStatut, { nullable: true })
+  statut?: PvStatut;
+}
+
+/**
+ * Phase-2 input: the "document the meeting" step performed later from the detail
+ * modal (after the light creation). Carries ONLY the detailed sections; the
+ * light fields (titre/date/participants) are set at creation and untouched here.
+ * `actions[]` may include an `_id` for existing actions (idempotent Jira sync).
+ */
+@InputType()
+export class UpdateReunionPVDetailsInput {
+  @Field()
+  _id: string;
+
+  @Field(() => [String], { nullable: true })
+  ordreDuJour?: string[];
+  @Field(() => [String], { nullable: true })
+  decisions?: string[];
+  @Field(() => [PointDiscuteInput], { nullable: true })
+  pointsDiscutes?: PointDiscuteInput[];
+  @Field(() => [ActionItemInput], { nullable: true })
+  actions?: ActionItemInput[];
+
+  @Field(() => IshikawaInput, { nullable: true })
+  ishikawa?: IshikawaInput;
+
+  // Optional finalize toggle: BROUILLON → FINALISE. When omitted the PV keeps
+  // its current statut (documenting a draft doesn't lock it).
   @Field(() => PvStatut, { nullable: true })
   statut?: PvStatut;
 }

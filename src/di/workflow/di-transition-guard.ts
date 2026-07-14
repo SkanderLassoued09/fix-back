@@ -34,7 +34,13 @@ import { STATUS_DI } from '../di.status';
  * completes the equivalence class.
  */
 export const ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {
-  [STATUS_DI.Pending1.status]: [STATUS_DI.Created.status],
+  [STATUS_DI.Pending1.status]: [
+    STATUS_DI.Created.status,
+    // « Renvoyer au diagnostic » — the admin, while pricing a (typically
+    // non-repairable) DI, can bounce it back to the coordinator so a
+    // technician is re-assigned for a fresh diagnostic. PRICING → PENDING1.
+    STATUS_DI.Pricing.status,
+  ],
   [STATUS_DI.Diagnostic.status]: [STATUS_DI.Pending1.status],
   [STATUS_DI.InDiagnostic.status]: [
     STATUS_DI.Diagnostic.status,

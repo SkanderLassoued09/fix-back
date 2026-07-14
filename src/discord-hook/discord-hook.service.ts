@@ -24,23 +24,23 @@ type ChannelKey =
 // New raw enum values added to STATUS_DI MUST be added here so embeds
 // never leak the raw enum name to Discord.
 const STATUS_LABELS: Record<string, string> = {
-  CREATED: '🆕 Created',
-  PENDING1: '🟡 Pending Diagnostic',
-  DIAGNOSTIC: '🧭 Diagnostic Assigned',
-  DIAGNOSTIC_Pause: '⏸️ Diagnostic Paused',
-  INDIAGNOSTIC: '🔍 In Diagnostic',
-  MagasinEstimation: '🏬 Magasin Estimation',
-  INMAGASIN: '🏬 In Magasin',
-  PENDING2: '📦 Pending Pricing',
-  PRICING: '💰 In Pricing',
-  NEGOTIATION1: '🤝 Negotiation 1 (Manager)',
-  NEGOTIATION2: '🤝 Negotiation 2 (Admin)',
-  ANNULER: '❌ Cancelled',
-  PENDING3: '🚚 Pending Reparation',
-  REPARATION: '🛠️ Reparation Assigned',
-  REPARATION_Pause: '⏸️ Reparation Paused',
-  INREPARATION: '🔧 In Reparation',
-  FINISHED: '✅ Finished',
+  CREATED: '🆕 Créée',
+  PENDING1: '🟡 En attente diagnostic',
+  DIAGNOSTIC: '🧭 Diagnostic affecté',
+  DIAGNOSTIC_Pause: '⏸️ Diagnostic en pause',
+  INDIAGNOSTIC: '🔍 En diagnostic',
+  MagasinEstimation: '🏬 Estimation magasin',
+  INMAGASIN: '🏬 En magasin',
+  PENDING2: '📦 En attente de facturation',
+  PRICING: '💰 Facturation en cours',
+  NEGOTIATION1: '🤝 Négociation 1 (Manager)',
+  NEGOTIATION2: '🤝 Négociation 2 (Admin)',
+  ANNULER: '❌ Annulée',
+  PENDING3: '🚚 En attente réparation',
+  REPARATION: '🛠️ Réparation affectée',
+  REPARATION_Pause: '⏸️ Réparation en pause',
+  INREPARATION: '🔧 En réparation',
+  FINISHED: '✅ Terminée',
   RETOUR1: '🔁 Retour 1',
   RETOUR2: '🔁 Retour 2',
   RETOUR3: '⚠️ Retour 3',
@@ -156,7 +156,7 @@ export class DiscordHookService {
             { name: 'Environnement', value: envUpper, inline: true },
             { name: '🕐 Heure (Africa/Tunis)', value: tunis, inline: false },
           ],
-          footer: { text: 'Fixtronix — diagnostic webhooks' },
+          footer: { text: 'Fixtronix — diagnostic des webhooks' },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -169,7 +169,7 @@ export class DiscordHookService {
   // ─────────────────────────────────────────────────────────────────────
 
   resolveStatusLabel(status: string | undefined | null): string {
-    if (!status) return 'Unknown';
+    if (!status) return 'Inconnu';
     return STATUS_LABELS[status] || status;
   }
 
@@ -257,7 +257,7 @@ export class DiscordHookService {
       clientName: clientName || 'N/A',
       companyName: companyName || 'N/A',
       customerLabel: useCompany ? companyName : clientName || 'N/A',
-      customerFieldName: useCompany ? '🏢 Company' : '👤 Client',
+      customerFieldName: useCompany ? '🏢 Société' : '👤 Client',
       statusLabel: this.resolveStatusLabel(di?.status),
     };
   }
@@ -270,15 +270,15 @@ export class DiscordHookService {
     extraFields: any[] = [],
   ) {
     return [
-      { name: '🆔 DI Number', value: ctx.idnum, inline: true },
-      { name: '📄 Title', value: ctx.title },
+      { name: '🆔 N° DI', value: ctx.idnum, inline: true },
+      { name: '📄 Titre', value: ctx.title },
       {
         name: ctx.customerFieldName,
         value: ctx.customerLabel,
         inline: true,
       },
       {
-        name: '📊 Status',
+        name: '📊 Statut',
         value: statusOverride || ctx.statusLabel,
         inline: true,
       },
@@ -298,11 +298,11 @@ export class DiscordHookService {
     await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
-          title: '📌 DI Pending',
-          description: 'A new DI has been created and is pending.',
+          title: '📌 DI en attente',
+          description: 'Une nouvelle DI a été créée et est en attente.',
           color: 16776960, // yellow (pending)
           fields: this.buildBaseFields(ctx, undefined, [
-            { name: '🧑‍💼 Created By', value: createdBy, inline: true },
+            { name: '🧑‍💼 Créée par', value: createdBy, inline: true },
           ]),
           footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
@@ -330,11 +330,11 @@ export class DiscordHookService {
     await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
-          title: '🛠️ DI Assigned to Technician',
-          description: 'A DI has been assigned for diagnostic.',
+          title: '🛠️ DI affectée au technicien',
+          description: 'Une DI a été affectée pour diagnostic.',
           color: 3447003, // blue
           fields: this.buildBaseFields(ctx, undefined, [
-            { name: '👨‍🔧 Technician', value: techDisplay, inline: true },
+            { name: '👨‍🔧 Technicien', value: techDisplay, inline: true },
           ]),
           footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
@@ -348,12 +348,12 @@ export class DiscordHookService {
     await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
-          title: '📦 Components Sent for Confirmation',
-          description: 'Magasin sent components to coordinator for validation.',
+          title: '📦 Composants envoyés pour validation',
+          description: 'Le magasin a envoyé des composants à la coordinatrice pour validation.',
           color: 10197915,
           fields: this.buildBaseFields(ctx, undefined, [
             { name: '🏬 Source', value: 'Magasin', inline: true },
-            { name: '🧑‍💼 Target', value: 'Coordinator', inline: true },
+            { name: '🧑‍💼 Destinataire', value: 'Coordinatrice', inline: true },
           ]),
           footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
@@ -367,13 +367,13 @@ export class DiscordHookService {
     await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
-          title: '✅ Components Confirmed by Coordinator',
+          title: '✅ Composants validés par la coordinatrice',
           description:
-            'Coordinator validated the components. Magasin can proceed.',
+            'La coordinatrice a validé les composants. Le magasin peut continuer.',
           color: 3066993,
           fields: this.buildBaseFields(ctx, undefined, [
-            { name: '🧑‍💼 Source', value: 'Coordinator', inline: true },
-            { name: '🏬 Target', value: 'Magasin', inline: true },
+            { name: '🧑‍💼 Source', value: 'Coordinatrice', inline: true },
+            { name: '🏬 Destinataire', value: 'Magasin', inline: true },
           ]),
           footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
@@ -387,8 +387,8 @@ export class DiscordHookService {
     await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
-          title: '🏬 DI Arrived in Magasin',
-          description: 'The DI is now in the warehouse/magasin.',
+          title: '🏬 DI arrivée au magasin',
+          description: 'La DI est maintenant au magasin.',
           color: 5763719,
           fields: this.buildBaseFields(ctx),
           footer: { text: 'Fixtronix System' },
@@ -403,8 +403,8 @@ export class DiscordHookService {
     await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
-          title: '🚚 DI Moved to Pending3',
-          description: 'DI advanced to the next stage (Pending3).',
+          title: '🚚 DI passée en attente réparation',
+          description: 'La DI passe à l\'étape suivante (attente réparation).',
           color: 5793266,
           fields: this.buildBaseFields(ctx),
           footer: { text: 'Fixtronix System' },
@@ -419,11 +419,11 @@ export class DiscordHookService {
     await this.postEmbed('DEMANDE_PDF', {
       embeds: [
         {
-          title: '🧾 Devis Uploaded',
-          description: 'A quote (devis) has been uploaded.',
+          title: '🧾 Devis ajouté',
+          description: 'Un devis a été ajouté.',
           color: 10181046,
           fields: this.buildBaseFields(ctx, undefined, [
-            { name: '📎 File', value: fileName },
+            { name: '📎 Fichier', value: fileName },
           ]),
           footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
@@ -437,11 +437,11 @@ export class DiscordHookService {
     await this.postEmbed('DEMANDE_PDF', {
       embeds: [
         {
-          title: '📄 Bon de Commande Uploaded',
-          description: 'A BC (PDF) has been uploaded for this DI.',
+          title: '📄 Bon de commande ajouté',
+          description: 'Un bon de commande (PDF) a été ajouté pour cette DI.',
           color: 3447003,
           fields: this.buildBaseFields(ctx, undefined, [
-            { name: '📎 File', value: fileName },
+            { name: '📎 Fichier', value: fileName },
           ]),
           footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
@@ -455,11 +455,11 @@ export class DiscordHookService {
     await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
-          title: '💰 DI Price Assigned',
-          description: 'Pricing has been completed.',
+          title: '💰 Prix affecté à la DI',
+          description: 'La facturation a été effectuée.',
           color: 3066993,
           fields: this.buildBaseFields(ctx, undefined, [
-            { name: '💵 Price', value: `${price} TND`, inline: true },
+            { name: '💵 Prix', value: `${price} TND`, inline: true },
           ]),
           footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
@@ -473,8 +473,8 @@ export class DiscordHookService {
     await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
-          title: '📦 DI Status Updated',
-          description: 'DI moved to Pending2 (next processing stage).',
+          title: '📦 Statut de la DI mis à jour',
+          description: 'La DI est passée à l\'étape suivante (attente de facturation).',
           color: 15844367,
           fields: this.buildBaseFields(ctx),
           footer: { text: 'Fixtronix System' },
@@ -489,8 +489,8 @@ export class DiscordHookService {
     await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
-          title: '💰 DI Ready for Pricing',
-          description: 'A DI is ready for pricing. Action required by admin.',
+          title: '💰 DI prête pour facturation',
+          description: 'Une DI est prête pour la facturation. Action requise par l\'administrateur.',
           color: 16753920,
           fields: this.buildBaseFields(ctx),
           footer: { text: 'Fixtronix System' },
@@ -505,8 +505,8 @@ export class DiscordHookService {
     await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
-          title: '🆕 DI Created (Pending1)',
-          description: 'A new DI entered the workflow.',
+          title: '🆕 DI créée',
+          description: 'Une nouvelle DI est entrée dans le flux.',
           color: 16776960,
           fields: this.buildBaseFields(ctx),
           footer: { text: 'Fixtronix System' },
@@ -522,14 +522,14 @@ export class DiscordHookService {
     await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
-          title: isMax ? '⚠️ DI Ignored (Limit Reached)' : '⚠️ DI Ignored',
+          title: isMax ? '⚠️ DI ignorée (limite atteinte)' : '⚠️ DI ignorée',
           description: isMax
-            ? 'This DI reached the maximum ignore limit.'
-            : 'This DI has been ignored.',
+            ? 'Cette DI a atteint la limite maximale d\'ignorance.'
+            : 'Cette DI a été ignorée.',
           color: isMax ? 15158332 : 16776960,
           fields: this.buildBaseFields(ctx, undefined, [
             {
-              name: '🚫 Ignore Count',
+              name: '🚫 Nombre d\'ignorances',
               value: `${di?.ignoreCount ?? 0}/3`,
               inline: true,
             },
@@ -546,12 +546,12 @@ export class DiscordHookService {
     await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
-          title: '🎉 DI Completed',
-          description: 'Repair process is fully completed.',
+          title: '🎉 DI terminée',
+          description: 'Le processus de réparation est entièrement terminé.',
           color: 3066993,
           fields: this.buildBaseFields(ctx, undefined, [
             {
-              name: '💵 Final Price',
+              name: '💵 Prix final',
               value: di?.price ? `${di.price} TND` : 'N/A',
               inline: true,
             },
@@ -569,9 +569,9 @@ export class DiscordHookService {
     await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
-          title: '🛠️ DI Ready for Reparation',
+          title: '🛠️ DI prête pour réparation',
           description:
-            'Reparation phase assigned. Awaiting technician to start.',
+            'Phase de réparation affectée. En attente du démarrage par le technicien.',
           color: 15105570,
           fields: this.buildBaseFields(ctx),
           footer: { text: 'Fixtronix System' },
@@ -584,28 +584,28 @@ export class DiscordHookService {
   async sendDiagnosticFinished({ di, diag }: { di: any; diag: any }) {
     const ctx = await this.buildContext(di);
     const repairable = diag?.can_be_repaired
-      ? '✅ Repairable'
-      : '🚫 Not Repairable';
+      ? '✅ Réparable'
+      : '🚫 Non réparable';
     await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
-          title: '✅ Diagnostic Completed',
-          description: 'Technician has finished the diagnostic.',
+          title: '✅ Diagnostic terminé',
+          description: 'Le technicien a terminé le diagnostic.',
           color: diag?.can_be_repaired ? 3066993 : 15158332,
           fields: this.buildBaseFields(ctx, undefined, [
-            { name: '🧾 Result', value: repairable, inline: true },
+            { name: '🧾 Résultat', value: repairable, inline: true },
             {
-              name: '📦 Contains PDR',
-              value: diag?.contain_pdr ? 'Yes' : 'No',
+              name: '📦 Contient PDR',
+              value: diag?.contain_pdr ? 'Oui' : 'Non',
               inline: true,
             },
             {
-              name: '⚠️ Fixtronix Error',
-              value: diag?.isErrorFromFixtronix ? 'Yes' : 'No',
+              name: '⚠️ Erreur Fixtronix',
+              value: diag?.isErrorFromFixtronix ? 'Oui' : 'Non',
               inline: true,
             },
             {
-              name: '📝 Diagnostic Note',
+              name: '📝 Note de diagnostic',
               value: diag?.remarque_tech_diagnostic || 'N/A',
             },
           ]),
@@ -625,8 +625,8 @@ export class DiscordHookService {
     await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
-          title: '⏸️ Diagnostic Paused',
-          description: 'Technician paused the diagnostic process.',
+          title: '⏸️ Diagnostic en pause',
+          description: 'Le technicien a mis le diagnostic en pause.',
           color: 9807270,
           fields: this.buildBaseFields(
             ctx,
@@ -645,8 +645,8 @@ export class DiscordHookService {
     await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
-          title: '▶️ Diagnostic Resumed',
-          description: 'Technician resumed the diagnostic.',
+          title: '▶️ Diagnostic repris',
+          description: 'Le technicien a repris le diagnostic.',
           color: 3447003,
           fields: this.buildBaseFields(ctx),
           footer: { text: 'Fixtronix System' },
@@ -661,8 +661,8 @@ export class DiscordHookService {
     await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
-          title: '🔍 Diagnostic Started',
-          description: 'Technician started the diagnostic.',
+          title: '🔍 Diagnostic démarré',
+          description: 'Le technicien a démarré le diagnostic.',
           color: 3447003,
           fields: this.buildBaseFields(ctx),
           footer: { text: 'Fixtronix System' },
@@ -672,16 +672,25 @@ export class DiscordHookService {
     });
   }
 
-  async sendDiagnosticAssigned(di: any) {
-
+  async sendDiagnosticAssigned(di: any, technician?: any) {
     const ctx = await this.buildContext(di);
+    // Include the assigned diagnostic technician so this SINGLE notification is
+    // complete (it replaces the old, duplicate `sendDiAssignedToTech`). Only add
+    // the field when the tech resolves to a real name — never surface "N/A".
+    const extras: Array<{ name: string; value: string; inline?: boolean }> = [];
+    if (technician !== undefined && technician !== null) {
+      const techDisplay = await this.resolveProfileDisplay(technician);
+      if (techDisplay && techDisplay !== 'N/A') {
+        extras.push({ name: '👨‍🔧 Technicien', value: techDisplay, inline: true });
+      }
+    }
     await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
-          title: '🧭 Diagnostic Assigned',
-          description: 'Coordinator assigned this DI to diagnostic.',
+          title: '🧭 Diagnostic affecté',
+          description: 'La coordinatrice a affecté cette DI au diagnostic.',
           color: 3447003,
-          fields: this.buildBaseFields(ctx),
+          fields: this.buildBaseFields(ctx, undefined, extras),
           footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
@@ -695,8 +704,8 @@ export class DiscordHookService {
     await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
-          title: '🔧 Reparation Started',
-          description: 'Technician started the repair.',
+          title: '🔧 Réparation démarrée',
+          description: 'Le technicien a démarré la réparation.',
           color: 15105570,
           fields: this.buildBaseFields(ctx),
           footer: { text: 'Fixtronix System' },
@@ -713,8 +722,8 @@ export class DiscordHookService {
     await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
-          title: '⏸️ Reparation Paused',
-          description: 'Technician paused the repair.',
+          title: '⏸️ Réparation en pause',
+          description: 'Le technicien a mis la réparation en pause.',
           color: 9807270,
           fields: this.buildBaseFields(
             ctx,
@@ -734,8 +743,8 @@ export class DiscordHookService {
     await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
-          title: '▶️ Reparation Resumed',
-          description: 'Technician resumed the repair.',
+          title: '▶️ Réparation reprise',
+          description: 'Le technicien a repris la réparation.',
           color: 15105570,
           fields: this.buildBaseFields(ctx),
           footer: { text: 'Fixtronix System' },
@@ -750,12 +759,12 @@ export class DiscordHookService {
     await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
-          title: '🤝 Negotiation Started (Manager)',
-          description: 'DI entered the first negotiation round (Manager).',
+          title: '🤝 Négociation démarrée (Manager)',
+          description: 'La DI est entrée dans le premier tour de négociation (Manager).',
           color: 15418782,
           fields: this.buildBaseFields(ctx, undefined, [
             {
-              name: '💵 Initial Price',
+              name: '💵 Prix initial',
               value: di?.price ? `${di.price} TND` : 'N/A',
               inline: true,
             },
@@ -772,17 +781,17 @@ export class DiscordHookService {
     await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
-          title: '🤝 Negotiation Escalated (Admin Manager)',
-          description: 'Negotiation escalated to Admin Manager.',
+          title: '🤝 Négociation escaladée (Admin Manager)',
+          description: 'Négociation escaladée vers l\'Admin Manager.',
           color: 15418782,
           fields: this.buildBaseFields(ctx, undefined, [
             {
-              name: '💵 Initial Price',
+              name: '💵 Prix initial',
               value: di?.price ? `${di.price} TND` : 'N/A',
               inline: true,
             },
             {
-              name: '💵 Final Price',
+              name: '💵 Prix final',
               value: di?.final_price ? `${di.final_price} TND` : 'N/A',
               inline: true,
             },
@@ -799,8 +808,8 @@ export class DiscordHookService {
     await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
-          title: '❌ DI Cancelled',
-          description: 'DI was cancelled during negotiation.',
+          title: '❌ DI annulée',
+          description: 'La DI a été annulée pendant la négociation.',
           color: 15158332,
           fields: this.buildBaseFields(ctx),
           footer: { text: 'Fixtronix System' },
@@ -815,13 +824,13 @@ export class DiscordHookService {
     const titles = {
       1: '🔁 Retour 1',
       2: '🔁 Retour 2',
-      3: '⚠️ Retour 3 — Final Alert',
+      3: '⚠️ Retour 3 — Alerte finale',
     };
     const colors = { 1: 15844367, 2: 15105570, 3: 15158332 } as const;
     const descriptions = {
-      1: 'DI returned for the first time.',
-      2: 'DI returned a second time.',
-      3: 'DI reached the final retour level. Operational attention required.',
+      1: 'DI retournée pour la première fois.',
+      2: 'DI retournée une seconde fois.',
+      3: 'La DI a atteint le niveau de retour final. Attention opérationnelle requise.',
     };
     await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
@@ -831,7 +840,7 @@ export class DiscordHookService {
           color: colors[level],
           fields: this.buildBaseFields(ctx, undefined, [
             {
-              name: '🚫 Ignore Count',
+              name: '🚫 Nombre d\'ignorances',
               value: `${di?.ignoreCount ?? 0}/3`,
               inline: true,
             },
@@ -848,11 +857,11 @@ export class DiscordHookService {
     await this.postEmbed('DEMANDE_PDF', {
       embeds: [
         {
-          title: '📦 Bon de Livraison Uploaded',
-          description: 'A delivery slip (BL) has been uploaded.',
+          title: '📦 Bon de livraison ajouté',
+          description: 'Un bon de livraison (BL) a été ajouté.',
           color: 3447003,
           fields: this.buildBaseFields(ctx, undefined, [
-            { name: '📎 File', value: fileName },
+            { name: '📎 Fichier', value: fileName },
           ]),
           footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
@@ -895,7 +904,7 @@ export class DiscordHookService {
 
     // Keep payload compact for the embed — full payload is in the daily
     // log file. Discord rejects fields > 1024 chars.
-    let payloadPreview = '_(empty)_';
+    let payloadPreview = '_(vide)_';
     if (entry.payload && Object.keys(entry.payload).length) {
       const json = JSON.stringify(entry.payload, null, 0);
       payloadPreview = '```json\n' + (json.length > 800 ? json.slice(0, 797) + '...' : json) + '\n```';
@@ -904,17 +913,17 @@ export class DiscordHookService {
     await this.postEmbed('ERROR', {
       embeds: [
         {
-          title: `${severityEmoji[entry.severity] ?? '⚠️'} FIXTRONIX Operational Error`,
+          title: `${severityEmoji[entry.severity] ?? '⚠️'} FIXTRONIX · Erreur opérationnelle`,
           description: entry.error,
           color: severityColor[entry.severity] ?? severityColor.MEDIUM,
           fields: [
             { name: '🧩 Module', value: `\`${entry.module}/${entry.submodule}\``, inline: true },
-            { name: '🛠 Method', value: `\`${entry.method}\``, inline: true },
-            { name: '🎚 Severity', value: entry.severity, inline: true },
-            { name: '💬 Message', value: entry.message?.slice(0, 1000) || '_(no message)_' },
-            { name: '📦 Payload', value: payloadPreview },
+            { name: '🛠 Méthode', value: `\`${entry.method}\``, inline: true },
+            { name: '🎚 Gravité', value: entry.severity, inline: true },
+            { name: '💬 Message', value: entry.message?.slice(0, 1000) || '_(aucun message)_' },
+            { name: '📦 Données', value: payloadPreview },
           ],
-          footer: { text: 'Fixtronix Operations · Error capture' },
+          footer: { text: "Fixtronix · Capture d'erreur" },
           timestamp: entry.timestamp,
         },
       ],
@@ -969,7 +978,7 @@ export class DiscordHookService {
               value: `\`${entry.correlationId}\``,
               inline: true,
             },
-            { name: '📋 Messages', value: lines || '_(none)_' },
+            { name: '📋 Messages', value: lines || '_(aucun)_' },
           ],
           footer: { text: 'Fixtronix · Validation drift watch (dev)' },
         },
@@ -1014,27 +1023,27 @@ export class DiscordHookService {
     await this.postEmbed('APP_ALERT', {
       embeds: [
         {
-          title: `${severityEmoji[alert.severity] ?? '⚠️'} FIXTRONIX Operational Alert`,
+          title: `${severityEmoji[alert.severity] ?? '⚠️'} FIXTRONIX · Alerte opérationnelle`,
           description:
-            'This DI has remained too long in the same status and requires operational review.',
+            'Cette DI est restée trop longtemps dans le même statut et nécessite une revue opérationnelle.',
           color: severityColor[alert.severity] ?? severityColor.WARNING,
           fields: [
             { name: '🧾 DI', value: String(meta.diIdnum ?? alert.diId), inline: true },
-            { name: '📌 Status', value: statusLabel, inline: true },
-            { name: '🎚 Severity', value: alert.severity, inline: true },
+            { name: '📌 Statut', value: statusLabel, inline: true },
+            { name: '🎚 Gravité', value: alert.severity, inline: true },
             {
-              name: '⏱ Stagnation Duration',
+              name: '⏱ Durée de stagnation',
               value: ageHours !== null ? `${ageHours}h` : 'n/a',
               inline: true,
             },
-            { name: '🪧 Threshold', value: alert.type, inline: true },
+            { name: '🪧 Seuil', value: alert.type, inline: true },
             {
-              name: '🆔 Alert',
+              name: '🆔 Alerte',
               value: alert._id,
               inline: true,
             },
           ],
-          footer: { text: 'Fixtronix Operations' },
+          footer: { text: 'Fixtronix · Opérations' },
           timestamp: (alert.createdAt ?? new Date()).toISOString
             ? (alert.createdAt as Date).toISOString()
             : new Date().toISOString(),
@@ -1265,6 +1274,13 @@ export class DiscordHookService {
         inline: true,
       },
     ];
+    if (pv?.prochaineReunion) {
+      fields.push({
+        name: '📆 Prochaine réunion',
+        value: this.formatReunionDateTime(pv.prochaineReunion),
+        inline: true,
+      });
+    }
     if (di?._idnum) {
       fields.push({ name: '🔗 DI liée', value: String(di._idnum), inline: true });
     }
@@ -1275,6 +1291,13 @@ export class DiscordHookService {
         inline: true,
       });
     }
+    // Personnes concernées — resolve participant profile ids to display names.
+    const participantsLine = await this.resolveParticipantsLine(
+      pv?.participants,
+    );
+    if (participantsLine) {
+      fields.push({ name: '👥 Participants', value: participantsLine });
+    }
     await this.postEmbed('SERVICE_TECHNIQUE', {
       embeds: [
         {
@@ -1283,6 +1306,88 @@ export class DiscordHookService {
           color: 3447003, // blue
           fields,
           footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  /** Africa/Tunis date+time for meeting embeds (reminder needs the hour). */
+  private formatReunionDateTime(value: any): string {
+    if (!value) return 'N/A';
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return 'N/A';
+    return new Intl.DateTimeFormat('fr-FR', {
+      timeZone: 'Africa/Tunis',
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(d);
+  }
+
+  /** "Alice Martin (Présent) · Bob Durand (Excusé)" — resolved, capped for the
+   *  Discord 1024-char field. Empty string when there are no participants. */
+  private async resolveParticipantsLine(participants: any[]): Promise<string> {
+    const list = Array.isArray(participants) ? participants : [];
+    if (!list.length) return '';
+    const statutLabel: Record<string, string> = {
+      PRESENT: 'Présent',
+      ABSENT: 'Absent',
+      EXCUSE: 'Excusé',
+    };
+    const names = await Promise.all(
+      list.slice(0, 30).map(async (p) => {
+        const name = await this.resolveProfileDisplay(p?.profile ?? p);
+        const st = statutLabel[p?.statut] ? ` (${statutLabel[p.statut]})` : '';
+        return `${name}${st}`;
+      }),
+    );
+    return names.join(' · ').slice(0, 1024);
+  }
+
+  /**
+   * Procès-Verbal reminder — fired by the REUNION_REMINDER cron ~5 min before a
+   * meeting starts. Best-effort (routes through `postEmbed` → SERVICE_TECHNIQUE,
+   * logs+skips on a missing/failed hook). `url` (when APP_BASE_URL is set) makes
+   * the embed title clickable and opens the detail modal to document the meeting.
+   */
+  async sendReunionReminder({
+    pv,
+    url,
+  }: {
+    pv: any;
+    url?: string | null;
+  }): Promise<void> {
+    const fields: Array<{ name: string; value: string; inline?: boolean }> = [
+      { name: '🆔 Référence', value: pv?.reference ?? 'N/A', inline: true },
+      { name: '📝 Titre', value: String(pv?.titre ?? 'N/A').slice(0, 256) },
+      {
+        name: '🕐 Heure (Africa/Tunis)',
+        value: this.formatReunionDateTime(pv?.dateReunion),
+        inline: true,
+      },
+    ];
+    if (pv?.objet) {
+      fields.push({ name: '🎯 Objet', value: String(pv.objet).slice(0, 1024) });
+    }
+    const participantsLine = await this.resolveParticipantsLine(
+      pv?.participants,
+    );
+    if (participantsLine) {
+      fields.push({ name: '👥 Participants', value: participantsLine });
+    }
+    if (url) {
+      fields.push({ name: '🔗 Documenter', value: `[Ouvrir la réunion](${url})` });
+    }
+    await this.postEmbed('SERVICE_TECHNIQUE', {
+      embeds: [
+        {
+          title: '⏰ Rappel — réunion dans ~5 min',
+          ...(url ? { url } : {}),
+          description:
+            'La réunion va commencer. Ouvrez-la pour documenter (ordre du jour, décisions, actions…).',
+          color: 16763904, // amber
+          fields,
+          footer: { text: 'Fixtronix · Rappel réunion' },
           timestamp: new Date().toISOString(),
         },
       ],

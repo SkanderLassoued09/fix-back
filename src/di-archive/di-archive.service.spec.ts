@@ -1,10 +1,12 @@
 import * as mongoose from 'mongoose';
 import { DiArchiveService } from './di-archive.service';
 import {
+  DiArchiveDocType,
   DiArchiveOrigin,
   DiArchiveSchema,
   StatutCompletude,
 } from './entities/di-archive.entity';
+import { buildArchiveFilter } from './di-archive-filter.util';
 
 /**
  * Uses a REAL Mongoose model built from `DiArchiveSchema` (so schema defaults
@@ -124,5 +126,65 @@ describe('DiArchiveService', () => {
       expect(out.statutCompletude).toBe(StatutCompletude.INCOMPLET);
       expect(out.origin).toBe(DiArchiveOrigin.MIGRATION);
     });
+  });
+});
+
+/**
+ * findPage — server-side pagination/sort/filter wiring. Uses a hand-rolled mock
+ * model (no DB): asserts the SAME query drives both count + find, that the
+ * filter is built via buildArchiveFilter, and that skip/limit/sort are applied.
+ */
+describe('DiArchiveService.findPage', () => {
+  let chain: any;
+  let mockModel: any;
+  let service: DiArchiveService;
+
+  beforeEach(() => {
+    chain = {
+      sort: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockResolvedValue([{ _id: 'DIA_1' }]),
+    };
+    mockModel = {
+      find: jest.fn().mockReturnValue(chain),
+      countDocuments: jest.fn().mockResolvedValue(42),
+    };
+    service = new DiArchiveService(mockModel as any, {} as any);
+  });
+
+  it('drives count + find with the SAME built query and returns {rows,totalCount}', async () => {
+    const filter = { missingDocs: [DiArchiveDocType.FACTURE] };
+    const expected = buildArchiveFilter(filter);
+    const res = await service.findPage(filter, { page: 1, limit: 12 });
+
+    expect(mockModel.find).toHaveBeenCalledWith(expected);
+    expect(mockModel.countDocuments).toHaveBeenCalledWith(expected);
+    expect(res).toEqual({ rows: [{ _id: 'DIA_1' }], totalCount: 42 });
+  });
+
+  it('paginates: page 3, limit 12 → skip 24, limit 12', async () => {
+    await service.findPage(undefined, { page: 3, limit: 12 });
+    expect(chain.skip).toHaveBeenCalledWith(24);
+    expect(chain.limit).toHaveBeenCalledWith(12);
+  });
+
+  it('defaults to createdAt DESC and honours a whitelisted sort', async () => {
+    await service.findPage(undefined, {});
+    expect(chain.sort).toHaveBeenCalledWith({ createdAt: -1 });
+
+    chain.sort.mockClear();
+    await service.findPage(undefined, { sortField: 'title', sortOrder: 1 });
+    expect(chain.sort).toHaveBeenCalledWith({ title: 1 });
+  });
+
+  it('rejects a non-whitelisted sortField (falls back to createdAt)', async () => {
+    await service.findPage(undefined, { sortField: 'evil; drop' });
+    expect(chain.sort).toHaveBeenCalledWith({ createdAt: -1 });
+  });
+
+  it('clamps limit to a sane maximum (200)', async () => {
+    await service.findPage(undefined, { page: 1, limit: 99999 });
+    expect(chain.limit).toHaveBeenCalledWith(200);
   });
 });

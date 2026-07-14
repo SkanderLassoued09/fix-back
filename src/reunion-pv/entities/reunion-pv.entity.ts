@@ -67,38 +67,42 @@ const PointDiscuteSchema = new mongoose.Schema(
   { _id: false },
 );
 
-// Jira sub-doc — present so we can sync later (Feature 3). Defaults keep
-// it inert: `synced: false`, `issueKey`/`url` null. Do NOT call the Jira
-// API yet — the structure exists purely so the schema is forward-compat.
+// Jira sub-doc — written by the Jira writer (ReunionPVService.syncActionsToJira).
+// `synced/issueKey/url` track the mirrored issue; `assignFailed` is set true when
+// the action HAD a responsable email but Jira couldn't map it to an account
+// (issue still created, unassigned — never lost). Defaults keep it inert.
 const JiraInfoSchema = new mongoose.Schema(
   {
     synced: { type: Boolean, default: false },
     issueKey: { type: String, default: null },
     url: { type: String, default: null },
+    // true ⇒ issue exists but couldn't be assigned (email not a Jira user).
+    assignFailed: { type: Boolean, default: false },
   },
   { _id: false },
 );
 
-const ActionItemSchema = new mongoose.Schema(
-  {
-    titre: { type: String, required: true },
-    description: { type: String, default: '' },
-    responsable: { type: String, ref: 'Profile', default: null },
-    echeance: { type: Date, default: null },
-    priorite: {
-      type: String,
-      enum: Object.values(Priorite),
-      default: Priorite.MOYENNE,
-    },
-    statut: {
-      type: String,
-      enum: Object.values(ActionStatut),
-      default: ActionStatut.A_FAIRE,
-    },
-    jira: { type: JiraInfoSchema, default: () => ({}) },
+// NOTE: `_id` is ENABLED on action sub-docs (Mongo auto-generates one). It is
+// the stable idempotency key for the Jira writer: on a detail-modal re-save the
+// frontend echoes each existing action's `_id`, so the service carries over its
+// `jira.issueKey` and UPDATES the same Jira issue instead of creating a new one.
+const ActionItemSchema = new mongoose.Schema({
+  titre: { type: String, required: true },
+  description: { type: String, default: '' },
+  responsable: { type: String, ref: 'Profile', default: null },
+  echeance: { type: Date, default: null },
+  priorite: {
+    type: String,
+    enum: Object.values(Priorite),
+    default: Priorite.MOYENNE,
   },
-  { _id: false },
-);
+  statut: {
+    type: String,
+    enum: Object.values(ActionStatut),
+    default: ActionStatut.A_FAIRE,
+  },
+  jira: { type: JiraInfoSchema, default: () => ({}) },
+});
 
 const ContexteRetourSchema = new mongoose.Schema(
   {
@@ -184,6 +188,11 @@ export const ReunionPVSchema = new mongoose.Schema(
       enum: Object.values(PvStatut),
       default: PvStatut.BROUILLON,
     },
+
+    // Idempotence flag for the REUNION_REMINDER cron: set true the first time a
+    // ~5-min-before Discord reminder is sent, so re-runs (cron every 1-2 min)
+    // never double-notify. Claimed atomically (false→true) before the send.
+    reminderSent: { type: Boolean, default: false, index: true },
   },
   { timestamps: true },
 );
@@ -200,6 +209,8 @@ export class JiraInfo {
   issueKey: string;
   @Field({ nullable: true })
   url: string;
+  @Field({ defaultValue: false })
+  assignFailed: boolean;
 }
 
 @ObjectType()
@@ -220,6 +231,11 @@ export class PointDiscute {
 
 @ObjectType()
 export class ActionItem {
+  // Stable id (Mongo sub-doc _id) — echoed by the frontend on re-save so the
+  // Jira writer updates the same issue. Nullable: not yet set for a brand-new
+  // action being added in the detail modal before its first save.
+  @Field({ nullable: true })
+  _id: string;
   @Field()
   titre: string;
   @Field({ nullable: true })
@@ -316,6 +332,9 @@ export class ReunionPV {
   prochaineReunion: Date;
   @Field(() => PvStatut)
   statut: PvStatut;
+
+  @Field({ defaultValue: false })
+  reminderSent: boolean;
 
   @Field({ nullable: true })
   createdAt: Date;
