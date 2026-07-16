@@ -238,6 +238,10 @@ it should be soft delete ya nezih change it
     // deleted rows don't keep showing in the list.
     const filter = { isDeleted: { $ne: true } };
     const companyRecords = await this.CompanyModel.find(filter)
+      // Ordre par défaut de toutes les listes : dernier créé en premier. Le tri
+      // DOIT précéder skip/limit pour que la pagination reste cohérente page
+      // après page (sans tri, Mongo ne garantit aucun ordre stable).
+      .sort({ createdAt: -1 })
       .limit(rows)
       .skip(first)
       .exec();
@@ -267,6 +271,10 @@ it should be soft delete ya nezih change it
         case 'region':
         case 'address':
         case 'email':
+        // `phone` was missing here while `fax` was present: the « Téléphone »
+        // column is searchable like every other top-level string field, and
+        // without this case the search silently matched nothing.
+        case 'phone':
         case 'raisonSociale':
         case 'exoneration':
         case 'fax':
@@ -317,7 +325,9 @@ it should be soft delete ya nezih change it
   }
 
   async getAllComapnyforDropDown() {
-    return await this.CompanyModel.find({ isDeleted: { $ne: true } }).exec();
+    return await this.CompanyModel.find({ isDeleted: { $ne: true } })
+      .sort({ createdAt: -1 })
+      .exec();
   }
 
   async findOneCompany(_id: string): Promise<Company> {

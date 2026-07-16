@@ -71,7 +71,9 @@ export class DiCategoryService {
 
   async findAllDiCategorys(): Promise<DiCategory[]> {
     try {
-      const categories = await this.DiCategoryModel.find({ isDeleted: false });
+      const categories = await this.DiCategoryModel.find({
+        isDeleted: false,
+      }).sort({ createdAt: -1 });
       if (categories.length === 0) {
         throw new NotFoundException('Unable to find catorgories');
       }

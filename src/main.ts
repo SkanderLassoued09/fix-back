@@ -35,7 +35,9 @@ async function bootstrap() {
   if (action) {
     const logger = new Logger('Action');
     // Short one-line banner so a standalone cron logs its environment too.
-    console.log(buildActionBanner(process.env.NODE_ENV || 'development', action));
+    console.log(
+      buildActionBanner(process.env.NODE_ENV || 'development', action),
+    );
     logger.log(`ACTION started: ${action}`);
     const app = await NestFactory.createApplicationContext(AppModule, {
       logger: ['log', 'warn', 'error'],

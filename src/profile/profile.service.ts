@@ -232,17 +232,21 @@ export class ProfileService {
   // }
 
   async getAllTech() {
-    return await this.profileModel.find({
-      role: { $in: [ROLE.ADMIN_TECH, ROLE.TECH] },
-      isDeleted: false,
-    });
+    return await this.profileModel
+      .find({
+        role: { $in: [ROLE.ADMIN_TECH, ROLE.TECH] },
+        isDeleted: false,
+      })
+      .sort({ createdAt: -1 });
   }
 
   async getAllAdmins() {
     try {
-      return await this.profileModel.find({
-        role: { $in: [ROLE.ADMIN_MANAGER, ROLE.ADMIN_TECH] },
-      });
+      return await this.profileModel
+        .find({
+          role: { $in: [ROLE.ADMIN_MANAGER, ROLE.ADMIN_TECH] },
+        })
+        .sort({ createdAt: -1 });
     } catch (error) {
       await this.captureSilentFailure('GET_ALL_ADMINS', error);
       return [];

@@ -170,9 +170,12 @@ export class ComposantService {
 
   async findAllComposants(): Promise<[Composant]> {
     try {
-      return (await this.ComposantModel.find({ isDeleted: false })) as [
-        Composant,
-      ];
+      const composants = await this.ComposantModel.find({
+        isDeleted: false,
+      }).sort({ createdAt: -1 });
+      // Le type de retour déclaré est un tuple `[Composant]` (approximation
+      // historique de `Composant[]`) → cast via unknown, comme avant le tri.
+      return composants as unknown as [Composant];
     } catch (err) {
       // Previously a silent `.catch((err) => return err)` — the resolver
       // received an Error object that the FE rendered as a row. Now we

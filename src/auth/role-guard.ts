@@ -22,14 +22,14 @@ export class RolesGuard implements CanActivate {
     }
 
     const ctx = GqlExecutionContext.create(context);
-    const user = ctx.getContext().req.user;
-    const userRole = user.role;
-    return requiredRoles.some((role) => {
-      if (role === userRole) {
-        return true;
-      } else {
-        return false;
-      }
-    });
+    const user = ctx.getContext().req?.user;
+    // Défensif : `JwtAuthGuard.handleRequest` ne lève PAS sur un token
+    // absent/invalide (bug S12) → `user` peut être undefined. Sans cette garde,
+    // `user.role` planterait (500) au lieu d'un refus propre. Pas d'utilisateur
+    // ⇒ pas de rôle ⇒ accès refusé (Forbidden).
+    if (!user || !user.role) {
+      return false;
+    }
+    return requiredRoles.some((role) => role === user.role);
   }
 }

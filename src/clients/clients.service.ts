@@ -174,6 +174,10 @@ export class ClientsService {
   ): Promise<ClientTableData> {
     const { first, rows } = paginationConfig;
     const clientRecords = await this.ClientModel.find({ isDeleted: false })
+      // Ordre par défaut de toutes les listes : dernier créé en premier. Le tri
+      // DOIT précéder skip/limit pour que la pagination reste cohérente page
+      // après page (sans tri, Mongo ne garantit aucun ordre stable).
+      .sort({ createdAt: -1 })
       .limit(rows)
       .skip(first)
       .exec();
@@ -198,7 +202,9 @@ export class ClientsService {
 
   async getAllClient() {
     // Exclude soft-deleted clients so they don't appear in the new-DI dropdown.
-    return await this.ClientModel.find({ isDeleted: { $ne: true } }).exec();
+    return await this.ClientModel.find({ isDeleted: { $ne: true } })
+      .sort({ createdAt: -1 })
+      .exec();
   }
 
   async updateClient(payload: UpdateClientInput) {

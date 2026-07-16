@@ -6,6 +6,11 @@ import { registerEnumType } from '@nestjs/graphql';
  * touching the alert pipeline. Today's generators are stagnation-driven.
  */
 export enum AlertType {
+  // Seuil ACTIF : la détection de stagnation n'émet plus qu'à 48h (voir
+  // StagnationService.THRESHOLDS). Les trois seuils ci-dessous sont conservés
+  // dans l'enum pour que les alertes DÉJÀ en base (24h/72h/7j) restent valides
+  // vis-à-vis du schéma (aucune purge) — ils ne sont plus générés.
+  DI_STAGNANT_48H = 'DI_STAGNANT_48H',
   DI_STAGNANT_24H = 'DI_STAGNANT_24H',
   DI_STAGNANT_72H = 'DI_STAGNANT_72H',
   DI_STAGNANT_7D = 'DI_STAGNANT_7D',
