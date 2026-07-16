@@ -56,6 +56,18 @@ interface EmbedContext {
   statusLabel: string;
 }
 
+/**
+ * 🔕 INTERRUPTEUR TEMPORAIRE DES NOTIFICATIONS DISCORD.
+ *
+ * `true` → seules RETOUR (1/2/3) et STAGNATION DI sont émises ; tous les autres
+ * types (pending, assigned, pricing, finished, diagnostic, réparation, PV,
+ * digest DiArchive…) sont coupés à la source via le gate de `postEmbed`. Aucune
+ * donnée n'est supprimée ; les émetteurs restent dans le code.
+ *
+ * ▶️ POUR TOUT RÉACTIVER : repasser cette constante à `false` (une seule ligne).
+ */
+const DISCORD_NOTIFS_DISABLED = true;
+
 @Injectable()
 export class DiscordHookService {
   private readonly logger = new Logger(DiscordHookService.name);
@@ -93,6 +105,24 @@ export class DiscordHookService {
    *     Discord post is always best-effort)
    */
   async postEmbed(
+    channel: ChannelKey,
+    payload: object,
+  ): Promise<void> {
+    // 🔕 GATE TEMPORAIRE — Discord réduit à RETOUR (1/2/3) + STAGNATION.
+    // Toutes les autres notifications (~28 types + le digest DiArchive externe)
+    // passent par ici et sont donc coupées À LA SOURCE. Retour & stagnation
+    // appellent `deliverEmbed` directement pour NE PAS être gated.
+    // ▶️ Pour tout réactiver : passer DISCORD_NOTIFS_DISABLED à false.
+    if (DISCORD_NOTIFS_DISABLED) {
+      return;
+    }
+    return this.deliverEmbed(channel, payload);
+  }
+
+  /** Envoi bas-niveau réel vers le webhook Discord (sans gate). Utilisé
+   *  directement par les seules notifications conservées (retour + stagnation)
+   *  et par `postEmbed` quand le gate est ouvert. */
+  private async deliverEmbed(
     channel: ChannelKey,
     payload: object,
   ): Promise<void> {
@@ -832,7 +862,8 @@ export class DiscordHookService {
       2: 'DI retournée une seconde fois.',
       3: 'La DI a atteint le niveau de retour final. Attention opérationnelle requise.',
     };
-    await this.postEmbed('GENERAL_ATELIER', {
+    // Notification CONSERVÉE → envoi direct (contourne le gate de postEmbed).
+    await this.deliverEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: titles[level],
@@ -1020,7 +1051,7 @@ export class DiscordHookService {
       INFO: 'ℹ️',
     };
 
-    await this.postEmbed('APP_ALERT', {
+    await this.deliverEmbed('APP_ALERT', {
       embeds: [
         {
           title: `${severityEmoji[alert.severity] ?? '⚠️'} FIXTRONIX · Alerte opérationnelle`,
@@ -1107,7 +1138,7 @@ export class DiscordHookService {
         : '_aucune_',
     }));
 
-    await this.postEmbed('APP_ALERT', {
+    await this.deliverEmbed('APP_ALERT', {
       embeds: [
         {
           title: '📊 Rappel quotidien — DI stagnantes',

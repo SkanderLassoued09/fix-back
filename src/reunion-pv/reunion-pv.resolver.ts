@@ -1,10 +1,26 @@
 import { Args, Mutation, Query, Resolver, Context } from '@nestjs/graphql';
+import { UseGuards } from '@nestjs/common';
 import {
   CreateReunionPVInput,
   UpdateReunionPVDetailsInput,
 } from './dto/reunion-pv.input';
 import { ReunionPV } from './entities/reunion-pv.entity';
 import { ReunionPVService } from './reunion-pv.service';
+import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
+import { RolesGuard } from 'src/auth/role-guard';
+import { Role, Roles } from 'src/profile/role-decorator';
+
+/**
+ * Rôles autorisés à gérer les Réunions (menu, route, ET création serveur) :
+ * admin (gestion + technique), manager, coordinateur. `COORDIANTOR` est la
+ * valeur RÉELLEMENT persistée (typo historique) — voir role-decorator.
+ */
+const REUNION_ROLES = [
+  Role.ADMIN_MANAGER,
+  Role.ADMIN_TECH,
+  Role.MANAGER,
+  Role.COORDIANTOR,
+];
 
 @Resolver(() => ReunionPV)
 export class ReunionPVResolver {
@@ -19,6 +35,8 @@ export class ReunionPVResolver {
    * channel or create throwaway issues in the real Jira project.
    */
   @Mutation(() => ReunionPV)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...REUNION_ROLES)
   async createReunionPV(
     @Args('input') input: CreateReunionPVInput,
     @Context() ctx: any,

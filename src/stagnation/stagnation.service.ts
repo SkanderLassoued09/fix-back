@@ -49,33 +49,26 @@ export class StagnationService {
    *
    * Adding a new threshold is a single entry here; no other code change.
    */
+  /**
+   * SEUIL UNIQUE À 48H (remplace les anciens 24h / 72h / 7j). Toute DI ouverte
+   * sans changement de statut depuis ≥ 48h lève une alerte de stagnation.
+   * `resolveOnEscalation` résout les anciennes alertes 24h/72h/7j encore
+   * ouvertes en base quand la même DI bascule en 48h (aucune suppression, elles
+   * sont juste marquées résolues) → pas de doublon d'alerte par DI.
+   */
   private static readonly THRESHOLDS = [
     {
-      type: AlertType.DI_STAGNANT_7D,
-      severity: AlertSeverity.CRITICAL,
-      lowerMs: 7 * 24 * 60 * 60 * 1000, // ≥ 7 days
-      upperMs: Infinity,
-      label: '7 days',
-      digestLabel: '> 7 jours',
-      resolveOnEscalation: [AlertType.DI_STAGNANT_72H, AlertType.DI_STAGNANT_24H],
-    },
-    {
-      type: AlertType.DI_STAGNANT_72H,
+      type: AlertType.DI_STAGNANT_48H,
       severity: AlertSeverity.WARNING,
-      lowerMs: 72 * 60 * 60 * 1000, // ≥ 72h, < 7d
-      upperMs: 7 * 24 * 60 * 60 * 1000,
-      label: '72 hours',
-      digestLabel: '72 h – 7 j',
-      resolveOnEscalation: [AlertType.DI_STAGNANT_24H],
-    },
-    {
-      type: AlertType.DI_STAGNANT_24H,
-      severity: AlertSeverity.INFO,
-      lowerMs: 24 * 60 * 60 * 1000, // ≥ 24h, < 72h
-      upperMs: 72 * 60 * 60 * 1000,
-      label: '24 hours',
-      digestLabel: '24 h – 72 h',
-      resolveOnEscalation: [],
+      lowerMs: 48 * 60 * 60 * 1000, // ≥ 48h
+      upperMs: Infinity,
+      label: '48 hours',
+      digestLabel: '> 48 h',
+      resolveOnEscalation: [
+        AlertType.DI_STAGNANT_24H,
+        AlertType.DI_STAGNANT_72H,
+        AlertType.DI_STAGNANT_7D,
+      ],
     },
   ];
 
@@ -101,9 +94,7 @@ export class StagnationService {
 
     const now = new Date();
     const created: Record<string, number> = {
-      DI_STAGNANT_24H: 0,
-      DI_STAGNANT_72H: 0,
-      DI_STAGNANT_7D: 0,
+      DI_STAGNANT_48H: 0,
     };
     // Per-bucket snapshot for the daily grouped Discord digest — the CURRENT
     // count of stagnant DIs in each band (not just newly-created alerts).
@@ -208,16 +199,12 @@ export class StagnationService {
     const elapsedMs = Date.now() - startedAt;
     this.logger.log(
       `END detectStagnantDi · scanned=${scanned} ` +
-        `created={24h:${created.DI_STAGNANT_24H}, 72h:${created.DI_STAGNANT_72H}, 7d:${created.DI_STAGNANT_7D}} ` +
+        `created={48h:${created.DI_STAGNANT_48H}} ` +
         `escalated=${resolvedFromEscalation} elapsedMs=${elapsedMs}`,
     );
 
-    // Ascending severity order for the digest embed: 24h → 72h → >7j.
-    const buckets = [
-      AlertType.DI_STAGNANT_24H,
-      AlertType.DI_STAGNANT_72H,
-      AlertType.DI_STAGNANT_7D,
-    ]
+    // Seuil unique → un seul bucket dans le digest (48 h).
+    const buckets = [AlertType.DI_STAGNANT_48H]
       .map((type) => digestByType[type])
       .filter(Boolean);
 
