@@ -75,6 +75,7 @@ export class Composant_CategoryService {
 
   async findAllComposant_Categorys(): Promise<Composant_Category[]> {
     return await this.Composant_CategoryModel.find({ isDeleted: false })
+      .sort({ createdAt: -1 })
       .then((res) => {
         return res;
       })

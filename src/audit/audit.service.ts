@@ -29,7 +29,7 @@ export class AuditService {
   }
 
   async getAllNotification() {
-    return await this.auditModel.find({ isSeen: false });
+    return await this.auditModel.find({ isSeen: false }).sort({ createdAt: -1 });
   }
 
   async updateConfirm(_id: string, confirmationComposant: string) {

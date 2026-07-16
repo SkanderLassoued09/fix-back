@@ -161,6 +161,11 @@ DiArchiveSchema.index(
   { unique: true, partialFilterExpression: { refOrigine: { $type: 'string' } } },
 );
 
+// Ordre par défaut de la liste `/archives` (dernier créé en premier) sur une
+// collection volumineuse (~1400 lignes) paginée CÔTÉ SERVEUR : sans cet index,
+// chaque page force un tri en mémoire de toute la collection filtrée.
+DiArchiveSchema.index({ createdAt: -1 });
+
 @ObjectType()
 export class DiArchive {
   @Field({ nullable: true })

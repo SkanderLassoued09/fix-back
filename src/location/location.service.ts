@@ -85,7 +85,10 @@ export class LocationService {
 
   async findAllLocations(): Promise<Location[]> {
     return await this.LocationModel.find({ isDeleted: false })
-      .sort({ location_name: 1 })
+      // Ordre par défaut de l'app : dernier créé en premier (remplace le tri
+      // alphabétique historique — les dropdowns sont désormais recherchables,
+      // ce qui compense la perte de l'ordre A→Z).
+      .sort({ createdAt: -1 })
       .then((res) => {
         return res;
       })
