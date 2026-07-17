@@ -1012,9 +1012,11 @@ export class StatService {
       if (!stat) {
         throw new Error('Stat not found');
       }
-      if (stat.pauseLogs.length === 0) {
-        throw new Error('No logs found');
-      }
+      // Une DI jamais mise en pause a `pauseLogs` vide : c'est un état NORMAL
+      // (ex. DI qui n'est pas un retour), PAS une erreur. On ne lève plus rien
+      // ici — sinon l'affichage des listes ticket/coordinateur déclenchait une
+      // alerte opérationnelle « No logs found » (INTERNAL_SERVER_ERROR) pour
+      // chaque DI sans logs. Le front gère déjà l'absence de logs (`|| []`).
       if (stat.id_tech_diag) {
         const techdiag = await this.profileService.getTech(stat.id_tech_diag);
         stat.id_tech_diag = techdiag;

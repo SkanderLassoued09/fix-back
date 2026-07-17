@@ -59,7 +59,9 @@ export async function loginViaUI(page: Page, account: RoleAccount): Promise<Logi
     )
     .catch(() => null);
 
-  await page.getByRole('button', { name: 'Sign In' }).click();
+  // Le libellé du bouton a été francisé (« Se connecter ») lors de la refonte de
+  // la page de login ; on cible le submit du formulaire, insensible au libellé.
+  await page.locator('form button[type="submit"]').click();
 
   let httpStatus = 0;
   let errors: unknown[] | null = null;
