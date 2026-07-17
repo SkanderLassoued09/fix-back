@@ -62,6 +62,24 @@ describe('CompanysService — téléphone de la société', () => {
       expect(out.raisonSociale).toBe('X SARL');
       expect(out.phone).toBeUndefined();
     });
+
+    it('durcissement : neutralise les chaînes « undefined »/« null » (jamais persistées)', async () => {
+      const out: any = await service.createcompany({
+        name: 'OK CO',
+        raisonSociale: 'OK CO',
+        Exoneration: 'undefined',
+        fax: 'null',
+        webSiteLink: 'UNDEFINED',
+        serviceAchat: { name: 'undefined', email: 'a@b.tn', phone: 'null' },
+      } as any);
+
+      expect(out.Exoneration).toBe('');
+      expect(out.fax).toBe('');
+      expect(out.webSiteLink).toBe('');
+      expect(out.serviceAchat.name).toBe(''); // récursif sur les contacts
+      expect(out.serviceAchat.email).toBe('a@b.tn'); // valeur réelle intacte
+      expect(out.serviceAchat.phone).toBe('');
+    });
   });
 
   describe('findAllCompanys — ordre par défaut « dernier créé en premier »', () => {

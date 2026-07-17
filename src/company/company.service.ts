@@ -23,6 +23,28 @@ function conflict(field: 'raisonSociale' | 'mf', message: string): GraphQLError 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+/**
+ * Neutralise les chaînes « undefined »/« null » (issues d'un ancien stringify
+ * de valeurs non définies) AVANT persistance : toute valeur string dont le trim
+ * insensible-casse vaut « undefined » ou « null » devient ''. Récursif (couvre
+ * les contacts par service). Empêche toute (ré)écriture de ce garbage.
+ */
+function stripUndefinedStrings<T>(obj: T): T {
+  if (obj == null || typeof obj !== 'object') return obj;
+  const out: any = Array.isArray(obj) ? [] : {};
+  for (const [k, v] of Object.entries(obj as any)) {
+    if (typeof v === 'string') {
+      const t = v.trim().toLowerCase();
+      out[k] = t === 'undefined' || t === 'null' ? '' : v;
+    } else if (v && typeof v === 'object') {
+      out[k] = stripUndefinedStrings(v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
 import {
   CreateCompanyInput,
   PaginationConfig,
@@ -137,6 +159,8 @@ export class CompanysService {
   async createcompany(
     createCompanyInput: CreateCompanyInput,
   ): Promise<Company> {
+    // Durcissement : jamais de « undefined »/« null » persisté (voir helper).
+    createCompanyInput = stripUndefinedStrings(createCompanyInput);
     createCompanyInput._id = uuidv4(); //Societe
     await this.assertNoDuplicate(
       createCompanyInput.raisonSociale,
@@ -344,6 +368,8 @@ it should be soft delete ya nezih change it
   }
 
   async updateCompany(payload: UpdateCompanyInput) {
+    // Durcissement : neutralise « undefined »/« null » avant $set.
+    payload = stripUndefinedStrings(payload);
     // Renaming into another active company's raison sociale / MF is the same
     // business conflict as on create (the doc itself is excluded).
     await this.assertNoDuplicate(payload.raisonSociale, payload.mf, payload._id);
@@ -390,5 +416,41 @@ it should be soft delete ya nezih change it
       .select('_id name')
       .limit(20)
       .lean();
+  }
+
+  // ── Export / Import (xlsx) ────────────────────────────────────────────────
+
+  /** Toutes les sociétés actives (tous champs) pour l'export xlsx complet. */
+  async exportAllCompanies(): Promise<any[]> {
+    return this.CompanyModel.find({ isDeleted: { $ne: true } })
+      .sort({ createdAt: -1 })
+      .lean();
+  }
+
+  /** Index minimal { _id, mf, raisonSociale } des sociétés actives, pour
+   *  résoudre l'upsert d'import en mémoire (MF puis Raison sociale). */
+  async loadImportMatchIndex(): Promise<
+    Array<{ _id: string; mf?: string; raisonSociale?: string }>
+  > {
+    return this.CompanyModel.find({ isDeleted: { $ne: true } })
+      .select('_id mf raisonSociale')
+      .lean() as any;
+  }
+
+  /** Création via import (bulk) : PAS de dossier Drive (créé paresseusement plus
+   *  tard) pour ne pas ralentir/impacter l'API Drive sur un import de masse. */
+  async createFromImport(doc: Record<string, any>): Promise<string> {
+    const created = await new this.CompanyModel({
+      _id: uuidv4(),
+      ...doc,
+      isDeleted: false,
+    }).save();
+    return created._id as string;
+  }
+
+  /** Mise à jour via import : $set des champs fournis (fidélité round-trip —
+   *  une cellule vide écrase la valeur). Ne touche ni _id ni driveFolder*. */
+  async updateFromImport(id: string, doc: Record<string, any>): Promise<void> {
+    await this.CompanyModel.updateOne({ _id: id }, { $set: doc });
   }
 }
