@@ -806,47 +806,101 @@ export class StatService {
 
     return modifiedStatsRetour;
   }
-  async lapTime(_id: string, diag_time: string) {
-    // Normalize at the write boundary — never persist a leading/trailing space
-    // (an old client built `" HH:MM:SS"`), which the HH:MM:SS regex rejects.
-    diag_time = (diag_time ?? '').trim();
-    try {
-      const stat = await this.StatModel.findOne({ _id });
-
-      if (!stat) {
-        throw new Error('Issue in lapTime');
-      }
-      if (stat.ignoreCount > 0) {
-        return await this.StatModel.updateOne(
-          { _id, ignoreCount: stat.ignoreCount },
-          {
-            $set: {
-              diag_time,
-            },
-          },
-        );
-      }
-
-      return await this.StatModel.updateOne(
-        { _id },
-        {
-          $set: {
-            diag_time,
-          },
-        },
-      );
-    } catch (error) {
-      await this.operationalErrorService.capture({
-        module: 'stat',
-        submodule: 'statService',
-        method: 'LAP_TIME_DIAG',
-        severity: 'MEDIUM',
-        error: 'Failed to persist diag_time',
-        message: (error as Error)?.message ?? String(error),
-        payload: { statId: _id, diag_time },
-      });
-      throw error;
+  /** "HH:MM:SS" → millisecondes (0 si invalide). */
+  private static hhmmssToMs(time: string | null | undefined): number {
+    const s = (time ?? '').trim();
+    if (!/^\d{2,}:\d{2}:\d{2}$/.test(s)) {
+      return 0;
     }
+    const [h, m, sec] = s.split(':').map(Number);
+    return (h * 3600 + m * 60 + sec) * 1000;
+  }
+
+  /** millisecondes → "HH:MM:SS" (HH peut dépasser 99). */
+  private static msToHhmmss(ms: number): string {
+    const total = Math.max(0, Math.floor(ms / 1000));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    const pad = (v: number) => String(v).padStart(2, '0');
+    return `${pad(h)}:${pad(m)}:${pad(s)}`;
+  }
+
+  /**
+   * Ouvre le segment de travail diagnostic courant : stampe
+   * `diagRunStartedAt = now` UNIQUEMENT si aucun segment n'est ouvert
+   * (`diagRunStartedAt: null` matche null ET champ absent). Idempotent :
+   * un double « Démarrer » ne déplace pas l'ancre (sinon le temps du
+   * segment en cours serait perdu).
+   */
+  async openDiagLeg(_idDi: string, ignoreCount = 0): Promise<boolean> {
+    const filter: Record<string, unknown> =
+      ignoreCount > 0
+        ? { _idDi, ignoreCount, diagRunStartedAt: null }
+        : { _idDi, diagRunStartedAt: null };
+    const res = await this.StatModel.updateOne(filter, {
+      $set: { diagRunStartedAt: new Date() },
+    });
+    return (res as any)?.modifiedCount > 0;
+  }
+
+  /**
+   * Ferme le segment de travail diagnostic courant CÔTÉ SERVEUR :
+   * `diag_time += now − diagRunStartedAt`, le segment {startedAt, stoppedAt}
+   * est journalisé dans `diagSegments`, l'ancre est vidée. Le temps servant à
+   * la FACTURATION est donc calculé ici — jamais depuis une durée envoyée par
+   * le client. Idempotent : sans segment ouvert (pause double, transition
+   * hors-diagnostic), no-op. Le filtre d'update re-vérifie l'ancre lue pour
+   * qu'un appel concurrent ne cumule pas deux fois le même segment.
+   */
+  async closeDiagLeg(_idDi: string, ignoreCount = 0): Promise<string | null> {
+    const filter: Record<string, unknown> =
+      ignoreCount > 0 ? { _idDi, ignoreCount } : { _idDi };
+    const stat = await this.StatModel.findOne(filter);
+    if (!stat || !stat.diagRunStartedAt) {
+      return null; // aucun segment ouvert — rien à cumuler
+    }
+    const startedAt = new Date(stat.diagRunStartedAt);
+    const stoppedAt = new Date();
+    const legMs = Math.max(0, stoppedAt.getTime() - startedAt.getTime());
+    const newDiagTime = StatService.msToHhmmss(
+      StatService.hhmmssToMs(stat.diag_time) + legMs,
+    );
+    const res = await this.StatModel.updateOne(
+      // Re-filtre sur la MÊME ancre : si un appel concurrent a déjà fermé
+      // (anchor null) ou rouvert (autre date) le segment, on ne matche pas.
+      { _id: stat._id, diagRunStartedAt: startedAt },
+      {
+        $set: { diag_time: newDiagTime, diagRunStartedAt: null },
+        $push: { diagSegments: { startedAt, stoppedAt } },
+      },
+    );
+    return (res as any)?.modifiedCount > 0 ? newDiagTime : null;
+  }
+
+  /**
+   * DEPRECATED côté écriture : `diag_time` est désormais cumulé CÔTÉ SERVEUR
+   * (`closeDiagLeg`) à la pause et aux transitions de sortie du diagnostic.
+   * La valeur envoyée par le client (chaîne construite depuis l'AFFICHAGE,
+   * gelée par le throttling des onglets en arrière-plan, et manipulable
+   * alors qu'elle alimente la facturation) N'EST PLUS PERSISTÉE. L'endpoint
+   * reste pour la compat des clients déployés : il journalise seulement un
+   * écart significatif (>5 s) entre la valeur cliente et la valeur serveur.
+   */
+  async lapTime(_id: string, diag_time: string) {
+    diag_time = (diag_time ?? '').trim();
+    const stat = await this.StatModel.findOne({ _id });
+    if (!stat) {
+      throw new Error('Issue in lapTime');
+    }
+    const clientMs = StatService.hhmmssToMs(diag_time);
+    const serverMs = StatService.hhmmssToMs(stat.diag_time);
+    if (Math.abs(clientMs - serverMs) > 5000) {
+      this.logger.warn(
+        `lapTime ignoré (serveur autoritaire) — stat ${_id}: client=${diag_time} serveur=${stat.diag_time}`,
+      );
+    }
+    return stat; // truthy — le resolver renvoie Boolean(!!)
   }
 
   async lapTimeForReaparation(_id: string, rep_time: string) {

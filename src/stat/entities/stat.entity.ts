@@ -67,6 +67,21 @@ export class StatDocument extends Document {
     pauseStart: Date;
     pauseEnd: Date;
   }>;
+
+  // Journal des segments de TRAVAIL diagnostic, fermés côté serveur :
+  // un segment = (diagRunStartedAt à l'ouverture, now à la fermeture).
+  // Sert d'audit/recalcul de diag_time — la facturation ne doit jamais
+  // dépendre d'une durée envoyée par le client.
+  @Prop({
+    type: [
+      {
+        startedAt: { type: Date, required: true },
+        stoppedAt: { type: Date, required: true },
+      },
+    ],
+    default: [],
+  })
+  diagSegments: Array<{ startedAt: Date; stoppedAt: Date }>;
 }
 export const StatSchema = SchemaFactory.createForClass(StatDocument);
 

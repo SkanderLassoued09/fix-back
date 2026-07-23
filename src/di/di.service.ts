@@ -33,6 +33,7 @@ import {
   RemarqueDocument,
 } from 'src/remarque/entities/remarque.entity';
 import { StatService } from 'src/stat/stat.service';
+import { isInvalidGrant } from 'src/google-auth/google-oauth.errors';
 import { NotFoundError } from 'rxjs';
 import { NotificationsGateway } from 'src/notification.gateway';
 import { ProfileService } from 'src/profile/profile.service';
@@ -489,12 +490,20 @@ export class DiService {
           imageRef = { driveFileId, webViewLink, name: fileName };
         } catch (err) {
           createDiInput.image = null;
+          // An invalid_grant is a SYSTEMIC outage — every upload is failing,
+          // not just this DI — so escalate to HIGH + notify. A one-off image
+          // failure stays MEDIUM. The message already carries the actionable
+          // re-auth diagnostic (from GoogleOAuthGrantError).
+          const authOutage = isInvalidGrant(err);
           await this.operationalErrorService.capture({
             module: 'di',
             submodule: 'drive',
             method: 'CREATE_DI_IMAGE_UPLOAD',
-            severity: 'MEDIUM',
-            error: 'DI image Drive upload failed (DI still created)',
+            severity: authOutage ? 'HIGH' : 'MEDIUM',
+            notify: authOutage,
+            error: authOutage
+              ? 'Google OAuth invalid_grant — TOUS les uploads Drive échouent (ré-autorisation requise)'
+              : 'DI image Drive upload failed (DI still created)',
             message: (err as Error)?.message ?? String(err),
             payload: {
               companyId: createDiInput?.company_id,
@@ -1335,6 +1344,13 @@ export class DiService {
   //from magasin or tech to coordinator
   async magasinTech_Pending2(_idDI: string): Promise<Di> {
     await this.assertTransitionAllowed(_idDI, STATUS_DI.Pending2.status);
+    // Sortie de diagnostic possible (fin sans pause préalable) : ferme le
+    // segment de travail courant côté serveur avant la transition. No-op si
+    // aucun segment ouvert (ex. arrivée depuis Magasin).
+    {
+      const di: any = await this.diModel.findOne({ _id: _idDI }).lean();
+      await this.statsService.closeDiagLeg(_idDI, di?.ignoreCount ?? 0);
+    }
     const result = await this.diWorkflowService.transition({
       diId: _idDI,
       transitionKey: 'MAGASIN_TECH_TO_PENDING2',
@@ -1782,6 +1798,13 @@ export class DiService {
 
     if (!result) {
       throw new Error('Issue in changing state changeStatusTofinsh');
+    }
+
+    // Retour non-réparable : la sortie de diagnostic ferme le segment de
+    // travail courant (cumul serveur). No-op pour une fin de réparation
+    // (l'ancre diagnostic est déjà nulle).
+    if (fromDiagnostic) {
+      await this.statsService.closeDiagLeg(_id, result.ignoreCount ?? 0);
     }
 
     // ✅ Fix: call statsService only once
@@ -2485,18 +2508,16 @@ export class DiService {
       await this.captureDiscordFailure('discord-notification', err);
     }
 
-    // Stamp the START of the current diagnostic run leg — ONLY on a genuine
-    // start/resume, i.e. when the previous status was NOT already INDIAGNOSTIC.
-    // A no-op modal re-open (INDIAGNOSTIC → INDIAGNOSTIC) must NOT move it, or
-    // the elapsed anchor would reset on every refresh. Mirror of the repair
-    // anchor in `changeStatusInRepair`. The UI reads this as
-    // `elapsed = diag_time + (now - diagRunStartedAt)` while running.
+    // Ouvre le segment de travail courant — ONLY on a genuine start/resume,
+    // i.e. when the previous status was NOT already INDIAGNOSTIC. A no-op
+    // modal re-open (INDIAGNOSTIC → INDIAGNOSTIC) must NOT move the anchor,
+    // or the elapsed anchor would reset on every refresh. `openDiagLeg` est
+    // en plus idempotent AU NIVEAU DB (ne stampe que si aucune ancre) : un
+    // double « Démarrer » ne peut pas déplacer l'ancre ni perdre le segment
+    // en cours. The UI reads `elapsed = diag_time + (now - diagRunStartedAt)`.
     if (previousStatus !== STATUS_DI.InDiagnostic.status) {
       const ignoreCount = (result as any)?.ignoreCount ?? 0;
-      await this.statModel.updateOne(
-        ignoreCount > 0 ? { _idDi: _id, ignoreCount } : { _idDi: _id },
-        { $set: { diagRunStartedAt: new Date() } },
-      );
+      await this.statsService.openDiagLeg(_id, ignoreCount);
     }
 
     this.notificationGateway.updateTicket({
@@ -2583,6 +2604,10 @@ export class DiService {
       throw new Error('Issue in changeStatusMagasinEstimation ');
     }
 
+    // Fin de la phase diagnostic → ferme le segment de travail courant
+    // (cumul serveur). No-op si déjà fermé par une pause.
+    await this.statsService.closeDiagLeg(_id, result.ignoreCount ?? 0);
+
     if (result.ignoreCount > 0) {
       await this.statsService.updateStatus(
         _id,
@@ -2619,6 +2644,11 @@ export class DiService {
     if (!result) {
       throw new Error('Issue in changeStatusPending2');
     }
+
+    // Sortie de diagnostic possible (réparable sans PDR) : ferme le segment
+    // de travail courant côté serveur. No-op depuis le flux Magasin (l'ancre
+    // diagnostic y est déjà nulle).
+    await this.statsService.closeDiagLeg(_id, result.ignoreCount ?? 0);
 
     if (result.ignoreCount > 0) {
       await this.statsService.updateStatus(
@@ -3157,16 +3187,15 @@ export class DiService {
       );
     }
 
-    // Drop the live run anchor — a paused DI must not carry one, otherwise a
-    // server-only restore (no localStorage) would keep ticking past the pause.
-    // The accumulated time is already frozen into Stat.diag_time by the
-    // frontend's lapTimeForPauseAndGetBack before this fires. Resume restamps it.
+    // Ferme le segment de travail CÔTÉ SERVEUR : cumule
+    // `diag_time += now − diagRunStartedAt`, journalise le segment et vide
+    // l'ancre. Remplace l'ancien schéma où le CLIENT envoyait le cumul
+    // (lapTimeForPauseAndGetBack) — valeur d'affichage gelée par le
+    // throttling des onglets en arrière-plan, et manipulable alors qu'elle
+    // alimente la facturation. Idempotent : une double pause est un no-op.
     {
       const ignoreCount = diStatus?.ignoreCount ?? 0;
-      await this.statModel.updateOne(
-        ignoreCount > 0 ? { _idDi: _id, ignoreCount } : { _idDi: _id },
-        { $set: { diagRunStartedAt: null } },
-      );
+      await this.statsService.closeDiagLeg(_id, ignoreCount);
     }
 
     try {

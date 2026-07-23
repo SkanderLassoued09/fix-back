@@ -20,14 +20,17 @@ import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 type ComposantModelMock = {
   findOne: jest.Mock;
   findOneAndUpdate: jest.Mock;
+  findByIdAndUpdate: jest.Mock;
 };
 type DiModelMock = { updateMany: jest.Mock };
+type CategoryModelMock = { exists: jest.Mock };
 
 const leanOf = (doc: unknown) => ({ lean: () => Promise.resolve(doc) });
 
 const makeModelMock = (): ComposantModelMock => ({
   findOne: jest.fn(),
   findOneAndUpdate: jest.fn(),
+  findByIdAndUpdate: jest.fn(),
 });
 
 const fullInput = (overrides: Record<string, unknown> = {}) => ({
@@ -49,15 +52,20 @@ describe('ComposantService.addComposantInfo', () => {
   let service: ComposantService;
   let model: ComposantModelMock;
   let di: DiModelMock;
+  let category: CategoryModelMock;
 
   beforeEach(async () => {
     model = makeModelMock();
     di = { updateMany: jest.fn() };
+    // Par défaut la catégorie référencée (CAT1 dans fullInput) EXISTE — les
+    // tests de rejet la font disparaître explicitement.
+    category = { exists: jest.fn().mockResolvedValue({ _id: 'CAT1' }) };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         ComposantService,
         { provide: getModelToken('Composant'), useValue: model },
         { provide: getModelToken('Di'), useValue: di },
+        { provide: getModelToken('Composant_Category'), useValue: category },
         { provide: OperationalErrorService, useValue: { capture: jest.fn() } },
         {
           provide: GoogleDriveService,
@@ -161,5 +169,94 @@ describe('ComposantService.addComposantInfo', () => {
       expect(e).toBeInstanceOf(GraphQLError);
       expect((e as GraphQLError).extensions?.code).toBe('NOT_FOUND');
     }
+  });
+
+  describe('findOneComposant', () => {
+    const execOf = (doc: unknown) => ({ exec: () => Promise.resolve(doc) });
+
+    it('returns the matching composant and EXCLUDES soft-deleted rows', async () => {
+      const doc = fullInput();
+      model.findOne.mockReturnValue(execOf(doc));
+      await expect(service.findOneComposant('condo')).resolves.toBe(doc);
+      // `$ne: true` (et non `false`) : les documents hérités sans champ
+      // isDeleted doivent rester trouvables.
+      expect(model.findOne).toHaveBeenCalledWith({
+        name: 'condo',
+        isDeleted: { $ne: true },
+      });
+    });
+
+    it('throws a clean NOT_FOUND instead of returning null (non-nullable field)', async () => {
+      model.findOne.mockReturnValue(execOf(null));
+      expect.assertions(2);
+      try {
+        await service.findOneComposant('AZE');
+      } catch (e) {
+        expect(e).toBeInstanceOf(GraphQLError);
+        expect((e as GraphQLError).extensions?.code).toBe('NOT_FOUND');
+      }
+    });
+  });
+
+  describe('category_composant_id existence guard', () => {
+    it('rejects a save whose category does not exist (label pollution)', async () => {
+      model.findOne.mockReturnValue(leanOf(fullInput()));
+      category.exists.mockResolvedValue(null); // « resistqmce » n'existe pas
+      expect.assertions(3);
+      try {
+        await service.addComposantInfo(
+          fullInput({ category_composant_id: 'resistqmce' }) as any,
+        );
+      } catch (e) {
+        expect(e).toBeInstanceOf(GraphQLError);
+        expect((e as GraphQLError).extensions?.code).toBe('BAD_USER_INPUT');
+      }
+      expect(model.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('checks existence against non-deleted categories only', async () => {
+      model.findOne.mockReturnValue(leanOf(fullInput()));
+      model.findOneAndUpdate.mockResolvedValue(fullInput() as any);
+      await service.addComposantInfo(fullInput() as any);
+      expect(category.exists).toHaveBeenCalledWith({
+        _id: 'CAT1',
+        isDeleted: { $ne: true },
+      });
+    });
+
+    it('does NOT validate when the category is absent/empty (partial update keeps stored value)', async () => {
+      model.findOne.mockReturnValue(leanOf(fullInput()));
+      model.findOneAndUpdate.mockResolvedValue(fullInput() as any);
+      await service.addComposantInfo(
+        fullInput({ category_composant_id: '' }) as any,
+      );
+      expect(category.exists).not.toHaveBeenCalled();
+    });
+
+    it('non-régression : catégorie valide → écriture OK', async () => {
+      model.findOne.mockReturnValue(leanOf(fullInput()));
+      const saved = fullInput();
+      model.findOneAndUpdate.mockResolvedValue(saved as any);
+      await expect(
+        service.addComposantInfo(fullInput() as any),
+      ).resolves.toBe(saved);
+      expect(
+        model.findOneAndUpdate.mock.calls[0][1].$set.category_composant_id,
+      ).toBe('CAT1');
+    });
+
+    it('updateComposantPartial rejects a non-existent category too', async () => {
+      category.exists.mockResolvedValue(null);
+      expect.assertions(2);
+      try {
+        await service.updateComposantPartial({
+          _id: 'Cmp1',
+          category_composant_id: 'libelle-pollue',
+        } as any);
+      } catch (e) {
+        expect((e as GraphQLError).extensions?.code).toBe('BAD_USER_INPUT');
+      }
+      expect(model.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
   });
 });

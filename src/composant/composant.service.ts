@@ -19,10 +19,40 @@ export class ComposantService {
     // Used only to cascade a composant rename onto the DI linkage
     // (`array_composants[].nameComposant`), which references parts by name.
     @InjectModel('Di') private diModel: Model<any>,
+    // Used only to validate that a written `category_composant_id`
+    // references an existing category (see assertCategoryExists).
+    @InjectModel('Composant_Category') private categoryModel: Model<any>,
     private readonly operationalErrorService: OperationalErrorService,
     private readonly googleDriveService: GoogleDriveService,
     private readonly discordHookService: DiscordHookService,
   ) {}
+
+  /**
+   * Garde-fou anti-pollution : `category_composant_id` doit référencer une
+   * catégorie EXISTANTE (non supprimée). Historiquement le front envoyait le
+   * LIBELLÉ (« resistqmce ») et le back l'écrivait tel quel — un client
+   * obsolète peut encore le faire. Absent/vide → pas de validation (champ
+   * optionnel, la mise à jour partielle conserve la valeur stockée).
+   * NB : les _id de catégorie sont des String custom `C_Composant<N>` (pas des
+   * ObjectId) — le exists() ne fait donc aucun cast susceptible de jeter.
+   */
+  private async assertCategoryExists(
+    categoryId: string | null | undefined,
+  ): Promise<void> {
+    if (!categoryId || categoryId === 'null' || categoryId === 'undefined') {
+      return;
+    }
+    const exists = await this.categoryModel.exists({
+      _id: categoryId,
+      isDeleted: { $ne: true },
+    });
+    if (!exists) {
+      throw new GraphQLError(
+        `Catégorie '${categoryId}' introuvable — sélectionnez une catégorie valide.`,
+        { extensions: { code: 'BAD_USER_INPUT' } },
+      );
+    }
+  }
 
   /**
    * Upload a composant datasheet (fiche technique) to Drive — Drive-only, no
@@ -95,6 +125,11 @@ export class ComposantService {
     profile?: any,
   ): Promise<Composant> {
     try {
+      // Reject a non-existent category BEFORE any side effect (Drive upload).
+      await this.assertCategoryExists(
+        createComposantInput.category_composant_id,
+      );
+
       // Check if the PDF is a valid base64 string
       if (
         createComposantInput.pdf &&
@@ -143,6 +178,11 @@ export class ComposantService {
 
       return saved;
     } catch (error) {
+      // Expected errors (validation catégorie → BAD_USER_INPUT) ne sont pas
+      // opérationnelles — même pattern que addComposantInfo.
+      if (error instanceof GraphQLError) {
+        throw error;
+      }
       await this.operationalErrorService.capture({
         module: 'composant',
         submodule: 'composantService',
@@ -194,17 +234,27 @@ export class ComposantService {
   }
 
   async findOneComposant(name: string): Promise<Composant> {
-    return await this.ComposantModel.findOne({ name }).exec();
-
-    //   if (!Composant) {
-    //     throw new Error(`Composant with ID '${_id}' not found.`);
-    //   }
-    //   return Composant;
-    // } catch (error) {
-    //   throw error;
-    // }
+    // Aligné sur findAllComposants : un composant soft-supprimé ne doit pas
+    // rester chargeable/modifiable via le modal (il « ressuscitait » sinon).
+    // `$ne: true` et non `false` : les documents hérités SANS champ isDeleted
+    // doivent rester trouvables ({isDeleted: false} ne matche pas un champ
+    // absent en Mongo).
+    const composant = await this.ComposantModel.findOne({
+      name,
+      isDeleted: { $ne: true },
+    }).exec();
+    if (!composant) {
+      // Clean NOT_FOUND instead of returning null into the non-nullable
+      // `Query.findOneComposant` field (which surfaced as an unreadable
+      // "Cannot return null for non-nullable field" internal error).
+      throw new GraphQLError(`Composant '${name}' introuvable.`, {
+        extensions: { code: 'NOT_FOUND' },
+      });
+    }
+    return composant;
   }
   async updateComposant(updateComposant: CreateComposantInput) {
+    await this.assertCategoryExists(updateComposant.category_composant_id);
     const update = await this.ComposantModel.findByIdAndUpdate(
       updateComposant._id,
       {
@@ -238,6 +288,11 @@ export class ComposantService {
       if (value !== undefined) {
         updateSet[key] = value;
       }
+    }
+    if ('category_composant_id' in updateSet) {
+      await this.assertCategoryExists(
+        updateSet.category_composant_id as string,
+      );
     }
     return await this.ComposantModel.findByIdAndUpdate(
       _id,
@@ -293,6 +348,12 @@ export class ComposantService {
       assign('quantity_stocked', updateComposant.quantity_stocked);
       assign('status_composant', updateComposant.status_composant);
       assign('category_composant_id', updateComposant.category_composant_id);
+
+      // Une catégorie fournie doit exister — un client obsolète qui envoie
+      // encore le LIBELLÉ est rejeté proprement au lieu de polluer la base.
+      if ('category_composant_id' in set) {
+        await this.assertCategoryExists(set.category_composant_id as string);
+      }
 
       // PDF: only touch it when a NEW file (base64 data URL) is supplied. When
       // the form re-sends the existing file name (or nothing), leave the stored

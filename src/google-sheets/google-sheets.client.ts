@@ -32,7 +32,7 @@ export class GoogleSheetsClient implements OnModuleInit {
     } catch (err) {
       this.logger.warn(
         `Google Sheets auth not initialized at boot: ${(err as Error).message}. ` +
-          `Run the OAuth consent flow (GET /auth/google) and set GOOGLE_OAUTH_REFRESH_TOKEN to enable sync.`,
+          `Run the OAuth consent flow (GET /auth/google) — the refresh token is stored in MongoDB (oauth_tokens) to enable sync.`,
       );
     }
   }
@@ -42,7 +42,8 @@ export class GoogleSheetsClient implements OnModuleInit {
 
     // OAuth 2.0 — the SAME Gmail grant Google Drive uses (shared factory). The
     // account owns the spreadsheets, so no service-account sharing is needed.
-    const auth = this.oauth.getAuthenticatedClient();
+    // Async now: the refresh token is read from MongoDB (oauth_tokens).
+    const auth = await this.oauth.getAuthenticatedClient();
     this.sheets = google.sheets({ version: 'v4', auth });
     return this.sheets;
   }
@@ -258,8 +259,7 @@ export class GoogleSheetsClient implements OnModuleInit {
       return new Error(
         "Google Sheets: le refresh token OAuth ne couvre pas le scope 'spreadsheets'. " +
           'Relancez le consentement (GET /auth/google) avec le compte Gmail propriétaire ' +
-          'pour régénérer un refresh token couvrant Drive + Sheets, puis mettez à jour ' +
-          'GOOGLE_OAUTH_REFRESH_TOKEN dans .env.',
+          'pour régénérer un refresh token couvrant Drive + Sheets — il sera re-stocké en base (oauth_tokens).',
       );
     }
     return err;

@@ -7,6 +7,7 @@ import { OperationalErrorModule } from 'src/operational-error/operational-error.
 import { DiSchema } from 'src/di/entities/di.entity';
 import { GoogleDriveModule } from 'src/google-drive/google-drive.module';
 import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
+import { Composant_CategorySchema } from 'src/composant_category/entities/composant_category.entity';
 
 @Module({
   providers: [ComposantResolver, ComposantService],
@@ -24,6 +25,13 @@ import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
       {
         name: 'Di',
         schema: DiSchema,
+      },
+      // Needed to validate that `category_composant_id` references an
+      // EXISTING category before writing (guards against label pollution
+      // from stale clients).
+      {
+        name: 'Composant_Category',
+        schema: Composant_CategorySchema,
       },
     ]),
   ],

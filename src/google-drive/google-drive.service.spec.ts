@@ -1,5 +1,26 @@
 import { GoogleDriveService } from './google-drive.service';
 import { GoogleOAuthService } from '../google-auth/google-auth.service';
+import { OAuthTokenService } from '../oauth-token/oauth-token.service';
+
+/**
+ * Fake token store (the refresh token lives in Mongo now). `token` is the
+ * in-memory value `getRefreshToken` serves; flip it to null for "not authorized".
+ */
+function makeOAuth(token: string | null = 'rt'): GoogleOAuthService {
+  const state = { token };
+  const tokens = {
+    getRefreshToken: jest.fn(async () => state.token),
+    getRecord: jest.fn(async () => null),
+    saveRefreshToken: jest.fn(async (rt: string) => {
+      state.token = rt;
+    }),
+    markReauthRequired: jest.fn(async () => undefined),
+    touchRefreshed: jest.fn(async () => undefined),
+  };
+  const svc = new GoogleOAuthService(tokens as unknown as OAuthTokenService);
+  (svc as any).__tokenState = state; // exposed so a test can flip it
+  return svc;
+}
 
 /**
  * Unit tests for the parts that DON'T need a live Drive (naming + sanitization).
@@ -7,7 +28,8 @@ import { GoogleOAuthService } from '../google-auth/google-auth.service';
  * and are validated separately by the user.
  */
 describe('GoogleDriveService — naming & sanitization', () => {
-  const svc = new GoogleDriveService(new GoogleOAuthService());
+  const oauth = makeOAuth('rt');
+  const svc = new GoogleDriveService(oauth);
   // Fixed instant: 2026-06-18 10:30:45 UTC → 11:30:45 in Africa/Tunis (UTC+1).
   const at = new Date('2026-06-18T10:30:45.000Z');
 
@@ -93,7 +115,7 @@ describe('GoogleDriveService — naming & sanitization', () => {
       findFoldersByNamePrefix: jest.Mock;
       createSubFolder: jest.Mock;
     } {
-      const svc: any = new GoogleDriveService(new GoogleOAuthService());
+      const svc: any = new GoogleDriveService(makeOAuth('rt'));
       const findFoldersByNamePrefix = jest.fn();
       for (const m of findMatches)
         findFoldersByNamePrefix.mockResolvedValueOnce(m);
@@ -192,7 +214,7 @@ describe('GoogleDriveService — naming & sanitization', () => {
   // entity folders. The tightened predicate only matches Drive's canonical
   // 404 shape (numeric code, `notFound` reason, or `^File not found`).
   describe('isNotFoundError — narrowed scope (no false-positive forceRecreate)', () => {
-    const svc = new GoogleDriveService(new GoogleOAuthService());
+    const svc = new GoogleDriveService(makeOAuth('rt'));
 
     it('matches numeric code 404', () => {
       expect(svc.isNotFoundError({ code: 404 })).toBe(true);
@@ -225,23 +247,29 @@ describe('GoogleDriveService — naming & sanitization', () => {
     });
   });
 
-  it('isConfigured needs OAuth client + refresh token (parent folder is OPTIONAL)', () => {
+  it('isConfigured needs OAuth app creds (env) + a stored refresh token (DB); parent folder is OPTIONAL', async () => {
     const keys = [
       'GOOGLE_DRIVE_PARENT_FOLDER_ID',
       'GOOGLE_OAUTH_CLIENT_ID',
       'GOOGLE_OAUTH_CLIENT_SECRET',
-      'GOOGLE_OAUTH_REFRESH_TOKEN',
     ];
     const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
     keys.forEach((k) => delete process.env[k]);
-    expect(svc.isConfigured()).toBe(false);
+
+    // Start un-authorized (no stored token) + no app creds.
+    const noToken = new GoogleDriveService(makeOAuth(null));
+    await expect(noToken.isConfigured()).resolves.toBe(false);
+
     process.env.GOOGLE_OAUTH_CLIENT_ID = 'cid';
     process.env.GOOGLE_OAUTH_CLIENT_SECRET = 'secret';
-    // still missing the refresh token → not configured yet
-    expect(svc.isConfigured()).toBe(false);
-    process.env.GOOGLE_OAUTH_REFRESH_TOKEN = 'rt';
-    // configured WITHOUT a parent folder — the app creates CLIENTS itself
-    expect(svc.isConfigured()).toBe(true);
+    // App creds present but STILL no stored token → not configured yet.
+    await expect(noToken.isConfigured()).resolves.toBe(false);
+
+    // A token stored in the DB → configured WITHOUT a parent folder (the app
+    // creates CLIENTS itself).
+    const withToken = new GoogleDriveService(makeOAuth('rt'));
+    await expect(withToken.isConfigured()).resolves.toBe(true);
+
     // restore
     keys.forEach((k) => {
       if (saved[k] === undefined) delete process.env[k];

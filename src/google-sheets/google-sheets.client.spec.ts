@@ -36,7 +36,10 @@ describe('GoogleSheetsClient — OAuth auth + writes', () => {
     // The shared OAuth factory hands back an opaque client; we assert it is the
     // exact object passed to google.sheets({ auth }).
     authSentinel = { __sharedOAuthClient: true };
-    oauth = { getAuthenticatedClient: jest.fn().mockReturnValue(authSentinel) };
+    // getAuthenticatedClient is async now (refresh token read from Mongo).
+    oauth = {
+      getAuthenticatedClient: jest.fn().mockResolvedValue(authSentinel),
+    };
     client = new GoogleSheetsClient(oauth as any);
     process.env.GOOGLE_SHEETS_ID = 'SHEET_1';
   });

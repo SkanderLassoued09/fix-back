@@ -2,6 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Readable } from 'stream';
 import { google, drive_v3 } from 'googleapis';
 import { GoogleOAuthService } from '../google-auth/google-auth.service';
+import {
+  GoogleDriveUploadError,
+  buildInvalidGrantDiagnostic,
+  extractGoogleError,
+  isInvalidGrant,
+  isTransientError,
+} from '../google-auth/google-oauth.errors';
 
 export interface DriveFolder {
   id: string;
@@ -37,11 +44,12 @@ export type DriveDocType =
  * Drive lives in a personal account, so we authenticate AS that account: files
  * are then owned by it and billed to its quota.
  *
- * Flow (one-time dev setup): `GET /auth/google` → consent (scope `drive.file`,
- * `access_type=offline`, `prompt=consent`) with the quota-owning account →
- * `GET /oauth/callback` returns a **refresh token** → paste it into
- * `GOOGLE_OAUTH_REFRESH_TOKEN`. At runtime the OAuth2 client refreshes the
- * access token automatically from that refresh token.
+ * Flow (one-time setup): `GET /auth/google` → consent (scopes `drive.file` +
+ * `spreadsheets`, `access_type=offline`, `prompt=consent`, `state`) with the
+ * quota-owning account → `GET /oauth/callback` persists the **refresh token**
+ * into MongoDB (collection `oauth_tokens`) — no `.env` edit, no restart. At
+ * runtime the OAuth2 client refreshes the access token automatically from that
+ * stored refresh token.
  *
  * Folder layout (unchanged — stable, idempotent, all files of an entity in the
  * SAME folder):
@@ -59,6 +67,64 @@ export class GoogleDriveService {
   private drive: drive_v3.Drive | null = null;
   /** Cache of resolved container folder ids (`company`, `client`) keyed by type. */
   private readonly containerCache = new Map<string, string>();
+  /** Retry budget for TRANSIENT Drive failures (429 / 5xx / network). */
+  private static readonly MAX_ATTEMPTS = 3;
+
+  /**
+   * Run a Drive API call with a retry policy:
+   *   - `invalid_grant` → NEVER retried (unrecoverable); rethrown as the
+   *     actionable diagnostic so logs explain the required manual re-auth.
+   *   - 429 / 5xx / network timeout → retried with exponential backoff.
+   *   - any other 4xx → rethrown immediately (retrying won't help).
+   * On auth failure the cached Drive client is dropped so a corrected token
+   * (re-auth without full restart) rebuilds cleanly on the next call.
+   */
+  private async callWithRetry<T>(
+    label: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    let lastErr: unknown;
+    for (
+      let attempt = 1;
+      attempt <= GoogleDriveService.MAX_ATTEMPTS;
+      attempt++
+    ) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastErr = err;
+        if (isInvalidGrant(err)) {
+          this.drive = null; // force rebuild after a token fix
+          // Persist the unhealthy state + drop the shared OAuth cache so a
+          // re-auth (POST /admin/google/reauthorize or GET /auth/google) takes
+          // effect without a restart. Best-effort — never masks the diagnostic.
+          void this.oauth
+            .markReauthFromError(err)
+            .catch((e) =>
+              this.logger.warn(
+                `markReauthFromError non fatal: ${(e as Error).message}`,
+              ),
+            );
+          throw buildInvalidGrantDiagnostic(err);
+        }
+        const info = extractGoogleError(err);
+        if (
+          !isTransientError(err) ||
+          attempt === GoogleDriveService.MAX_ATTEMPTS
+        ) {
+          break;
+        }
+        const backoffMs = 2 ** (attempt - 1) * 1000;
+        this.logger.warn(
+          `Drive ${label} tentative ${attempt} échouée (http=${
+            info.httpStatus ?? 'n/a'
+          }); nouvelle tentative dans ${backoffMs}ms`,
+        );
+        await new Promise((r) => setTimeout(r, backoffMs));
+      }
+    }
+    throw lastErr;
+  }
 
   /** OAuth is centralized in `GoogleOAuthService` (shared with Google Sheets):
    *  one Gmail grant, one refresh token, combined Drive + Sheets scopes. */
@@ -67,7 +133,7 @@ export class GoogleDriveService {
   /** True when Drive is configured (OAuth client + refresh token present). The
    *  parent folder is OPTIONAL — when empty, the app creates its own `CLIENTS`
    *  folder. Delegated to the shared OAuth factory. */
-  isConfigured(): boolean {
+  async isConfigured(): Promise<boolean> {
     return this.oauth.isConfigured();
   }
 
@@ -86,7 +152,8 @@ export class GoogleDriveService {
   private async ensureClient(): Promise<drive_v3.Drive> {
     if (this.drive) return this.drive;
     // Shared OAuth2 client (refresh token set) — same grant as Google Sheets.
-    const auth = this.oauth.getAuthenticatedClient();
+    // Async now: the refresh token is read from MongoDB (oauth_tokens).
+    const auth = await this.oauth.getAuthenticatedClient();
     this.drive = google.drive({ version: 'v3', auth });
     return this.drive;
   }
@@ -208,13 +275,15 @@ export class GoogleDriveService {
       `mimeType = 'application/vnd.google-apps.folder'`,
       'trashed = false',
     ].join(' and ');
-    const res = await drive.files.list({
-      q,
-      fields: 'files(id, webViewLink)',
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
-      pageSize: 1,
-    });
+    const res = await this.callWithRetry('findFolder', () =>
+      drive.files.list({
+        q,
+        fields: 'files(id, webViewLink)',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        pageSize: 1,
+      }),
+    );
     const f = res.data.files?.[0];
     return f?.id ? { id: f.id, webViewLink: f.webViewLink ?? '' } : null;
   }
@@ -249,14 +318,16 @@ export class GoogleDriveService {
       `mimeType = 'application/vnd.google-apps.folder'`,
       'trashed = false',
     ].join(' and ');
-    const res = await drive.files.list({
-      q,
-      fields: 'files(id, name, createdTime, webViewLink)',
-      orderBy: 'createdTime',
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
-      pageSize: 100,
-    });
+    const res = await this.callWithRetry('findFoldersByNamePrefix', () =>
+      drive.files.list({
+        q,
+        fields: 'files(id, name, createdTime, webViewLink)',
+        orderBy: 'createdTime',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        pageSize: 100,
+      }),
+    );
     const files = res.data.files ?? [];
     const matches = files
       .filter((f) => typeof f.name === 'string' && f.name.startsWith(probe))
@@ -280,15 +351,17 @@ export class GoogleDriveService {
     name: string,
     parentId: string,
   ): Promise<DriveFolder> {
-    const res = await drive.files.create({
-      requestBody: {
-        name,
-        mimeType: 'application/vnd.google-apps.folder',
-        parents: [parentId],
-      },
-      fields: 'id, webViewLink',
-      supportsAllDrives: true,
-    });
+    const res = await this.callWithRetry('createSubFolder', () =>
+      drive.files.create({
+        requestBody: {
+          name,
+          mimeType: 'application/vnd.google-apps.folder',
+          parents: [parentId],
+        },
+        fields: 'id, webViewLink',
+        supportsAllDrives: true,
+      }),
+    );
     if (!res.data.id) throw new Error('Drive folder create returned no id');
     return { id: res.data.id, webViewLink: res.data.webViewLink ?? '' };
   }
@@ -459,30 +532,47 @@ export class GoogleDriveService {
     const drive = await this.ensureClient();
     let res;
     try {
-      res = await drive.files.create({
-        requestBody: { name: fileName, parents: [folderId] },
-        media: {
-          mimeType: mimeType || 'application/octet-stream',
-          body: Readable.from(buffer),
-        },
-        fields: 'id, webViewLink, name',
-        supportsAllDrives: true,
-      });
+      // Retries transient failures (429/5xx/network); rethrows invalid_grant as
+      // the actionable auth diagnostic (never retried).
+      res = await this.callWithRetry('uploadFile', () =>
+        drive.files.create({
+          requestBody: { name: fileName, parents: [folderId] },
+          media: {
+            mimeType: mimeType || 'application/octet-stream',
+            body: Readable.from(buffer),
+          },
+          fields: 'id, webViewLink, name',
+          supportsAllDrives: true,
+        }),
+      );
     } catch (err) {
+      // invalid_grant already mapped to its diagnostic by callWithRetry — let it
+      // through unchanged so the operator sees the re-auth instructions.
+      if (isInvalidGrant(err) || (err as any)?.name === 'GoogleOAuthGrantError') {
+        throw err;
+      }
       // A service account has NO storage quota, so it can CREATE folders (0
       // bytes) but cannot STORE a file unless the parent lives in a Shared
       // Drive (storage billed to the Workspace org). If the parent is in a
       // personal My Drive, the upload is billed to the SA → this error. Turn
       // Google's cryptic message into an actionable one.
       if (this.isQuotaError(err)) {
-        throw new Error(
+        throw new GoogleDriveUploadError(
           'Upload Drive refusé : le compte de service n’a pas de quota de stockage. ' +
             'Le dossier parent (GOOGLE_DRIVE_PARENT_FOLDER_ID) doit être DANS un Shared Drive ' +
             'dont le service account est membre (Content Manager) — pas un My Drive personnel. ' +
             `Détail Google : ${(err as Error)?.message ?? String(err)}`,
+          extractGoogleError(err).httpStatus,
+          'storageQuotaExceeded',
         );
       }
-      throw err;
+      const info = extractGoogleError(err);
+      throw new GoogleDriveUploadError(
+        `Upload Drive "${fileName}" échoué (http=${
+          info.httpStatus ?? 'n/a'
+        }) : ${info.message}`,
+        info.httpStatus,
+      );
     }
     const id = res.data.id;
     if (!id) throw new Error('Drive file create returned no id');
@@ -504,14 +594,18 @@ export class GoogleDriveService {
     fileId: string,
   ): Promise<{ stream: Readable; mimeType: string; name: string }> {
     const drive = await this.ensureClient();
-    const meta = await drive.files.get({
-      fileId,
-      fields: 'mimeType, name',
-      supportsAllDrives: true,
-    });
-    const res = await drive.files.get(
-      { fileId, alt: 'media', supportsAllDrives: true },
-      { responseType: 'stream' },
+    const meta = await this.callWithRetry('downloadFile.meta', () =>
+      drive.files.get({
+        fileId,
+        fields: 'mimeType, name',
+        supportsAllDrives: true,
+      }),
+    );
+    const res = await this.callWithRetry('downloadFile.media', () =>
+      drive.files.get(
+        { fileId, alt: 'media', supportsAllDrives: true },
+        { responseType: 'stream' },
+      ),
     );
     return {
       stream: res.data as unknown as Readable,
