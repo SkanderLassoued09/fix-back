@@ -29,7 +29,12 @@ function makeSvc(di: any) {
       .fn()
       .mockResolvedValue({ di: { ...di, status: STATUS_DI.Pending2.status } }),
   };
-  svc.statsService = { updateStatus: jest.fn().mockResolvedValue(undefined) };
+  svc.statsService = {
+    updateStatus: jest.fn().mockResolvedValue(undefined),
+    // Fermeture serveur du segment de travail diagnostic (no-op si fermé).
+    closeDiagLeg: jest.fn().mockResolvedValue(null),
+    openDiagLeg: jest.fn().mockResolvedValue(true),
+  };
   svc.discordHookService = {
     sendDiagnosticFinished: jest.fn().mockResolvedValue(undefined),
   };
@@ -112,7 +117,12 @@ function makeFinishSvc(di: any) {
       .fn()
       .mockResolvedValue({ di: { ...di, status: STATUS_DI.Pending2.status } }),
   };
-  svc.statsService = { updateStatus: jest.fn().mockResolvedValue(undefined) };
+  svc.statsService = {
+    updateStatus: jest.fn().mockResolvedValue(undefined),
+    // Fermeture serveur du segment de travail diagnostic (no-op si fermé).
+    closeDiagLeg: jest.fn().mockResolvedValue(null),
+    openDiagLeg: jest.fn().mockResolvedValue(true),
+  };
   svc.discordHookService = {
     sendDiFinished: jest.fn().mockResolvedValue(undefined),
     sendDiagnosticFinished: jest.fn().mockResolvedValue(undefined),
