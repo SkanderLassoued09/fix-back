@@ -1,15 +1,53 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Composant_Category } from './entities/composant_category.entity';
 import { CreateComposant_CategoryInput } from './dto/create-composant_category.input';
 
 @Injectable()
-export class Composant_CategoryService {
+export class Composant_CategoryService implements OnModuleInit {
+  private readonly logger = new Logger(Composant_CategoryService.name);
+
+  /** Catégories de composant de BASE. Seedées **uniquement sur une base vide**
+   *  (idempotent) pour qu'un poste/une base fraîche n'ait jamais un dropdown
+   *  vide. Éditable : sur une base déjà peuplée, AUCUN ajout n'est fait. */
+  private static readonly BASE_CATEGORIES = [
+    'Résistance',
+    'Condensateur',
+    'Transistor',
+    'Diode',
+    'Circuit intégré',
+    'Connecteur',
+    'Relais',
+    'Fusible',
+  ];
+
   constructor(
     @InjectModel('Composant_Category')
     private Composant_CategoryModel: Model<Composant_Category>,
   ) {}
+
+  /** Seed idempotent des catégories de base au démarrage : ne fait rien si la
+   *  collection contient déjà des catégories (base configurée). `createComposant_
+   *  Category` dédoublonne par nom, donc double sécurité anti-doublon. */
+  async onModuleInit(): Promise<void> {
+    try {
+      const count = await this.Composant_CategoryModel.estimatedDocumentCount();
+      if (count > 0) return; // base déjà peuplée → ne rien seeder
+      for (const label of Composant_CategoryService.BASE_CATEGORIES) {
+        await this.createComposant_Category({
+          category_composant: label,
+        } as CreateComposant_CategoryInput);
+      }
+      this.logger.log(
+        `Seed : ${Composant_CategoryService.BASE_CATEGORIES.length} catégories de composant de base créées (base vide détectée).`,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Seed catégories ignoré : ${(err as Error)?.message ?? err}.`,
+      );
+    }
+  }
 
   async generateComposant_CategoryId(): Promise<number> {
     let indexComposant_Category = 0;

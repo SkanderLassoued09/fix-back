@@ -209,7 +209,7 @@ describe('DiWorkflowService', () => {
   });
 
   it('MANAGER_ADMIN_TO_PENDING3 syncs Stat.status to PENDING3', async () => {
-    const existingDi = makeDi({ status: STATUS_DI.Negotiation1.status });
+    const existingDi = makeDi({ status: STATUS_DI.WaitingBc.status });
     const updatedDi = makeDi({ status: STATUS_DI.Pending3.status });
     diModel.findOne.mockResolvedValue(existingDi);
     diModel.findOneAndUpdate.mockResolvedValue(updatedDi);

@@ -82,6 +82,11 @@ export class DiDocument extends Document {
   @Prop()
   // affected by admins
   final_price: number;
+  // Estimation du prix de réparation, saisie dans le modal « Affectation du
+  // prix initial ». Champ DÉDIÉ (distinct de price/final_price) pour comparer
+  // ensuite l'estimé au prix final. Optionnel.
+  @Prop({ type: Number, default: null })
+  repairEstimate: number;
   @Prop()
   discount: number;
   @Prop()
@@ -105,8 +110,14 @@ export class DiDocument extends Document {
   ignoreCount: number;
   @Prop({ defaultValue: false })
   isOpenedOnce: boolean;
-  @Prop({ defaultValue: false })
-  gotComposantFromMagasin: string;
+  // BUG FIX (racine) : ce champ était typé `string` avec `defaultValue` (option
+  // Mongoose INEXISTANTE — c'est `default`), si bien que tout `false` écrit
+  // était casté en `"false"` (truthy !) et 56/104 DI portaient cette string.
+  // Normalisé en booléen réel avec le bon défaut ; une migration convertit les
+  // valeurs string existantes. La logique d'ouverture des modals repose sur le
+  // STATUT, plus sur ce flag.
+  @Prop({ type: Boolean, default: false })
+  gotComposantFromMagasin: boolean;
   // confirmation component for magasin and coordinator section
   @Prop({ default: false })
   isConfirmedComponentFromCoordinator: boolean;
@@ -373,6 +384,8 @@ export class Di {
   @Field({ nullable: true })
   final_price: number;
   @Field({ nullable: true })
+  repairEstimate: number;
+  @Field({ nullable: true })
   discount: number;
   @Field({ nullable: true })
   discount_value: number;
@@ -393,7 +406,7 @@ export class Di {
   @Field({ defaultValue: false })
   isSentToCoordinator: boolean;
   @Field({ defaultValue: false })
-  gotComposantFromMagasin: string;
+  gotComposantFromMagasin: boolean;
   @Field({ nullable: true })
   status: string;
   @Field({ nullable: true })

@@ -16,6 +16,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Di, DiDocument, UpdateNego } from './entities/di.entity';
 import { Model } from 'mongoose';
 import {
+  APPROVAL_DOC_STATUS_VALUES,
+  CLOSING_STATUS_VALUES,
+  isApprovalDocStatus,
+  isClosingStatus,
   MAGASIN_STATUS_DI_VALUES,
   STATUS_DI,
   TECH_STATUS_DI_VALUES,
@@ -664,6 +668,10 @@ export class DiService {
         await this.captureDiscordFailure('addDevisPDF', err, { diId: _id });
       }
 
+      // Gate documentaire : en WAITING_DEVIS, l'upload du devis fait avancer à
+      // WAITING_BC (atomique/idempotent ; cascade si le BC est déjà présent).
+      await this.maybeAdvanceDocGate(_id);
+
       // Return the fresh DI (the mutation is typed `() => Di`); `result` is a
       // Mongo update/log result with no Di fields.
       return await this.diModel.findOne({ _id });
@@ -750,7 +758,10 @@ export class DiService {
           await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
         }
 
-        return updatedDi;
+        // If this completes the BL + Facture pair while the DI waits in
+        // ATTENTE_BL_FACTURE, close it automatically (atomic + idempotent).
+        await this.maybeAdvanceDocGate(_id);
+        return await this.diModel.findOne({ _id });
       }
     } catch (error) {
       await this.captureUploadFailure('ADD_BL_PDF', error, _id);
@@ -782,6 +793,8 @@ export class DiService {
             },
           },
         );
+        // Completes the BL + Facture pair? Auto-close if waiting (atomic).
+        await this.maybeAdvanceDocGate(_id);
       }
       // Return the fresh DI (mutation is typed `() => Di`).
       return await this.diModel.findOne({ _id });
@@ -828,6 +841,11 @@ export class DiService {
       } catch (err) {
         await this.captureDiscordFailure('addBCPDF', err, { diId: _id });
       }
+
+      // Gate documentaire : en WAITING_BC, l'upload du BC déclenche le routage de
+      // sortie de l'approbation (même logique que « Confirmer » : PENDING3 sans
+      // composants / PROCESSING avec composants / FINISHED non réparable).
+      await this.maybeAdvanceDocGate(_id);
 
       // Return the fresh DI (the mutation is typed `() => Di`); `result` is a
       // Mongo update/log result with no Di fields.
@@ -1483,7 +1501,10 @@ export class DiService {
         $set: {
           current_workers_ids: tech_id,
           current_roles: Role.TECH,
-          status: STATUS_DI.Reparation,
+          // Bug corrigé : on écrit la VALEUR de statut ('REPARATION'), pas
+          // l'objet `STATUS_DI.Reparation` entier — sinon le hook `statusHistory`
+          // enregistrait une entrée malformée (`status` = objet).
+          status: STATUS_DI.Reparation.status,
         },
       },
       { new: true },
@@ -1769,6 +1790,186 @@ export class DiService {
     return updateReamrqueRep;
   }
 
+  /** Persist the repair-price estimate from the price-initial modal. Stored on
+   *  a dedicated field; a non-finite value clears it (null). */
+  async setRepairEstimate(_id: string, estimate: number): Promise<void> {
+    const value = Number.isFinite(estimate) ? estimate : null;
+    await this.diModel.updateOne(
+      { _id },
+      { $set: { repairEstimate: value } },
+    );
+  }
+
+  /** A DriveDocRef is a real uploaded doc (object with a driveFileId), not a
+   *  legacy filename string or an empty value. */
+  private isDriveDocRef(doc: any): boolean {
+    return !!doc && typeof doc === 'object' && !!doc.driveFileId;
+  }
+
+  /**
+   * Avancement AUTOMATIQUE des DI à travers les gates DOCUMENTAIRES, appelé après
+   * chaque upload de document. Généralise l'ancien `maybeAutoFinishBlFacture`.
+   *
+   * Deux chaînes :
+   *   - Approval : WAITING_DEVIS --(Devis)--> WAITING_BC --(BC)--> routage confirm
+   *                (non réparable → FINISHED ; réparable sans composants →
+   *                 PENDING3 ; réparable AVEC composants → PROCESSING).
+   *   - Clôture  : WAITING_BL   --(BL)-->   WAITING_FACTURE --(Facture)--> FINISHED.
+   *
+   * Propriétés (exigées) :
+   *   - ATOMIQUE / un seul gagnant : chaque saut est un `findOneAndUpdate` filtré
+   *     sur le statut source EXACT → deux uploads concurrents ne produisent qu'UNE
+   *     transition (le perdant ne matche rien et no-op).
+   *   - IDEMPOTENT : ré-invocation hors gate / document manquant = no-op.
+   *   - CASCADE : après un saut, on RE-tente l'étape suivante si son document est
+   *     déjà présent (facture déjà là quand le BL arrive → WAITING_FACTURE puis
+   *     FINISHED immédiatement). AUCUN bruit Discord sur les états intermédiaires
+   *     traversés ; `sendDiFinished` UNIQUEMENT au FINISHED réel.
+   *   - `ignoreCount === 0` UNIQUEMENT : les DI en retour stockent leurs documents
+   *     dans `logsdis`, pas sur `driveDocs` → ne jamais les avancer ici.
+   */
+  private async maybeAdvanceDocGate(_id: string): Promise<void> {
+    // Borne dure = garde-fou anti-boucle (il n'y a jamais plus de ~4 sauts).
+    for (let hops = 0; hops < 6; hops++) {
+      const di: any = await this.diModel.findOne({ _id }).lean();
+      if (!di) return;
+      if (di.ignoreCount && di.ignoreCount > 0) return; // retour → docs en logsdis
+
+      const hasDevis = this.isDriveDocRef(di?.driveDocs?.Devis);
+      const hasBC = this.isDriveDocRef(di?.driveDocs?.BC);
+      const hasBL = this.isDriveDocRef(di?.driveDocs?.BL);
+      const hasFacture = this.isDriveDocRef(di?.driveDocs?.Facture);
+      const status = di.status;
+
+      // --- Legacy clôture (DI pré-split encore en CLOSING/ATTENTE_BL_FACTURE) :
+      //     comportement historique conservé — BL + Facture présents → FINISHED.
+      if (
+        (status === 'CLOSING' || status === 'ATTENTE_BL_FACTURE') &&
+        hasBL &&
+        hasFacture
+      ) {
+        const finished = await this.diModel.findOneAndUpdate(
+          { _id, status: { $in: ['CLOSING', 'ATTENTE_BL_FACTURE'] } },
+          { $set: { status: STATUS_DI.Finished.status } },
+          { new: true },
+        );
+        if (!finished) return; // un upload concurrent a déjà clôturé
+        await this.finalizeFinished(finished);
+        return;
+      }
+
+      // --- Chaîne de clôture documentaire ---
+      if (status === STATUS_DI.WaitingBl.status && hasBL) {
+        const moved = await this.diModel.findOneAndUpdate(
+          { _id, status: STATUS_DI.WaitingBl.status },
+          { $set: { status: STATUS_DI.WaitingFacture.status } },
+          { new: true },
+        );
+        if (!moved) return; // perdu la course
+        await this.statsService.updateStatus(
+          _id,
+          STATUS_DI.WaitingFacture.status,
+        );
+        continue; // cascade : la facture est peut-être déjà présente
+      }
+      if (status === STATUS_DI.WaitingFacture.status && hasFacture) {
+        const finished = await this.diModel.findOneAndUpdate(
+          { _id, status: STATUS_DI.WaitingFacture.status },
+          { $set: { status: STATUS_DI.Finished.status } },
+          { new: true },
+        );
+        if (!finished) return;
+        await this.finalizeFinished(finished);
+        return; // FINISHED = terminal
+      }
+
+      // --- Chaîne Approval documentaire ---
+      if (status === STATUS_DI.WaitingDevis.status && hasDevis) {
+        const moved = await this.diModel.findOneAndUpdate(
+          { _id, status: STATUS_DI.WaitingDevis.status },
+          { $set: { status: STATUS_DI.WaitingBc.status } },
+          { new: true },
+        );
+        if (!moved) return;
+        await this.statsService.updateStatus(_id, STATUS_DI.WaitingBc.status);
+        continue; // cascade : le BC est peut-être déjà présent
+      }
+      if (status === STATUS_DI.WaitingBc.status && hasBC) {
+        await this.exitWaitingBcOnBc(_id, di);
+        return; // la suite (PENDING3/PROCESSING/FINISHED) est terminale ici
+      }
+
+      return; // aucun gate franchissable
+    }
+  }
+
+  /** Effets de bord communs d'un passage à FINISHED (stat + Discord unique +
+   *  socket). `sendDiFinished` ne fire QU'ICI = au FINISHED réel. */
+  private async finalizeFinished(finished: any): Promise<void> {
+    await this.statsService.updateStatus(finished._id, STATUS_DI.Finished.status);
+    try {
+      await this.discordHookService.sendDiFinished(finished);
+    } catch (err) {
+      await this.captureDiscordFailure('discord-notification', err);
+    }
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { result: finished, states: finished },
+      target: {},
+    });
+  }
+
+  /**
+   * Sortie de WAITING_BC à l'upload du BC = MÊME routage que le bouton
+   * « Confirmer » du modal : non réparable → FINISHED ; réparable SANS composants
+   * → PENDING3 ; réparable AVEC composants → PROCESSING (magasin). Atomique
+   * (claim filtré sur WAITING_BC → un seul gagnant). N'écrit PAS le prix (déjà
+   * persisté depuis PRICING / le modal) ; réutilise les notifications de chaque
+   * cible. La garde composants reste respectée (composants → PROCESSING, jamais
+   * un saut direct vers PENDING3).
+   */
+  private async exitWaitingBcOnBc(_id: string, di: any): Promise<void> {
+    const notRepairable = di?.can_be_repaired === false;
+    const hasComponents = this.diHasComponents(di);
+    const target = notRepairable
+      ? STATUS_DI.Finished.status
+      : hasComponents
+        ? STATUS_DI.InMagasin.status
+        : STATUS_DI.Pending3.status;
+
+    const moved = await this.diModel.findOneAndUpdate(
+      { _id, status: STATUS_DI.WaitingBc.status },
+      { $set: { status: target } },
+      { new: true },
+    );
+    if (!moved) return; // upload concurrent → un seul gagnant
+
+    if (target === STATUS_DI.Finished.status) {
+      await this.finalizeFinished(moved);
+      return;
+    }
+
+    if (moved.ignoreCount > 0) {
+      await this.statsService.updateStatus(_id, target, moved.ignoreCount);
+    } else {
+      await this.statsService.updateStatus(_id, target);
+    }
+    try {
+      if (target === STATUS_DI.InMagasin.status) {
+        await this.discordHookService.sendDiInMagasin(moved);
+      } else {
+        await this.discordHookService.sendDiStatusPending3(moved);
+      }
+    } catch (err) {
+      await this.captureDiscordFailure('discord-notification', err);
+    }
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { result: moved, states: moved },
+      target: {},
+    });
+  }
+
   async changeStatusTofinsh(_id: string) {
     // Non-repairable routing. A non-repairable DI still needs its diagnostic
     // billed when it's in the ORIGINAL flow → route to PENDING2 ("facturer le
@@ -1788,7 +1989,48 @@ export class DiService {
       return this.magasinTech_Pending2(_id) as any;
     }
 
-    // Retour non-repairable, or a reparation finish → FINISHED.
+    // REPAIRED DI: the tech's "Fin réparation" no longer closes directly. The DI
+    // enters the BL/Facture wait; the automatic transition to FINISHED fires in
+    // addBlPDF/addFacturePDF once BOTH documents are uploaded. No "DI terminée"
+    // Discord here — it only fires at FINISHED (see maybeAdvanceDocGate).
+    const fromReparation = [
+      STATUS_DI.Reparation.status,
+      STATUS_DI.ReparationInPause.status,
+      STATUS_DI.InReparation.status,
+    ].includes(di?.status);
+    if (fromReparation) {
+      // 1er gate de la chaîne de clôture documentaire : WAITING_BL.
+      await this.assertTransitionAllowed(_id, STATUS_DI.WaitingBl.status);
+      const waiting = await this.diModel.findOneAndUpdate(
+        { _id },
+        { $set: { status: STATUS_DI.WaitingBl.status } },
+        { new: true },
+      );
+      if (!waiting) {
+        throw new Error('Issue moving to WAITING_BL');
+      }
+      if (waiting.ignoreCount > 0) {
+        await this.statsService.updateStatus(
+          _id,
+          STATUS_DI.WaitingBl.status,
+          waiting.ignoreCount,
+        );
+      } else {
+        await this.statsService.updateStatus(_id, STATUS_DI.WaitingBl.status);
+      }
+      this.notificationGateway.updateTicket({
+        action: 'updateState',
+        content: { result: waiting, states: waiting },
+        target: {},
+      });
+      // Si des documents étaient déjà présents (ex. ré-upload en retour avant la
+      // fin), la chaîne cascade immédiatement (WAITING_BL → WAITING_FACTURE →
+      // FINISHED) — idempotent/no-op sinon.
+      await this.maybeAdvanceDocGate(_id);
+      return waiting;
+    }
+
+    // Retour non-repairable (from diagnostic) → FINISHED directly (unchanged).
     await this.assertTransitionAllowed(_id, STATUS_DI.Finished.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
@@ -1899,14 +2141,14 @@ export class DiService {
   }
 
   //from admins to manager to give the first price
-  // Pricing => Negotiation1
+  // Pricing => Approval (1er gate WAITING_DEVIS)
   async admins_Pricing(_idDI: string, price: number) {
     const result = await this.diModel.updateOne(
       { _id: _idDI },
       {
         $set: {
           current_roles: Role.MANAGER,
-          status: STATUS_DI.Negotiation1.status,
+          status: STATUS_DI.WaitingDevis.status,
           price: price,
         },
       },
@@ -2136,43 +2378,94 @@ export class DiService {
       .skip(first)
       .exec();
 
-    // 🔁 Map
+    // 🔁 Map — MÊME projection que `get_coordinatorDI` via le mapper partagé :
+    // la recherche renvoie DÉSORMAIS exactement les mêmes champs que la liste
+    // paginée (contain_pdr, array_composants, statusHistory, isSentToCoordinator,
+    // etc.), corrigeant à la racine le bouton « Confirmer les composants » et la
+    // timeline qui étaient cassés après une recherche (projection incomplète).
     const di = await Promise.all(
-      diRecords.map(async (di) => {
-        const stat = await this.statModel.findOne({ _idDi: di._id });
-        const logs = await this.logsDiService.getAllLogsByDi(di._id);
-
-        return {
-          _id: di._id,
-          _idnum: di._idnum,
-          title: di.title,
-          status: di.status,
-          pricingRequestSentAt: di.pricingRequestSentAt,
-          pricingRequestSentBy: di.pricingRequestSentBy,
-          componentsConfirmedAt: di.componentsConfirmedAt,
-          componentsConfirmedBy: di.componentsConfirmedBy,
-          price: di.price ?? null,
-          final_price: di.final_price ?? null,
-          createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
-          location_id: di.location_id?.location_name ?? 'N/A',
-          company_id: di.company_id?.name ?? '-',
-          client_id: di.client_id?.first_name ?? '-',
-          createdBy: `${di.createdBy?.firstName ?? '-'} ${
-            di.createdBy?.lastName ?? ''
-          }`,
-          techDiag: stat?.id_tech_diag
-            ? await this.profileService.getTech(stat.id_tech_diag)
-            : 'N/A',
-          techRep: stat?.id_tech_rep
-            ? await this.profileService.getTech(stat.id_tech_rep)
-            : 'N/A',
-          documents: this.buildDocuments((di as any).driveDocs),
-          logs,
-        };
-      }),
+      diRecords.map((di) => this.mapCoordinatorDiRow(di)),
     );
 
     return { di, totalDiCount };
+  }
+
+  /**
+   * SOURCE UNIQUE de la projection d'une DI pour les vues coordinatrice
+   * (liste paginée ET recherche). `get_coordinatorDI` et `searchCoordinatorDI`
+   * DOIVENT renvoyer EXACTEMENT les mêmes champs : sinon une DI atteinte par
+   * recherche perd des champs (ex. `contain_pdr`/`array_composants` →
+   * `componentStepSkipped` faux → bouton « Confirmer les composants » masqué ;
+   * `statusHistory` → timeline cassée). Ce mapper garantit la parité à jamais.
+   * Attend une DI déjà peuplée (client_id/company_id/createdBy/location_id).
+   */
+  private async mapCoordinatorDiRow(di: any) {
+    // Fetch the stat document based on the DI's _id
+    const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
+    // Fetch logs related to this DI
+    const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
+    return {
+      //nezih
+      _id: di._id,
+      _idnum: di._idnum,
+      title: di.title,
+      final_price: di.final_price,
+      price: di.price,
+      description: di.description,
+      ignoreCount: di.ignoreCount,
+      can_be_repaired: di.can_be_repaired,
+      bon_de_commande: di.bon_de_commande,
+      bon_de_livraison: di.bon_de_livraison,
+      contain_pdr: di.contain_pdr,
+      current_roles: di.current_roles,
+      array_composants: di.array_composants,
+      documents: this.buildDocuments((di as any).driveDocs),
+      di_category_id: di.di_category_id?.category,
+      remarque_admin_manager: null,
+      remarque_admin_tech: di.remarque_admin_tech,
+      remarque_coordinator: di.remarque_coordinator,
+      remarque_magasin: di.remarque_magasin,
+      remarque_manager: di.remarque_manager,
+      techDiag: stat?.id_tech_diag
+        ? await this.profileService.getTech(stat?.id_tech_diag)
+        : 'N/A',
+      techRep: stat?.id_tech_rep
+        ? await this.profileService.getTech(stat?.id_tech_rep)
+        : 'N/A',
+      remarque_tech_diagnostic: di.remarque_tech_diagnostic,
+      remarque_tech_repair: di.remarque_tech_repair,
+      createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
+      updatedAt: di.updatedAt,
+      location_id: di.location_id?.location_name ?? 'N/A',
+      status: di.status,
+      retourReason: di.retourReason,
+      retourDate: di.retourDate,
+      pricingRequestSentAt: di.pricingRequestSentAt,
+      // Resolve the actor profile ids to NAMES — the flow timeline must never
+      // render a raw ObjectId (getTech returns 'Unknown' for a missing/deleted
+      // profile, never the id).
+      pricingRequestSentBy: di.pricingRequestSentBy
+        ? await this.profileService.getTech(di.pricingRequestSentBy)
+        : null,
+      componentsConfirmedAt: di.componentsConfirmedAt,
+      componentsConfirmedBy: di.componentsConfirmedBy
+        ? await this.profileService.getTech(di.componentsConfirmedBy)
+        : null,
+      // Single source of truth for the flow-timeline per-step dates.
+      statusHistory: di.statusHistory ?? [],
+      image: di.image,
+      handleSendingNotificationBetweenCoordinatorAndMagasin:
+        di.handleSendingNotificationBetweenCoordinatorAndMagasin,
+      logs: logsDi,
+      isSentToCoordinator: di.isSentToCoordinator,
+      isConfirmedComponentFromCoordinator:
+        di.isConfirmedComponentFromCoordinator,
+      company_id: di.company_id?.name ?? '-', // Provide default values if necessary
+      client_id: di.client_id?.first_name ?? '-', // Provide default values if necessary
+      createdBy: `${di.createdBy?.firstName ?? 'Unknown'} ${
+        di.createdBy?.lastName ?? ''
+      }`,
+    };
   }
 
   // *Query For Coordinator
@@ -2195,74 +2488,9 @@ export class DiService {
       .limit(rows)
       .skip(first);
 
-    const coordDiList = await Promise.all(di.map(async (di) => {
-      // Fetch the stat document based on the DI's _id
-      const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
-      // Fetch logs related to this DI
-      const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
-      return {
-        //nezih
-        _id: di._id,
-        _idnum: di._idnum,
-        title: di.title,
-        final_price: di.final_price,
-        price: di.price,
-        description: di.description,
-        ignoreCount: di.ignoreCount,
-        can_be_repaired: di.can_be_repaired,
-        bon_de_commande: di.bon_de_commande,
-        bon_de_livraison: di.bon_de_livraison,
-        contain_pdr: di.contain_pdr,
-        current_roles: di.current_roles,
-        array_composants: di.array_composants,
-        documents: this.buildDocuments((di as any).driveDocs),
-        di_category_id: di.di_category_id?.category,
-        remarque_admin_manager: null,
-        remarque_admin_tech: di.remarque_admin_tech,
-        remarque_coordinator: di.remarque_coordinator,
-        remarque_magasin: di.remarque_magasin,
-        remarque_manager: di.remarque_manager,
-        techDiag: stat?.id_tech_diag
-          ? await this.profileService.getTech(stat?.id_tech_diag)
-          : 'N/A',
-        techRep: stat?.id_tech_rep
-          ? await this.profileService.getTech(stat?.id_tech_rep)
-          : 'N/A',
-        remarque_tech_diagnostic: di.remarque_tech_diagnostic,
-        remarque_tech_repair: di.remarque_tech_repair,
-        createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
-        updatedAt: di.updatedAt,
-        location_id: di.location_id?.location_name ?? 'N/A',
-        status: di.status,
-        retourReason: di.retourReason,
-        retourDate: di.retourDate,
-        pricingRequestSentAt: di.pricingRequestSentAt,
-        // Resolve the actor profile ids to NAMES — the flow timeline must never
-        // render a raw ObjectId (getTech returns 'Unknown' for a missing/​deleted
-        // profile, never the id).
-        pricingRequestSentBy: di.pricingRequestSentBy
-          ? await this.profileService.getTech(di.pricingRequestSentBy)
-          : null,
-        componentsConfirmedAt: di.componentsConfirmedAt,
-        componentsConfirmedBy: di.componentsConfirmedBy
-          ? await this.profileService.getTech(di.componentsConfirmedBy)
-          : null,
-        // Single source of truth for the flow-timeline per-step dates.
-        statusHistory: di.statusHistory ?? [],
-        image: di.image,
-        handleSendingNotificationBetweenCoordinatorAndMagasin:
-          di.handleSendingNotificationBetweenCoordinatorAndMagasin,
-        logs: logsDi,
-        isSentToCoordinator: di.isSentToCoordinator,
-        isConfirmedComponentFromCoordinator:
-          di.isConfirmedComponentFromCoordinator,
-        company_id: di.company_id?.name ?? '-', // Provide default values if necessary
-        client_id: di.client_id?.first_name ?? '-', // Provide default values if necessary
-        createdBy: `${di.createdBy?.firstName ?? 'Unknown'} ${
-          di.createdBy?.lastName ?? ''
-        }`,
-      };
-    }));
+    const coordDiList = await Promise.all(
+      di.map((di) => this.mapCoordinatorDiRow(di)),
+    );
 
     return { di: coordDiList, totalDiCount };
   }
@@ -2578,13 +2806,28 @@ export class DiService {
     // it applies whether the DI is repairable or not. The transition guard
     // already permits INDIAGNOSTIC → PENDING2, so no guard change is needed.
     const di: any = await this.diModel.findOne({ _id }).lean();
-    const hasPdr =
-      di?.contain_pdr === true &&
-      Array.isArray(di?.array_composants) &&
-      di.array_composants.length > 0;
+    const declaredPdr = di?.contain_pdr === true;
+    const hasComposants =
+      Array.isArray(di?.array_composants) && di.array_composants.length > 0;
+
+    // Garde métier AUTORITAIRE (miroir serveur du blocage UI « Suivant ») :
+    // déclarer que le DI contient des PDR SANS avoir listé le moindre composant
+    // est contradictoire → REFUS, au lieu de router silencieusement vers PENDING2.
+    // Le front bloque déjà l'étape Validation ; cette garde couvre les
+    // contournements (saut d'étape via le stepper, appel GraphQL direct) et
+    // empêche l'envoi au Magasin d'une demande de pièces VIDE.
+    if (declaredPdr && !hasComposants) {
+      throw new GraphQLError(
+        'PDR déclaré sans composant : ajoutez au moins un composant ou désactivez « le DI contient des PDR ».',
+        { extensions: { code: 'BAD_REQUEST' } },
+      );
+    }
+
+    const hasPdr = declaredPdr && hasComposants;
     if (!hasPdr) {
-      // No PDR → directly to billing (PENDING2), skipping Magasin. Reuses the
-      // existing diagnostic-completed transition (+ its Discord embed).
+      // Pas de PDR (contain_pdr=false) → directement à la facturation (PENDING2),
+      // en sautant le Magasin. Réutilise la transition diagnostic-terminé
+      // existante (+ son embed Discord).
       return this.magasinTech_Pending2(_id);
     }
 
@@ -2744,13 +2987,14 @@ export class DiService {
     return this.changeStatusPricing(diId, pricingRequestSentBy);
   }
 
+  // Entrée dans la phase Approval documentaire = 1er gate WAITING_DEVIS.
   async changeStatusNegociate1(_id: string) {
-    await this.assertTransitionAllowed(_id, STATUS_DI.Negotiation1.status);
+    await this.assertTransitionAllowed(_id, STATUS_DI.WaitingDevis.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
-          status: STATUS_DI.Negotiation1.status,
+          status: STATUS_DI.WaitingDevis.status,
         },
       },
       { new: true },
@@ -2763,11 +3007,11 @@ export class DiService {
     if (result.ignoreCount > 0) {
       await this.statsService.updateStatus(
         _id,
-        STATUS_DI.Negotiation1.status,
+        STATUS_DI.WaitingDevis.status,
         result.ignoreCount,
       );
     } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.Negotiation1.status);
+      await this.statsService.updateStatus(_id, STATUS_DI.WaitingDevis.status);
     }
 
     try {
@@ -2824,7 +3068,49 @@ export class DiService {
     return result;
   }
 
+  /**
+   * True when the DI genuinely carries components to source/confirm:
+   * `contain_pdr === true` AND a non-empty `array_composants`. Both signals must
+   * agree (the toggle alone lies — some diagnostic-finish paths set contain_pdr
+   * true with an empty list). This is the single criterion that decides whether
+   * a DI goes through the CONFIRMATION_COMPOSANTS phase or skips to PENDING3.
+   */
+  private diHasComponents(di: any): boolean {
+    return (
+      di?.contain_pdr === true &&
+      Array.isArray(di?.array_composants) &&
+      di.array_composants.length > 0
+    );
+  }
+
   async changeStatusPending3(_id: string) {
+    // Business guard (server-authoritative): a DI WITH components must pass
+    // through the component-confirmation phase (INMAGASIN →
+    // CONFIRMATION_COMPOSANTS → PENDING3). It can NEVER jump straight from
+    // negotiation to PENDING3 — not even via a direct API call. The legitimate
+    // PENDING3 entries are: the no-components skip (from negotiation), and the
+    // magasin finalize after confirmation (from CONFIRMATION_COMPOSANTS, or the
+    // legacy INMAGASIN for in-flight DIs).
+    const diBefore: any = await this.diModel.findOne({ _id }).lean();
+    // « Depuis l'approbation » = phase Approval documentaire (WAITING_DEVIS/
+    // WAITING_BC + legacy ATTENTE_BC_DEVIS/NEGOTIATION1) ou NEGOTIATION2. Une DI
+    // AVEC composants ne peut jamais sauter vers PENDING3 : elle doit passer par
+    // le magasin (PROCESSING → confirmation) — même via un appel API direct.
+    const fromNegotiation =
+      isApprovalDocStatus(diBefore?.status) ||
+      diBefore?.status === STATUS_DI.Negotiation2.status;
+    if (fromNegotiation && this.diHasComponents(diBefore)) {
+      throw new GraphQLError(
+        `Transition non autorisée: une DI avec composants doit passer par ${STATUS_DI.ConfirmationComposants.status} (confirmation) avant PENDING3.`,
+        {
+          extensions: {
+            code: 'BAD_REQUEST',
+            currentStatus: diBefore?.status ?? null,
+            targetStatus: STATUS_DI.Pending3.status,
+          },
+        },
+      );
+    }
     await this.assertTransitionAllowed(_id, STATUS_DI.Pending3.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
@@ -3305,7 +3591,9 @@ export class DiService {
             STATUS_DI.Pending2.status,
             STATUS_DI.Pending3.status,
             STATUS_DI.Pricing.status,
-            STATUS_DI.Negotiation1.status,
+            'PRICING', // stats pré-migration encore en PRICING (forward-only)
+            // Phase Approval documentaire (WAITING_DEVIS/WAITING_BC + legacy).
+            ...APPROVAL_DOC_STATUS_VALUES,
             STATUS_DI.Negotiation2.status,
             STATUS_DI.InMagasin.status,
             STATUS_DI.MagasinEstimation.status,
@@ -3384,16 +3672,35 @@ export class DiService {
         di.ignoreCount,
       );
     } else {
+      // NEW FLOW: the magasin sending the DI for confirmation now materializes
+      // the dedicated phase as a real status (INMAGASIN → CONFIRMATION_COMPOSANTS)
+      // instead of only flipping flags. `assertDiTransition` allows the
+      // idempotent re-apply (already CONFIRMATION_COMPOSANTS) and refuses a send
+      // from any non-INMAGASIN state. The flags are kept for backward compat and
+      // the existing coordinator confirm/UI wiring.
+      await this.assertTransitionAllowed(
+        _id,
+        STATUS_DI.ConfirmationComposants.status,
+      );
       updated = await this.diModel.findOneAndUpdate(
         { _id },
         {
           $set: {
+            status: STATUS_DI.ConfirmationComposants.status,
             isSentToCoordinator: true,
             handleSendingNotificationBetweenCoordinatorAndMagasin: 'IN_MAGASIN',
           },
         },
         { new: true },
       );
+      // Keep Stat.status in lock-step with Di.status (tech/magasin/coordinator
+      // views read different sources — the T281/T282 divergence guard).
+      if (updated) {
+        await this.statsService.updateStatus(
+          _id,
+          STATUS_DI.ConfirmationComposants.status,
+        );
+      }
     }
 
     if (!updated) return null;
@@ -3491,10 +3798,24 @@ export class DiService {
       // guard (matches null OR missing) makes concurrent / double-clicked
       // confirms idempotent — a second call matches nothing, so it never
       // decrements the same parts twice.
+      // v2 handshake — la confirmation coordinatrice FAIT AVANCER LE STATUT
+      // (ATTENTE_CONFIRMATION_COORDINATION → MAGASIN_FINALISATION) au lieu de ne
+      // flipper que des flags. Garde de transition = refus propre en API directe
+      // depuis un mauvais statut. Idempotence : un 2e « Confirmer » (DI déjà en
+      // MAGASIN_FINALISATION) saute la garde, puis le flip atomique
+      // (`componentsConfirmedAt` déjà set) ne matche rien → no-op, pas de 2e
+      // décrément de stock.
+      if (di.status !== STATUS_DI.MagasinFinalisation.status) {
+        await this.assertTransitionAllowed(
+          _id,
+          STATUS_DI.MagasinFinalisation.status,
+        );
+      }
       const flipped = await this.diModel.findOneAndUpdate(
         { _id, componentsConfirmedAt: null },
         {
           $set: {
+            status: STATUS_DI.MagasinFinalisation.status,
             isConfirmedComponentFromCoordinator: true,
             handleSendingNotificationBetweenCoordinatorAndMagasin: 'DEFAULT',
             componentsConfirmedAt,
@@ -3513,6 +3834,17 @@ export class DiService {
             err,
             { diId: _id },
           );
+        }
+        // Stat.status en lock-step avec Di.status — BEST-EFFORT : une DI sans
+        // ligne Stat ne doit pas faire échouer la confirmation (le statut Di est
+        // déjà avancé, et le stock déjà décrémenté au-dessus).
+        try {
+          await this.statsService.updateStatus(
+            _id,
+            STATUS_DI.MagasinFinalisation.status,
+          );
+        } catch {
+          /* ligne Stat absente → ignore ; la transition Di a réussi */
         }
       } else {
         // Already confirmed earlier (idempotent retry) — no second draw-down.

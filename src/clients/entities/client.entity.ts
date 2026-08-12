@@ -38,9 +38,9 @@ export class Client {
   first_name: string;
   @Field()
   last_name: string;
-  @Field()
+  @Field({ nullable: true })
   region: string;
-  @Field()
+  @Field({ nullable: true })
   address: string;
   @Field({ nullable: true })
   email: string;

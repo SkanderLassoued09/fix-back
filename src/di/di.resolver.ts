@@ -1,4 +1,11 @@
-import { Resolver, Mutation, Args, Query, Subscription } from '@nestjs/graphql';
+import {
+  Resolver,
+  Mutation,
+  Args,
+  Query,
+  Subscription,
+  Float,
+} from '@nestjs/graphql';
 import { DiService } from './di.service';
 import {
   Di,
@@ -397,6 +404,17 @@ export class DiResolver {
   @Mutation(() => Boolean)
   async changeStatusPricing(@Args('_id') _id: string) {
     await this.diService.changeStatusPricing(_id);
+    return true;
+  }
+
+  /** Persist the « Estimation prix réparation » entered in the price-initial
+   *  modal. Dedicated field on the DI (not price/final_price). */
+  @Mutation(() => Boolean)
+  async setRepairEstimate(
+    @Args('_id') _id: string,
+    @Args('estimate', { type: () => Float }) estimate: number,
+  ) {
+    await this.diService.setRepairEstimate(_id, estimate);
     return true;
   }
   @Mutation(() => Boolean)

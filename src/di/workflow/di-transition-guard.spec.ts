@@ -64,11 +64,13 @@ describe('assertDiTransition · M1 guard', () => {
     ).not.toThrow();
   });
 
-  it('REPARATION_Pause → FINISHED is allowed (mirror of INREPARATION)', () => {
+  // status flow v2: a repaired DI (paused or not) can no longer close DIRECTLY —
+  // it goes through ATTENTE_BL_FACTURE. The paused finish now targets that wait.
+  it('REPARATION_Pause → ATTENTE_BL_FACTURE is allowed (finish from pause, doc gate)', () => {
     expect(() =>
       assertDiTransition(
         STATUS_DI.ReparationInPause.status,
-        STATUS_DI.Finished.status,
+        STATUS_DI.WaitingBl.status,
       ),
     ).not.toThrow();
   });
@@ -106,13 +108,13 @@ describe('assertDiTransition · M1 guard', () => {
   it('NEGOTIATION1 → InMagasin is allowed (parts-needed branch)', () => {
     expect(() =>
       assertDiTransition(
-        STATUS_DI.Negotiation1.status,
+        STATUS_DI.WaitingBc.status,
         STATUS_DI.InMagasin.status,
       ),
     ).not.toThrow();
   });
 
-  it('INMAGASIN → Pending3 is allowed (magasin completed parts list)', () => {
+  it('INMAGASIN → Pending3 is allowed (magasin completed parts list — legacy in-flight)', () => {
     expect(() =>
       assertDiTransition(
         STATUS_DI.InMagasin.status,
@@ -121,13 +123,123 @@ describe('assertDiTransition · M1 guard', () => {
     ).not.toThrow();
   });
 
+  // ── New CONFIRMATION_COMPOSANTS phase (skip-component-confirmation feature) ─
+
+  it('INMAGASIN → CONFIRMATION_COMPOSANTS is allowed (magasin sends for confirmation)', () => {
+    expect(() =>
+      assertDiTransition(
+        STATUS_DI.InMagasin.status,
+        STATUS_DI.ConfirmationComposants.status,
+      ),
+    ).not.toThrow();
+  });
+
+  it('CONFIRMATION_COMPOSANTS → Pending3 is allowed (magasin finalize after confirmation)', () => {
+    expect(() =>
+      assertDiTransition(
+        STATUS_DI.ConfirmationComposants.status,
+        STATUS_DI.Pending3.status,
+      ),
+    ).not.toThrow();
+  });
+
+  it('NEGOTIATION1 → Pending3 is allowed by the table (the has-components skip is blocked by the business guard, not this table)', () => {
+    expect(() =>
+      assertDiTransition(
+        STATUS_DI.WaitingBc.status,
+        STATUS_DI.Pending3.status,
+      ),
+    ).not.toThrow();
+  });
+
+  it('refuses CONFIRMATION_COMPOSANTS from a non-INMAGASIN source (e.g. NEGOTIATION1)', () => {
+    expect(() =>
+      assertDiTransition(
+        STATUS_DI.WaitingBc.status,
+        STATUS_DI.ConfirmationComposants.status,
+      ),
+    ).toThrow(GraphQLError);
+  });
+
+  // ── DI status flow v2: ATTENTE_BL_FACTURE gate before FINISHED ─────────────
+
+  it('INREPARATION → ATTENTE_BL_FACTURE is allowed (repaired DI enters the doc wait)', () => {
+    expect(() =>
+      assertDiTransition(
+        STATUS_DI.InReparation.status,
+        STATUS_DI.WaitingBl.status,
+      ),
+    ).not.toThrow();
+  });
+
+  it('REPARATION_Pause → ATTENTE_BL_FACTURE is allowed (finish from pause)', () => {
+    expect(() =>
+      assertDiTransition(
+        STATUS_DI.ReparationInPause.status,
+        STATUS_DI.WaitingBl.status,
+      ),
+    ).not.toThrow();
+  });
+
+  it('WAITING_FACTURE → FINISHED is allowed (auto-close once the facture is uploaded)', () => {
+    expect(() =>
+      assertDiTransition(
+        STATUS_DI.WaitingFacture.status,
+        STATUS_DI.Finished.status,
+      ),
+    ).not.toThrow();
+  });
+
+  it('REFUSES the removed direct INREPARATION → FINISHED (must pass through ATTENTE_BL_FACTURE)', () => {
+    expect(() =>
+      assertDiTransition(
+        STATUS_DI.InReparation.status,
+        STATUS_DI.Finished.status,
+      ),
+    ).toThrow(GraphQLError);
+  });
+
+  it('REFUSES REPARATION_Pause → FINISHED direct (removed)', () => {
+    expect(() =>
+      assertDiTransition(
+        STATUS_DI.ReparationInPause.status,
+        STATUS_DI.Finished.status,
+      ),
+    ).toThrow(GraphQLError);
+  });
+
+  it('non-repairable finishes STILL close directly (DIAGNOSTIC/NEGOTIATION → FINISHED)', () => {
+    expect(() =>
+      assertDiTransition(
+        STATUS_DI.InDiagnostic.status,
+        STATUS_DI.Finished.status,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertDiTransition(
+        STATUS_DI.WaitingBc.status,
+        STATUS_DI.Finished.status,
+      ),
+    ).not.toThrow();
+  });
+
+  it('the split status VALUES are the new strings', () => {
+    expect(STATUS_DI.WaitingDevis.status).toBe('WAITING_DEVIS');
+    expect(STATUS_DI.WaitingBc.status).toBe('WAITING_BC');
+    expect(STATUS_DI.ConfirmationComposants.status).toBe(
+      'ATTENTE_CONFIRMATION_COORDINATION',
+    );
+    expect(STATUS_DI.WaitingBl.status).toBe('WAITING_BL');
+    expect(STATUS_DI.WaitingFacture.status).toBe('WAITING_FACTURE');
+  });
+
   // ── Re-entry sources (retour / annuler) bypass the forward whitelist ────
 
   it('Annuler → anything in the pipeline is allowed (re-entry source)', () => {
     expect(() =>
       assertDiTransition(
         STATUS_DI.Annuler.status,
-        STATUS_DI.Negotiation1.status,
+        STATUS_DI.WaitingDevis.status,
       ),
     ).not.toThrow();
   });
@@ -225,5 +337,41 @@ describe('assertDiTransition · M1 guard', () => {
         expect(sources).toContain(activeSibling);
       }
     }
+  });
+});
+
+describe('assertDiTransition · handshake magasin↔coordination v2', () => {
+  const PREP = STATUS_DI.InMagasin.status; // PROCESSING
+  const AWAIT = STATUS_DI.ConfirmationComposants.status; // ATTENTE_CONFIRMATION_COORDINATION
+  const FINAL = STATUS_DI.MagasinFinalisation.status; // MAGASIN_FINALISATION
+  const P3 = STATUS_DI.Pending3.status;
+
+  it('étape 1→2 : PROCESSING → ATTENTE_CONFIRMATION_COORDINATION autorisée', () => {
+    expect(() => assertDiTransition(PREP, AWAIT)).not.toThrow();
+  });
+  it('étape 2→3 : ATTENTE_CONFIRMATION_COORDINATION → MAGASIN_FINALISATION autorisée', () => {
+    expect(() => assertDiTransition(AWAIT, FINAL)).not.toThrow();
+  });
+  it('étape 3 : MAGASIN_FINALISATION → PENDING3 autorisée', () => {
+    expect(() => assertDiTransition(FINAL, P3)).not.toThrow();
+  });
+  it('saut « aucun composant » : PROCESSING → PENDING3 autorisée', () => {
+    expect(() => assertDiTransition(PREP, P3)).not.toThrow();
+  });
+  it('REFUSÉ — saut de confirmation : PROCESSING → MAGASIN_FINALISATION', () => {
+    expect(() => assertDiTransition(PREP, FINAL)).toThrow(GraphQLError);
+  });
+  it('REFUSÉ — MagasinEstimation → MAGASIN_FINALISATION (pas de raccourci)', () => {
+    expect(() =>
+      assertDiTransition(STATUS_DI.MagasinEstimation.status, FINAL),
+    ).toThrow(GraphQLError);
+  });
+  it('idempotence : MAGASIN_FINALISATION → MAGASIN_FINALISATION est un no-op', () => {
+    expect(() => assertDiTransition(FINAL, FINAL)).not.toThrow();
+  });
+  it('legacy toléré : CONFIRMATION_COMPOSANTS → MAGASIN_FINALISATION autorisée', () => {
+    expect(() =>
+      assertDiTransition('CONFIRMATION_COMPOSANTS', FINAL),
+    ).not.toThrow();
   });
 });
