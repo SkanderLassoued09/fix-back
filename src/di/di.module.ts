@@ -36,6 +36,11 @@ import { LocationModule } from 'src/location/location.module';
 import { DiImportController } from './import/di-import.controller';
 import { DiImportService } from './import/di-import.service';
 import { DiImageController } from './di-image.controller';
+import { CounterSchema } from './entities/counter.entity';
+import { DiImportJobService } from './import/di-import-job.service';
+import { DiImportJobSchema } from './import/entities/di-import-job.entity';
+import { TierAliasService } from './import/tier-alias.service';
+import { TierAliasSchema } from './import/entities/tier-alias.entity';
 
 @Module({
   controllers: [DiImportController, DiImageController],
@@ -47,6 +52,8 @@ import { DiImageController } from './di-image.controller';
     ProfileService,
     DiWorkflowService,
     DiImportService,
+    DiImportJobService,
+    TierAliasService,
   ],
   imports: [
     DiscordHookModule,
@@ -89,6 +96,18 @@ import { DiImageController } from './di-image.controller';
       {
         name: Location.name,
         schema: LocationSchema,
+      },
+      {
+        name: 'Counter',
+        schema: CounterSchema,
+      },
+      {
+        name: 'DiImportJob',
+        schema: DiImportJobSchema,
+      },
+      {
+        name: 'TierAlias',
+        schema: TierAliasSchema,
       },
     ]),
   ],

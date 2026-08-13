@@ -76,4 +76,17 @@ export class NotificationsGateway
   alertResolved(payload: any) {
     this.server.emit('alert.resolved', payload);
   }
+
+  // ---- Import DI en bloc : progression d'un job d'exécution ----------------
+  // Broadcast (comme le reste du gateway) → le payload porte OBLIGATOIREMENT le
+  // `jobId` pour que le client filtre les événements d'un autre job/utilisateur.
+  diImportProgress(payload: {
+    jobId: string;
+    done: number;
+    total: number;
+    currentRef: string | null;
+    phase: string;
+  }) {
+    this.server.emit('di-import.progress', payload);
+  }
 }

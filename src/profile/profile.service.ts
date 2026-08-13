@@ -9,6 +9,7 @@ import { Model } from 'mongoose';
 import { Profile, ProfileDocument } from './entities/profile.entity';
 import { ROLE } from 'src/auth/roles';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
+import * as bcrypt from 'bcrypt';
 // import { STATUS_TICKET } from 'src/ticket/ticket';
 
 @Injectable()
@@ -147,6 +148,20 @@ export class ProfileService {
       });
       return null;
     }
+  }
+
+  /**
+   * Vérifie un mot de passe EN CLAIR contre le hash bcrypt de l'utilisateur
+   * `username`. Sert à la confirmation par mot de passe (ex. annulation d'une
+   * DI). Le mot de passe n'est ni loggué, ni stocké, ni renvoyé — on ne retourne
+   * qu'un booléen. Renvoie `false` (jamais une exception) si l'entrée est vide
+   * ou l'utilisateur/hash introuvable, pour ne rien divulguer.
+   */
+  async verifyPassword(username: string, plain: string): Promise<boolean> {
+    if (!username || !plain) return false;
+    const user = (await this.findOneForAuth(username)) as any;
+    if (!user || !user.password) return false;
+    return bcrypt.compare(plain, user.password);
   }
 
   async getTech(_id: string) {
