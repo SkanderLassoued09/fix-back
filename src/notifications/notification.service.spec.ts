@@ -83,6 +83,21 @@ describe('NotificationService.emit — ciblage & historique', () => {
     expect(rows.map((r: any) => r.userId).sort()).toEqual(['T1', 'T2']);
   });
 
+  it('MAPPING vocabulaire : « Coordinator » cible la valeur RÉELLE « COORDIANTOR »', async () => {
+    const { svc, profileModel } = makeSvc();
+    profileModel.find = jest.fn(() => ({ lean: async () => [{ _id: 'C1' }] }));
+    await svc.emit({
+      type: 'ALERT_DI_STAGNANT_7D',
+      message: 'stagnation',
+      notify: { roles: ['Coordinator', 'Manager'] }, // vocabulaire alertes
+    });
+    // aligné sur les valeurs profil réelles (coquille comprise)
+    expect(profileModel.find).toHaveBeenCalledWith(
+      { role: { $in: ['COORDIANTOR', 'MANAGER'] } },
+      { _id: 1 },
+    );
+  });
+
   it('HISTORIQUE seul : sans `notify`, un event est écrit mais AUCUNE notification', async () => {
     const { svc, eventModel, notificationModel, gateway } = makeSvc();
     await svc.emit({ type: 'DI_STATUS_CHANGED', message: 'transition' });
@@ -91,16 +106,20 @@ describe('NotificationService.emit — ciblage & historique', () => {
     expect(gateway.emitToUser).not.toHaveBeenCalled();
   });
 
-  it('rôle actionnable NON résolu (0 membre) → event seul, 0 notification (badge non gonflé)', async () => {
-    const { svc, eventModel, notificationModel } = makeSvc();
-    // profileModel.find renvoie [] (ex. vocabulaire de rôle alerte ≠ profils)
+  it('rôle INCONNU → NON silencieux : log + event écrit, 0 notification (badge non gonflé)', async () => {
+    const { svc, eventModel, notificationModel, profileModel } = makeSvc();
+    const warn = jest
+      .spyOn((svc as any).logger, 'warn')
+      .mockImplementation(() => undefined);
     await svc.emit({
-      type: 'ALERT_DI_STAGNANT_7D',
+      type: 'ALERT_X',
       message: 'stagnation',
-      notify: { roles: ['Coordinator'] }, // ne matche aucun profil (COORDIANTOR)
+      notify: { roles: ['Ghost'] }, // rôle non reconnu → non résolu
     });
     expect(eventModel.create).toHaveBeenCalledTimes(1); // historique OK
+    expect(profileModel.find).not.toHaveBeenCalled(); // rien à interroger
     expect(notificationModel.insertMany).not.toHaveBeenCalled(); // 0 cloche
+    expect(warn).toHaveBeenCalled(); // JAMAIS silencieux
   });
 
   it('« acteur inconnu » honnête : actorId=null persisté tel quel', async () => {

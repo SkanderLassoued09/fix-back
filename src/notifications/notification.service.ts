@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import { NotificationsGateway } from '../notification.gateway';
 import { NotificationDocument } from './entities/notification.entity';
 import { SystemEventDocument } from './entities/system-event.entity';
+import { toProfileRoles } from './role-mapping';
 
 /** Cible d'une notification actionnable. Vide/absente ⇒ historique seul. */
 export interface EmitTarget {
@@ -49,11 +50,23 @@ export class NotificationService {
     private readonly gateway: NotificationsGateway,
   ) {}
 
-  /** Étend une liste de rôles en ids d'utilisateurs (ciblage « toute la coordination »). */
+  /** Étend une liste de rôles en ids d'utilisateurs (ciblage « toute la
+   *  coordination »). Aligne d'abord le vocabulaire via `toProfileRoles`
+   *  (SOURCE UNIQUE) ; un rôle non résolu n'est JAMAIS silencieux → il est
+   *  loggué (l'événement d'historique reste écrit, le badge n'est pas gonflé). */
   private async userIdsForRoles(roles: string[]): Promise<string[]> {
     if (!roles?.length) return [];
+    const { resolved, unresolved } = toProfileRoles(roles);
+    if (unresolved.length) {
+      this.logger.warn(
+        `Rôle(s) de ciblage non résolus (notification ignorée, historique conservé) : ${unresolved.join(
+          ', ',
+        )}`,
+      );
+    }
+    if (!resolved.length) return [];
     const profiles = await this.profileModel
-      .find({ role: { $in: roles } }, { _id: 1 })
+      .find({ role: { $in: resolved } }, { _id: 1 })
       .lean();
     return (profiles as any[]).map((p) => String(p._id));
   }

@@ -732,6 +732,20 @@ export class DiService {
         await this.captureDiscordFailure('addDevisPDF', err, { diId: _id });
       }
 
+      // Notification ERP : document attendu ARRIVÉ → coordination (fait avancer).
+      try {
+        await this.notificationService.emit({
+          type: 'DI_DOC_DEVIS',
+          diId: _id,
+          actorId: null,
+          message: `Devis ajouté (${(di as any)?._idnum ?? _id})`,
+          payload: { doc: 'Devis' },
+          notify: { roles: ['Coordinator'] },
+        });
+      } catch (err) {
+        await this.captureDiscordFailure('erp-notification', err);
+      }
+
       // Gate documentaire : en WAITING_DEVIS, l'upload du devis fait avancer à
       // WAITING_BC (atomique/idempotent ; cascade si le BC est déjà présent).
       await this.maybeAdvanceDocGate(_id);
@@ -781,6 +795,8 @@ export class DiService {
           await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
         }
 
+        await this.emitBlUploadedNotification(_id, di);
+
         // Return the fresh DI (mutation is typed `() => Di`); addbllogspdf is
         // a LogsDi, not a Di.
         return await this.diModel.findOne({ _id });
@@ -821,6 +837,8 @@ export class DiService {
         } catch (err) {
           await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
         }
+
+        await this.emitBlUploadedNotification(_id, updatedDi);
 
         // If this completes the BL + Facture pair while the DI waits in
         // ATTENTE_BL_FACTURE, close it automatically (atomic + idempotent).
@@ -904,6 +922,20 @@ export class DiService {
         });
       } catch (err) {
         await this.captureDiscordFailure('addBCPDF', err, { diId: _id });
+      }
+
+      // Notification ERP : bon de commande attendu ARRIVÉ → coordination.
+      try {
+        await this.notificationService.emit({
+          type: 'DI_DOC_BC',
+          diId: _id,
+          actorId: null,
+          message: `Bon de commande ajouté (${(di as any)?._idnum ?? _id})`,
+          payload: { doc: 'BC' },
+          notify: { roles: ['Coordinator'] },
+        });
+      } catch (err) {
+        await this.captureDiscordFailure('erp-notification', err);
       }
 
       // Gate documentaire : en WAITING_BC, l'upload du BC déclenche le routage de
@@ -1647,6 +1679,24 @@ export class DiService {
         diId: _idDI,
         techId: tech_id,
       });
+    }
+
+    // Notification ERP CIBLÉE sur le technicien de réparation affecté (par-user).
+    if (tech_id) {
+      try {
+        await this.notificationService.emit({
+          type: 'DI_ASSIGNED_REP',
+          diId: _idDI,
+          actorId: null, // non authentifié → acteur inconnu (honnête)
+          message: `Nouvelle DI affectée en réparation (${
+            (reparation as any)?._idnum ?? _idDI
+          })`,
+          payload: { status: STATUS_DI.Reparation.status },
+          notify: { userIds: [tech_id] },
+        });
+      } catch (err) {
+        await this.captureDiscordFailure('erp-notification', err);
+      }
     }
 
     return reparation;
@@ -3529,6 +3579,7 @@ export class DiService {
       target: {},
     });
 
+    await this.emitRetourNotification(_id, updated, 1, reason);
     return updated;
   }
   async changeDiRetour2(_id: string, reason?: string) {
@@ -3557,6 +3608,7 @@ export class DiService {
       target: {},
     });
 
+    await this.emitRetourNotification(_id, updated, 2, reason);
     return updated;
   }
   async changeDiRetour3(_id: string, reason?: string) {
@@ -3585,7 +3637,52 @@ export class DiService {
       target: {},
     });
 
+    await this.emitRetourNotification(_id, updated, 3, reason);
     return updated;
+  }
+
+  /** Notification ERP : bon de livraison attendu ARRIVÉ → coordination.
+   *  Un seul point pour les deux branches d'`addBlPDF`. */
+  private async emitBlUploadedNotification(
+    _id: string,
+    di: any,
+  ): Promise<void> {
+    try {
+      await this.notificationService.emit({
+        type: 'DI_DOC_BL',
+        diId: _id,
+        actorId: null,
+        message: `Bon de livraison ajouté (${di?._idnum ?? _id})`,
+        payload: { doc: 'BL' },
+        notify: { roles: ['Coordinator'] },
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('erp-notification', err);
+    }
+  }
+
+  /** Notification ERP d'un retour (niveau 1/2/3) → Manager + Coordination.
+   *  Best-effort ; acteur inconnu (mutation non authentifiée). */
+  private async emitRetourNotification(
+    _id: string,
+    updated: any,
+    level: 1 | 2 | 3,
+    reason?: string,
+  ): Promise<void> {
+    try {
+      await this.notificationService.emit({
+        type: `DI_RETOUR_${level}`,
+        diId: _id,
+        actorId: null,
+        message: `Retour ${level} (${updated?._idnum ?? _id})${
+          reason ? ' — ' + reason : ''
+        }`,
+        payload: { level, reason: reason ?? null, status: updated?.status },
+        notify: { roles: ['Manager', 'Coordinator'] },
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('erp-notification', err);
+    }
   }
   async changeToPending1(_id: string) {
     const pending1 = await this.diModel.updateOne(
@@ -3875,6 +3972,21 @@ export class DiService {
     // existing socket notification
     this.notificationGateway.sendComponentToCoordinatorFromMagasin(payload);
 
+    // Notification ERP : hand-off magasin → COORDINATION (doit valider les
+    // composants). Ciblage par rôle (mappé vers la valeur profil réelle).
+    try {
+      await this.notificationService.emit({
+        type: 'COMPONENTS_SENT_TO_COORDINATOR',
+        diId: _id,
+        actorId: null, // non authentifié → acteur inconnu
+        message: `Composants à valider (${(updated as any)?._idnum ?? _id})`,
+        payload: { status: STATUS_DI.ConfirmationComposants.status },
+        notify: { roles: ['Coordinator'] },
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('erp-notification', err);
+    }
+
     return updated;
   }
 
@@ -4025,6 +4137,23 @@ export class DiService {
 
     // existing socket notification
     this.notificationGateway.sendComponentToMagasinFromCoordinator(payload);
+
+    // Notification ERP : hand-off COORDINATION → magasin (peut continuer).
+    // Acteur = coordinateur authentifié (`componentsConfirmedBy`) → il ne se
+    // notifie pas lui-même ; ciblage rôle MAGASIN.
+    try {
+      await this.notificationService.emit({
+        type: 'COMPONENTS_CONFIRMED_BY_COORDINATOR',
+        diId: _id,
+        actorId: componentsConfirmedBy ?? null,
+        actorRole: 'COORDIANTOR',
+        message: `Composants validés (${(updated as any)?._idnum ?? _id})`,
+        payload: { status: STATUS_DI.MagasinFinalisation.status },
+        notify: { roles: ['Magasin'] },
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('erp-notification', err);
+    }
 
     return updated;
   }

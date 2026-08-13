@@ -62,11 +62,9 @@ export class DiAlertService {
     // FUSION cloche/historique : chaque NOUVELLE alerte devient un événement ERP
     // + une notification ciblée par rôle. Les 215 alertes EXISTANTES ne passent
     // pas ici → le badge démarre à 0 (aucune migration nécessaire).
-    // ⚠️ Les `assignedRoles` des alertes utilisent un vocabulaire de rôles
-    // (`Coordinator`/`Manager`) DISTINCT de celui des profils (`COORDIANTOR`/
-    // `MANAGER`) : la notification en cloche ne se matérialisera que lorsque ce
-    // mapping de vocabulaire sera tranché (cf. rapport). L'événement d'historique
-    // est écrit dans tous les cas.
+    // Le vocabulaire de rôles des alertes (`Coordinator`/`Manager`) est aligné
+    // sur les valeurs profil réelles (`COORDIANTOR`/`MANAGER`) par la table
+    // centralisée `role-mapping.ts`, appliquée dans `NotificationService`.
     try {
       await this.notificationService.emit({
         type: `ALERT_${doc.type}`,
