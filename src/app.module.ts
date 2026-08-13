@@ -27,6 +27,7 @@ import { DashboardKpiModule } from './dashboard-kpi/dashboard-kpi.module';
 import { DiscordHookModule } from './discord-hook/discord-hook.module';
 import { AlertsModule } from './alerts/alerts.module';
 import { StagnationModule } from './stagnation/stagnation.module';
+import { NotificationModule } from './notifications/notification.module';
 import { OperationalErrorModule } from './operational-error/operational-error.module';
 import { GoogleSheetsModule } from './google-sheets/google-sheets.module';
 import { ReunionPVModule } from './reunion-pv/reunion-pv.module';
@@ -111,6 +112,7 @@ if (!MONGODB_URI) {
     DiscordHookModule,
     AlertsModule,
     StagnationModule,
+    NotificationModule,
     OperationalErrorModule,
     GoogleSheetsModule,
     ReunionPVModule,

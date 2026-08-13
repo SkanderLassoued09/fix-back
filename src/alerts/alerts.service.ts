@@ -6,6 +6,7 @@ import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { AlertSeverity, AlertType } from './alert.enums';
 import { CreateAlertInput, ListAlertsInput } from './dto/alert.input';
 import { DiAlertDocument } from './entities/di-alert.entity';
+import { NotificationService } from 'src/notifications/notification.service';
 
 /**
  * Centralized alert service. The rest of the system creates alerts through
@@ -25,6 +26,7 @@ export class DiAlertService {
     @InjectModel('DiAlert')
     private readonly alertModel: Model<DiAlertDocument>,
     private readonly discordHookService: DiscordHookService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   async createAlert(
@@ -56,6 +58,31 @@ export class DiAlertService {
     this.logger.log(
       `Alert created · _id=${doc._id} diId=${doc.diId} type=${doc.type} severity=${doc.severity}`,
     );
+
+    // FUSION cloche/historique : chaque NOUVELLE alerte devient un événement ERP
+    // + une notification ciblée par rôle. Les 215 alertes EXISTANTES ne passent
+    // pas ici → le badge démarre à 0 (aucune migration nécessaire).
+    // ⚠️ Les `assignedRoles` des alertes utilisent un vocabulaire de rôles
+    // (`Coordinator`/`Manager`) DISTINCT de celui des profils (`COORDIANTOR`/
+    // `MANAGER`) : la notification en cloche ne se matérialisera que lorsque ce
+    // mapping de vocabulaire sera tranché (cf. rapport). L'événement d'historique
+    // est écrit dans tous les cas.
+    try {
+      await this.notificationService.emit({
+        type: `ALERT_${doc.type}`,
+        diId: doc.diId,
+        actorId: null, // alerte système (monitor/cron) → acteur inconnu
+        message: doc.message,
+        payload: { severity: doc.severity, alertId: String(doc._id) },
+        notify: { roles: doc.assignedRoles ?? [] },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `ERP notification (alert fusion) failed · _id=${doc._id}: ${
+          (err as Error)?.message ?? err
+        }`,
+      );
+    }
 
     // Discord broadcast — best-effort. A failed webhook NEVER fails the alert
     // (persistence is the source of truth) and never breaks the caller flow.

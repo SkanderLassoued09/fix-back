@@ -4,6 +4,7 @@ import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
 import { DiAlertResolver } from './alerts.resolver';
 import { DiAlertService } from './alerts.service';
 import { DiAlertSchema } from './entities/di-alert.entity';
+import { NotificationModule } from 'src/notifications/notification.module';
 
 /**
  * Alerts module. Generators (stagnation today, future operational monitors
@@ -14,6 +15,7 @@ import { DiAlertSchema } from './entities/di-alert.entity';
 @Module({
   imports: [
     DiscordHookModule,
+    NotificationModule,
     MongooseModule.forFeature([{ name: 'DiAlert', schema: DiAlertSchema }]),
   ],
   providers: [DiAlertService, DiAlertResolver],

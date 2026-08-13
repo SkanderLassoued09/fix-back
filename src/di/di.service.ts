@@ -61,6 +61,7 @@ import {
 import { DiscordHook } from 'src/discord-hook/entities/discord-hook.entity';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { DiWorkflowService } from './workflow/di-workflow.service';
+import { NotificationService } from 'src/notifications/notification.service';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
 import {
   GoogleDriveService,
@@ -90,6 +91,7 @@ export class DiService {
     private readonly logsDiService: LogsDiService,
     private readonly discordHookService: DiscordHookService,
     private readonly diWorkflowService: DiWorkflowService,
+    private readonly notificationService: NotificationService,
     private readonly operationalErrorService: OperationalErrorService,
     private readonly googleDriveService: GoogleDriveService,
   ) {}
@@ -1546,21 +1548,43 @@ export class DiService {
       await this.statsService.updateStatus(_idDI, STATUS_DI.Diagnostic.status);
     }
 
+    // Resolve the assigned diagnostic technician (stored on the Stat created
+    // just before by `createStat`) — sert au Discord ET à la notif ERP ciblée.
+    let techId: string | null = null;
     try {
-      // Resolve the assigned diagnostic technician (stored on the Stat created
-      // just before by `createStat`) so the SINGLE Discord embed is complete.
-      let techId: string | null = null;
-      try {
-        const stat: any = await this.statsService.findUserLinkedToConcernedDi(
-          _idDI,
-        );
-        techId = stat?.id_tech_diag ?? null;
-      } catch {
-        /* tech is best-effort context — never block the notification */
-      }
+      const stat: any = await this.statsService.findUserLinkedToConcernedDi(
+        _idDI,
+      );
+      techId = stat?.id_tech_diag ?? null;
+    } catch {
+      /* tech is best-effort context — never block the notification */
+    }
+
+    try {
       await this.discordHookService.sendDiagnosticAssigned(diagnostic, techId);
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
+    }
+
+    // Notification ERP CIBLÉE sur le technicien affecté (ciblage PAR USER : lui
+    // seul la reçoit, cloche + socket). Acteur = null : `coordinator_ToDiag`
+    // n'est pas authentifié → on affiche honnêtement « acteur inconnu » plutôt
+    // que de deviner (passe auth v1.1). Best-effort : n'échoue jamais la transition.
+    if (techId) {
+      try {
+        await this.notificationService.emit({
+          type: 'DI_ASSIGNED_DIAG',
+          diId: _idDI,
+          actorId: null,
+          message: `Nouvelle DI affectée en diagnostic (${
+            (diagnostic as any)?._idnum ?? _idDI
+          })`,
+          payload: { status: STATUS_DI.Diagnostic.status },
+          notify: { userIds: [techId] },
+        });
+      } catch (err) {
+        await this.captureDiscordFailure('erp-notification', err);
+      }
     }
 
     return diagnostic;
