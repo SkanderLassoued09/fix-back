@@ -65,6 +65,17 @@ const STATUS_LABELS: Record<string, string> = {
   RETOUR3: '⚠️ Retour 3',
 };
 
+/** Human-readable byte size for embeds (`1.4 MB`) — display only. */
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1,
+  );
+  return `${(bytes / 1024 ** i).toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
+}
+
 interface EmbedContext {
   idnum: string;
   title: string;
@@ -1031,6 +1042,120 @@ export class DiscordHookService {
             { name: '📋 Messages', value: lines || '_(aucun)_' },
           ],
           footer: { text: 'Fixtronix · Validation drift watch (dev)' },
+        },
+      ],
+    });
+  }
+
+  /**
+   * BACKUP_DB_TO_DRIVE — nightly database backup SUCCEEDED.
+   *
+   * ⚠️ Goes through `deliverEmbed` (NOT `postEmbed`) on purpose: the global
+   * `DISCORD_NOTIFS_DISABLED` gate would swallow it, and a backup channel that
+   * is silent by design defeats its own purpose. The whole point of the daily
+   * success line is that its ABSENCE is the alarm — so it must never be gated.
+   */
+  async sendDbBackupSuccess(info: {
+    fileName: string;
+    dbName: string;
+    sizeBytes: number;
+    durationMs: number;
+    folderName: string;
+    webViewLink?: string;
+    deleted?: number;
+    kept?: number;
+    env?: string;
+  }): Promise<void> {
+    const envUpper = (info.env || process.env.NODE_ENV || 'development')
+      .trim()
+      .toUpperCase();
+    const when = new Intl.DateTimeFormat('fr-FR', {
+      timeZone: process.env.APP_TIMEZONE || 'Africa/Tunis',
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(new Date());
+
+    await this.deliverEmbed('APP_ALERT', {
+      embeds: [
+        {
+          title: `💾 Sauvegarde BDD OK — [${envUpper}]`,
+          description:
+            `Base \`${info.dbName}\` sauvegardée sur Google Drive · ${when} (Africa/Tunis).` +
+            (info.webViewLink ? `\n[Ouvrir le fichier](${info.webViewLink})` : ''),
+          color: 3066993, // green
+          fields: [
+            { name: '📄 Fichier', value: info.fileName, inline: false },
+            {
+              name: '📦 Taille',
+              value: formatBytes(info.sizeBytes),
+              inline: true,
+            },
+            {
+              name: '⏱️ Durée',
+              value: `${(info.durationMs / 1000).toFixed(1)} s`,
+              inline: true,
+            },
+            { name: '📁 Dossier', value: info.folderName, inline: true },
+            ...(typeof info.deleted === 'number'
+              ? [
+                  {
+                    name: '🧹 Rétention',
+                    value: `${info.kept ?? '?'} conservé(s), ${info.deleted} supprimé(s)`,
+                    inline: false,
+                  },
+                ]
+              : []),
+          ],
+          footer: { text: 'Fixtronix · Sauvegarde quotidienne' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  /**
+   * BACKUP_DB_TO_DRIVE — nightly database backup FAILED. Same ungated
+   * `deliverEmbed` path as the success line: a backup that fails silently is
+   * strictly worse than no backup at all.
+   */
+  async sendDbBackupFailure(info: {
+    reason: string;
+    dbName?: string;
+    step?: string;
+    env?: string;
+  }): Promise<void> {
+    const envUpper = (info.env || process.env.NODE_ENV || 'development')
+      .trim()
+      .toUpperCase();
+    const when = new Intl.DateTimeFormat('fr-FR', {
+      timeZone: process.env.APP_TIMEZONE || 'Africa/Tunis',
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(new Date());
+
+    await this.deliverEmbed('APP_ALERT', {
+      embeds: [
+        {
+          title: `🚨 ÉCHEC sauvegarde BDD — [${envUpper}]`,
+          description:
+            `**Aucune sauvegarde n'a été produite ce soir.** Intervention requise · ${when} (Africa/Tunis).`,
+          color: 15158332, // red
+          fields: [
+            {
+              name: '🗄️ Base',
+              value: info.dbName || 'inconnue',
+              inline: true,
+            },
+            { name: '🔧 Étape', value: info.step || 'inconnue', inline: true },
+            {
+              name: '❌ Motif',
+              // Discord hard-caps a field value at 1024 chars.
+              value: (info.reason || 'inconnu').slice(0, 1024),
+              inline: false,
+            },
+          ],
+          footer: { text: 'Fixtronix · Sauvegarde quotidienne' },
+          timestamp: new Date().toISOString(),
         },
       ],
     });

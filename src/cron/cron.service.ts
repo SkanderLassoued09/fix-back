@@ -11,6 +11,7 @@ import { JiraCronNotificationService } from 'src/jira-cron-notification/jira-cro
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { DiArchiveDigestService } from 'src/di-archive/di-archive-digest.service';
 import { ReunionPVService } from 'src/reunion-pv/reunion-pv.service';
+import { DbBackupService } from 'src/db-backup/db-backup.service';
 
 /**
  * The 5 Discord channels of an environment, mapped to the EXACT env vars read
@@ -38,6 +39,7 @@ export class AppCronService {
     private readonly discordHookService: DiscordHookService,
     private readonly diArchiveDigestService: DiArchiveDigestService,
     private readonly reunionPVService: ReunionPVService,
+    private readonly dbBackupService: DbBackupService,
   ) {}
 
   /**
@@ -73,9 +75,36 @@ export class AppCronService {
       case 'REUNION_REMINDER':
         await this.triggerReunionReminder();
         break;
+      case 'BACKUP_DB_TO_DRIVE':
+        await this.triggerBackupDbToDrive();
+        break;
       default:
         this.logger.error(`Unknown ACTION: ${action}`);
     }
+  }
+
+  /**
+   * Trigger-only — BACKUP_DB_TO_DRIVE. Dumps the ACTIVE environment's MongoDB
+   * database (`mongodb --gzip --archive`), uploads it to that environment's
+   * dedicated Drive folder, purges everything past the newest N, and posts a
+   * Discord line (success) or alert (failure). All business logic lives in
+   * `DbBackupService.run()` so it is testable on its own.
+   *
+   * Run via `ACTION=BACKUP_DB_TO_DRIVE node dist/main`
+   * (aliases: `action:backup-db-to-drive[:preprod|:dev]`), scheduled daily at
+   * 18:00 Africa/Tunis by the system crontab.
+   *
+   * A failure is RETHROWN on purpose: the bootstrap logs "ACTION failed" and
+   * sets `process.exitCode = 1`, so the crontab/monitoring sees a non-zero exit
+   * instead of a silent no-op. A backup failing quietly is worse than no backup.
+   */
+  async triggerBackupDbToDrive() {
+    const res = await this.dbBackupService.run();
+    this.logger.log(
+      `DB backup: db=${res.dbName} file=${res.fileName} size=${res.sizeBytes}o ` +
+        `duration=${res.durationMs}ms folder=${res.folderName} ` +
+        `retention(kept=${res.kept}, deleted=${res.deleted})`,
+    );
   }
 
   /**
