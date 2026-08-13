@@ -20,6 +20,27 @@ export const DI_TRANSITIONS = {
     strictRole: false,
   },
   /**
+   * Nouvelle mutation : abandonDi (bouton « Abandonner » du technicien).
+   * Le tech rend la DI à la coordination (PENDING1). `strictFrom: true` REFUSE
+   * DUREMENT toute source hors diagnostic → aucun chemin non voulu, et la règle
+   * Retour n'est pas contournée (l'abandon ne part jamais d'un statut RETOUR).
+   * `updateStatStatus: true` synchronise `Stat.status` sur PENDING1.
+   */
+  TECH_ABANDON_TO_PENDING1: {
+    key: 'TECH_ABANDON_TO_PENDING1',
+    from: [
+      STATUS_DI.Diagnostic.status,
+      STATUS_DI.InDiagnostic.status,
+      STATUS_DI.DiagnosticInPause.status,
+    ],
+    to: STATUS_DI.Pending1.status,
+    currentRoles: STATUS_DI.Pending1.role,
+    allowedActorRoles: [Role.TECH],
+    updateStatStatus: true,
+    strictFrom: true,
+    strictRole: false,
+  },
+  /**
    * Existing mutation: magasinTech_Pending2
    * Existing behavior: update status + current_roles.
    *

@@ -23,6 +23,7 @@ import {
   UpdateDi,
 } from './dto/create-di.input';
 import { AnnulerDiInput } from './dto/annuler-di.input';
+import { AbandonDiInput } from './dto/abandon-di.input';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
 import { Profile } from 'src/profile/entities/profile.entity';
 import { ProfileService } from 'src/profile/profile.service';
@@ -91,6 +92,24 @@ export class DiResolver {
       // `username` (lisible) plutôt que `_id` → affichage direct « par … » dans
       // le modal détail, sans résolution id→nom dans les mappers de liste.
       annulePar: profile.username,
+    });
+  }
+
+  /**
+   * ABANDON du diagnostic par un technicien. AUTHENTIFIÉE (`@CurrentUser`) — on
+   * sait ainsi QUI abandonne (`abandonedBy`). La DI retourne en PENDING1 pour
+   * réaffectation ; l'abandon est tracé (motif/qui/quand) dans l'historique.
+   */
+  @Mutation(() => Di)
+  @UseGuards(JwtAuthGuard)
+  async abandonDi(
+    @Args('AbandonDiInput') input: AbandonDiInput,
+    @CurrentUser() profile: Profile,
+  ) {
+    return this.diService.abandonDi(input.diId, {
+      motif: input.motif,
+      motifAutre: input.motifAutre,
+      abandonedBy: profile.username,
     });
   }
 

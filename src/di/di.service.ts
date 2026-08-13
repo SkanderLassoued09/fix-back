@@ -455,6 +455,19 @@ export class DiService {
     AUTRE: 'Autre',
   };
 
+  /**
+   * Liste blanche des motifs d'ABANDON de diagnostic (le tech ne parvient pas à
+   * diagnostiquer). Le front envoie le CODE ; on persiste le libellé. « AUTRE »
+   * ⇒ texte libre obligatoire. Autorité serveur, jamais le front.
+   */
+  private static readonly ABANDON_MOTIFS: Record<string, string> = {
+    PANNE_NON_IDENTIFIABLE: 'Panne non identifiable',
+    COMPETENCE_INADAPTEE: 'Compétence / spécialité inadaptée',
+    OUTILLAGE_MANQUANT: 'Équipement / outillage manquant',
+    DOC_INDISPONIBLE: 'Documentation indisponible',
+    AUTRE: 'Autre',
+  };
+
   /** Max courant de `_idnum` (scan `^(DI|T)\d+$`) — sert au seed + garde-fou. */
   private async currentMaxDiRefNumber(): Promise<number> {
     const rows = await this.diModel
@@ -1184,6 +1197,7 @@ export class DiService {
           annulationCommentaire: di.annulationCommentaire,
           annulePar: di.annulePar,
           annuleLe: di.annuleLe,
+          diagAssignments: await this.resolveDiagAssignments(stat),
           createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
           image: di?.image?.length > 0 ? di.image : '-',
           client_id: di.client_id?.first_name ?? '-',
@@ -1304,6 +1318,7 @@ export class DiService {
           annulationCommentaire: di.annulationCommentaire,
           annulePar: di.annulePar,
           annuleLe: di.annuleLe,
+          diagAssignments: await this.resolveDiagAssignments(stat),
           createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
           image: di?.image?.length > 0 ? di.image : '-',
           client_id: di.client_id?.first_name ?? '-',
@@ -2313,6 +2328,91 @@ export class DiService {
 
     return updated;
   }
+
+  /**
+   * ABANDON du diagnostic par un technicien : la DI retourne en PENDING1
+   * (coordination) pour réaffectation à un AUTRE tech. Trace l'abandon dans
+   * `Stat.diagAssignments` (motif/qui/quand + contribution de temps), fige le
+   * temps de diagnostic (CUMULATIF — choix produit A+B, jamais réinitialisé) et
+   * notifie la coordination. `abandonedBy` = utilisateur authentifié (resolver).
+   */
+  async abandonDi(
+    _idDI: string,
+    data: { motif: string; motifAutre?: string; abandonedBy: string },
+  ) {
+    // Motif OBLIGATOIRE (liste blanche serveur ; « AUTRE » ⇒ texte libre requis).
+    const label = DiService.ABANDON_MOTIFS[data.motif];
+    if (!label) {
+      throw new GraphQLError(`Motif d'abandon invalide: « ${data.motif} ».`, {
+        extensions: { code: 'BAD_REQUEST' },
+      });
+    }
+    let motifFinal = label;
+    if (data.motif === 'AUTRE') {
+      const texte = (data.motifAutre ?? '').trim();
+      if (!texte) {
+        throw new GraphQLError(
+          'Motif « Autre » : le texte libre est obligatoire.',
+          { extensions: { code: 'BAD_REQUEST' } },
+        );
+      }
+      motifFinal = texte;
+    }
+
+    const di = await this.diModel
+      .findOne({ _id: _idDI })
+      .select('status ignoreCount')
+      .lean();
+    if (!di) {
+      throw new GraphQLError(`DI '${_idDI}' introuvable.`, {
+        extensions: { code: 'NOT_FOUND' },
+      });
+    }
+    // Garde DURE du statut source : abandon possible UNIQUEMENT en diagnostic.
+    // Neutralise le court-circuit REENTRY du garde de transition (un RETOUR ne
+    // peut pas être détourné vers PENDING1 via l'abandon).
+    const ABANDONABLE: string[] = [
+      STATUS_DI.Diagnostic.status,
+      STATUS_DI.InDiagnostic.status,
+      STATUS_DI.DiagnosticInPause.status,
+    ];
+    if (!ABANDONABLE.includes((di as any).status)) {
+      throw new GraphQLError(
+        "Abandon impossible : la DI n'est pas en cours de diagnostic.",
+        {
+          extensions: {
+            code: 'BAD_REQUEST',
+            currentStatus: (di as any).status ?? null,
+          },
+        },
+      );
+    }
+
+    // 1) Trace l'abandon + fige le temps (cumulatif) sur le cycle courant.
+    await this.statsService.recordDiagAbandon(
+      _idDI,
+      (di as any).ignoreCount ?? 0,
+      motifFinal,
+      data.abandonedBy,
+    );
+
+    // 2) DI → PENDING1 (current_roles coordination + statusHistory + Stat.status)
+    //    via le workflow — `strictFrom: true` re-garde le statut source.
+    const result = await this.diWorkflowService.transition({
+      diId: _idDI,
+      transitionKey: 'TECH_ABANDON_TO_PENDING1',
+    });
+
+    // 3) Notification coordination (best-effort — n'échoue jamais l'abandon).
+    try {
+      await this.discordHookService.sendDiAbandoned(result.di, motifFinal);
+    } catch (err) {
+      await this.captureDiscordFailure('discord-notification', err);
+    }
+
+    return result.di;
+  }
+
   //if DI confirmer we sent to coordiantor
   // Negotiation1  => Pending3
   async manager_Negotation_Pendin3(
@@ -2525,6 +2625,38 @@ export class DiService {
    * `statusHistory` → timeline cassée). Ce mapper garantit la parité à jamais.
    * Attend une DI déjà peuplée (client_id/company_id/createdBy/location_id).
    */
+  /**
+   * Historique d'affectation diagnostic prêt pour l'affichage : chaque entrée
+   * `Stat.diagAssignments` avec le `tech` RÉSOLU en NOM (id → « Prénom Nom »).
+   * `abandonedBy` est déjà un username lisible. Cache local anti-doublon.
+   */
+  private async resolveDiagAssignments(stat: any): Promise<any[]> {
+    const list: any[] = stat?.diagAssignments ?? [];
+    if (!list.length) return [];
+    const cache = new Map<string, string>();
+    const nameOf = async (id: string): Promise<string> => {
+      if (!id) return null;
+      if (cache.has(id)) return cache.get(id);
+      const name = await this.profileService.getTech(id).catch(() => id);
+      const val = typeof name === 'string' ? name : id;
+      cache.set(id, val);
+      return val;
+    };
+    const out: any[] = [];
+    for (const a of list) {
+      out.push({
+        tech: await nameOf(a.tech),
+        techId: a.tech ?? null,
+        assignedAt: a.assignedAt ?? null,
+        abandonedAt: a.abandonedAt ?? null,
+        motif: a.motif ?? null,
+        abandonedBy: a.abandonedBy ?? null,
+        diagTime: a.diagTime ?? null,
+      });
+    }
+    return out;
+  }
+
   private async mapCoordinatorDiRow(di: any) {
     // Fetch the stat document based on the DI's _id
     const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
@@ -2571,6 +2703,7 @@ export class DiService {
       annulationCommentaire: di.annulationCommentaire,
       annulePar: di.annulePar,
       annuleLe: di.annuleLe,
+      diagAssignments: await this.resolveDiagAssignments(stat),
       pricingRequestSentAt: di.pricingRequestSentAt,
       // Resolve the actor profile ids to NAMES — the flow timeline must never
       // render a raw ObjectId (getTech returns 'Unknown' for a missing/deleted

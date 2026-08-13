@@ -82,6 +82,35 @@ export class StatDocument extends Document {
     default: [],
   })
   diagSegments: Array<{ startedAt: Date; stoppedAt: Date }>;
+
+  // Historique d'affectation DIAGNOSTIC (abandon → réaffectation) : une entrée
+  // par technicien affecté sur ce cycle. SOURCE UNIQUE pour afficher la chaîne
+  // « X → abandonné (motif) par … → Y ». `diagTimeStart` = snapshot cumulatif
+  // de `diag_time` à l'affectation ; `diagTime` = contribution du tech (affichage
+  // seul — la FACTURATION reste `diag_time` cumulatif, cf. choix produit A+B).
+  @Prop({
+    type: [
+      {
+        tech: { type: String, required: true },
+        assignedAt: { type: Date, required: true },
+        abandonedAt: { type: Date, required: false, default: null },
+        motif: { type: String, required: false, default: null },
+        abandonedBy: { type: String, required: false, default: null },
+        diagTimeStart: { type: String, required: false, default: '00:00:00' },
+        diagTime: { type: String, required: false, default: null },
+      },
+    ],
+    default: [],
+  })
+  diagAssignments: Array<{
+    tech: string;
+    assignedAt: Date;
+    abandonedAt: Date | null;
+    motif: string | null;
+    abandonedBy: string | null;
+    diagTimeStart: string;
+    diagTime: string | null;
+  }>;
 }
 export const StatSchema = SchemaFactory.createForClass(StatDocument);
 

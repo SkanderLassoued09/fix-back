@@ -304,6 +304,30 @@ export class DriveDoc {
   webViewLink: string;
 }
 
+/**
+ * Une affectation diagnostic (pour l'historique « X → abandon → Y »). `tech` /
+ * `abandonedBy` sont RÉSOLUS en NOMS par le mapper (pas des ids bruts). Source :
+ * `Stat.diagAssignments`.
+ */
+@ObjectType()
+export class DiagAssignment {
+  // `tech` = NOM résolu (affichage) ; `techId` = id brut (filtrage sélecteur).
+  @Field({ nullable: true })
+  tech?: string;
+  @Field({ nullable: true })
+  techId?: string;
+  @Field({ nullable: true })
+  assignedAt?: Date;
+  @Field({ nullable: true })
+  abandonedAt?: Date;
+  @Field({ nullable: true })
+  motif?: string;
+  @Field({ nullable: true })
+  abandonedBy?: string;
+  @Field({ nullable: true })
+  diagTime?: string;
+}
+
 @ObjectType()
 export class Di {
   @Field({ nullable: true })
@@ -348,6 +372,10 @@ export class Di {
   annulePar?: string;
   @Field({ nullable: true })
   annuleLe?: Date;
+  // Historique d'affectation diagnostic (abandon → réaffectation) — chaîne
+  // « X → abandon (motif) → Y » pour le modal détail. Source : Stat.diagAssignments.
+  @Field(() => [DiagAssignment], { nullable: true })
+  diagAssignments?: DiagAssignment[];
   // ReunionPV ids attached to this DI (inverse link, maintained by
   // ReunionPvService.create). Frontend list view uses this to show the
   // PV count without an extra round-trip to the ReunionPV collection.
@@ -654,6 +682,10 @@ export class DiTable {
   annulePar?: string;
   @Field({ nullable: true })
   annuleLe?: Date;
+
+  // Historique d'affectation diagnostic (abandon → réaffectation).
+  @Field(() => [DiagAssignment], { nullable: true })
+  diagAssignments?: DiagAssignment[];
 
   // Transition history — single source of truth for the flow timeline dates.
   @Field(() => [StatusHistoryEntry], { nullable: true })

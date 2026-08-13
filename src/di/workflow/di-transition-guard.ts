@@ -63,6 +63,13 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = 
     // technician is re-assigned for a fresh diagnostic. PRICING → PENDING1.
     STATUS_DI.Pricing.status,
     LEGACY_PRICING,
+    // NB « Abandonner » (DIAGNOSTIC/INDIAGNOSTIC → PENDING1) n'est
+    // VOLONTAIREMENT pas ajouté ici : l'abandon ne passe PAS par ce garde
+    // générique (M1). Il emprunte la transition dédiée
+    // `TECH_ABANDON_TO_PENDING1` (`strictFrom: true`) + un contrôle explicite
+    // dans `abandonDi`. Garder la whitelist stricte préserve le garde-fou
+    // « pas de retour arrière accidentel INDIAGNOSTIC → PENDING1 » pour toute
+    // AUTRE mutation, sans ouvrir de chemin non voulu.
   ],
   [STATUS_DI.Diagnostic.status]: [STATUS_DI.Pending1.status],
   [STATUS_DI.InDiagnostic.status]: [
