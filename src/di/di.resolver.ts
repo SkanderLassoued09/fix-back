@@ -1,4 +1,11 @@
-import { Resolver, Mutation, Args, Query, Subscription } from '@nestjs/graphql';
+import {
+  Resolver,
+  Mutation,
+  Args,
+  Query,
+  Subscription,
+  Float,
+} from '@nestjs/graphql';
 import { DiService } from './di.service';
 import {
   Di,
@@ -15,10 +22,13 @@ import {
   SearchDiInput,
   UpdateDi,
 } from './dto/create-di.input';
+import { AnnulerDiInput } from './dto/annuler-di.input';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
 import { Profile } from 'src/profile/entities/profile.entity';
+import { ProfileService } from 'src/profile/profile.service';
 import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
+import { GraphQLError } from 'graphql';
 import { error, log } from 'console';
 import { StatService } from 'src/stat/stat.service';
 import { PubSub } from 'graphql-subscriptions';
@@ -48,7 +58,41 @@ export class DiResolver {
     private readonly diService: DiService,
     private readonly statService: StatService,
     private readonly pubsub: PubSub,
+    private readonly profileService: ProfileService,
   ) {}
+
+  /**
+   * Annulation d'une DI par le coordinateur, CONFIRMÉE PAR MOT DE PASSE.
+   * Authentifiée (`@CurrentUser`) — on sait ainsi CONTRE QUI vérifier le mot de
+   * passe et QUI a annulé. Le mot de passe est vérifié côté serveur contre le
+   * hash de l'utilisateur courant puis jeté (jamais loggué/stocké/renvoyé) ; un
+   * échec ⇒ erreur claire, AUCUNE modification de la DI.
+   */
+  @Mutation(() => Di)
+  @UseGuards(JwtAuthGuard)
+  async annulerDi(
+    @Args('AnnulerDiInput') input: AnnulerDiInput,
+    @CurrentUser() profile: Profile,
+  ) {
+    const ok = await this.profileService.verifyPassword(
+      profile.username,
+      input.password,
+    );
+    if (!ok) {
+      throw new GraphQLError('Mot de passe incorrect.', {
+        extensions: { code: 'UNAUTHENTICATED' },
+      });
+    }
+    return this.diService.annulerDi(input.diId, {
+      parClient: input.parClient,
+      motif: input.motif,
+      motifAutre: input.motifAutre,
+      commentaire: input.commentaire,
+      // `username` (lisible) plutôt que `_id` → affichage direct « par … » dans
+      // le modal détail, sans résolution id→nom dans les mappers de liste.
+      annulePar: profile.username,
+    });
+  }
 
   @Mutation(() => Di)
   @UseGuards(JwtAuthGuard)
@@ -188,8 +232,17 @@ export class DiResolver {
     return await this.diService.deleteDi(_id);
   }
 
+  // AUTHENTIFIÉE (comme `createDi`) : sans ça, le back ignore QUI modifie une DI
+  // → traçabilité impossible. `@CurrentUser` expose l'identité de l'acteur pour
+  // la future journalisation des modifications (édition de référence, etc.).
+  // Tous les appelants front passent par Apollo (lien `setContext` global qui
+  // attache `Authorization: Bearer <token>` depuis `localStorage`).
   @Mutation(() => Di)
-  async updateDi(@Args('UpdateDi') updateDi: UpdateDi) {
+  @UseGuards(JwtAuthGuard)
+  async updateDi(
+    @Args('UpdateDi') updateDi: UpdateDi,
+    @CurrentUser() profile: Profile,
+  ) {
     return await this.diService.updateDi(updateDi);
   }
 
@@ -397,6 +450,17 @@ export class DiResolver {
   @Mutation(() => Boolean)
   async changeStatusPricing(@Args('_id') _id: string) {
     await this.diService.changeStatusPricing(_id);
+    return true;
+  }
+
+  /** Persist the « Estimation prix réparation » entered in the price-initial
+   *  modal. Dedicated field on the DI (not price/final_price). */
+  @Mutation(() => Boolean)
+  async setRepairEstimate(
+    @Args('_id') _id: string,
+    @Args('estimate', { type: () => Float }) estimate: number,
+  ) {
+    await this.diService.setRepairEstimate(_id, estimate);
     return true;
   }
   @Mutation(() => Boolean)

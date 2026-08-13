@@ -63,8 +63,9 @@ export class DiLogsDocument extends Document {
 
   @Prop({ defaultValue: false })
   isOpenedOnce: boolean;
-  @Prop({ defaultValue: false })
-  gotComposantFromMagasin: string;
+  // Same root-cause fix as Di.gotComposantFromMagasin: string → boolean.
+  @Prop({ type: Boolean, default: false })
+  gotComposantFromMagasin: boolean;
   // confirmation component for magasin and coordinator section
   @Prop({ default: false })
   isConfirmedComponentFromCoordinator: boolean;

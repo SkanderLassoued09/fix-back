@@ -30,16 +30,35 @@ const STATUS_LABELS: Record<string, string> = {
   DIAGNOSTIC_Pause: '⏸️ Diagnostic en pause',
   INDIAGNOSTIC: '🔍 En diagnostic',
   MagasinEstimation: '🏬 Estimation magasin',
-  INMAGASIN: '🏬 En magasin',
+  // Renommé MAGASIN_PREPARATION → PROCESSING → CONFIRMATION (clé legacy
+  // `PROCESSING` conservée pour les DI/logs pas encore migrés).
+  CONFIRMATION: '🏬 CONFIRMATION',
+  PROCESSING: '🏬 PROCESSING',
+  CONFIRMATION_COMPOSANTS: '🤝 En attente confirmation Coordination',
+  ATTENTE_CONFIRMATION_COORDINATION: '🤝 En attente confirmation Coordination',
   PENDING2: '📦 En attente de facturation',
-  PRICING: '💰 Facturation en cours',
-  NEGOTIATION1: '🤝 Négociation 1 (Manager)',
+  // Renommé : PRICING → PRICING_DIAG (clé legacy conservée pour les
+  // DI/logs pas encore migrés).
+  PRICING: '💰 Pricing',
+  PRICING_DIAG: '💰 Pricing',
+  // Phase Approval documentaire — SPLIT en WAITING_DEVIS → WAITING_BC (clés
+  // legacy NEGOTIATION1/ATTENTE_BC_DEVIS conservées pour les DI pas encore migrées).
+  WAITING_DEVIS: '🤝 Approval — attente devis',
+  WAITING_BC: '🤝 Approval — attente BC',
+  NEGOTIATION1: '🤝 Approval',
+  ATTENTE_BC_DEVIS: '🤝 Approval',
   NEGOTIATION2: '🤝 Négociation 2 (Admin)',
   ANNULER: '❌ Annulée',
   PENDING3: '🚚 En attente réparation',
   REPARATION: '🛠️ Réparation affectée',
   REPARATION_Pause: '⏸️ Réparation en pause',
   INREPARATION: '🔧 En réparation',
+  // Phase de clôture documentaire — SPLIT en WAITING_BL → WAITING_FACTURE (clés
+  // legacy CLOSING/ATTENTE_BL_FACTURE conservées pour les DI pas encore migrées).
+  WAITING_BL: '📄 Clôture — attente BL',
+  WAITING_FACTURE: '📄 Clôture — attente facture',
+  CLOSING: '📄 CLOSING',
+  ATTENTE_BL_FACTURE: '📄 CLOSING',
   FINISHED: '✅ Terminée',
   RETOUR1: '🔁 Retour 1',
   RETOUR2: '🔁 Retour 2',

@@ -258,11 +258,23 @@ describe('DiService.uploadDiDocToDrive — stale folder auto-repair', () => {
   });
 });
 
-describe('DiService.generateClientId — robust DI{n} numbering (no DINaN)', () => {
+describe('DiService.nextDiRefNumber — robust DI{n} numbering (no DINaN)', () => {
+  // Compteur atomique reproduit : seed via `$max`, incrément via findOneAndUpdate.
   function svcWithIds(rows: Array<{ _idnum: string }>) {
     const s: any = Object.create(DiService.prototype);
+    const state = { seq: 0 };
     s.diModel = {
       find: jest.fn().mockReturnValue({ lean: () => Promise.resolve(rows) }),
+    };
+    s.counterModel = {
+      updateOne: jest.fn().mockImplementation((_f: any, u: any) => {
+        if (u?.$max?.seq != null) state.seq = Math.max(state.seq, u.$max.seq);
+        return Promise.resolve({});
+      }),
+      findOneAndUpdate: jest.fn().mockImplementation((_f: any, u: any) => {
+        if (u?.$inc?.seq) state.seq += u.$inc.seq;
+        return Promise.resolve({ seq: state.seq });
+      }),
     };
     return s;
   }
@@ -275,7 +287,7 @@ describe('DiService.generateClientId — robust DI{n} numbering (no DINaN)', () 
       { _idnum: 'LIFE-xyz' },
       { _idnum: 'DINaN' },
     ]);
-    expect(await s.generateClientId()).toBe(8);
+    expect(await s.nextDiRefNumber()).toBe(8);
   });
 
   it('falls back to 1 when no conforming ids — never NaN', async () => {
@@ -284,12 +296,12 @@ describe('DiService.generateClientId — robust DI{n} numbering (no DINaN)', () 
       { _idnum: 'DINaN' },
       { _idnum: 'DI' },
     ]);
-    const n = await s.generateClientId();
+    const n = await s.nextDiRefNumber();
     expect(n).toBe(1);
     expect(Number.isNaN(n)).toBe(false);
   });
 
   it('returns 1 on an empty collection', async () => {
-    expect(await svcWithIds([]).generateClientId()).toBe(1);
+    expect(await svcWithIds([]).nextDiRefNumber()).toBe(1);
   });
 });

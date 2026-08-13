@@ -82,6 +82,11 @@ export class DiDocument extends Document {
   @Prop()
   // affected by admins
   final_price: number;
+  // Estimation du prix de réparation, saisie dans le modal « Affectation du
+  // prix initial ». Champ DÉDIÉ (distinct de price/final_price) pour comparer
+  // ensuite l'estimé au prix final. Optionnel.
+  @Prop({ type: Number, default: null })
+  repairEstimate: number;
   @Prop()
   discount: number;
   @Prop()
@@ -105,8 +110,14 @@ export class DiDocument extends Document {
   ignoreCount: number;
   @Prop({ defaultValue: false })
   isOpenedOnce: boolean;
-  @Prop({ defaultValue: false })
-  gotComposantFromMagasin: string;
+  // BUG FIX (racine) : ce champ était typé `string` avec `defaultValue` (option
+  // Mongoose INEXISTANTE — c'est `default`), si bien que tout `false` écrit
+  // était casté en `"false"` (truthy !) et 56/104 DI portaient cette string.
+  // Normalisé en booléen réel avec le bon défaut ; une migration convertit les
+  // valeurs string existantes. La logique d'ouverture des modals repose sur le
+  // STATUT, plus sur ce flag.
+  @Prop({ type: Boolean, default: false })
+  gotComposantFromMagasin: boolean;
   // confirmation component for magasin and coordinator section
   @Prop({ default: false })
   isConfirmedComponentFromCoordinator: boolean;
@@ -174,6 +185,20 @@ export class DiDocument extends Document {
   @Prop({ default: null })
   retourDate: Date | null;
 
+  // Annulation tracking — motif + qui/quand + « à la demande du client ? ».
+  // Renseigné par `annulerDi` (bouton coordinateur, confirmé par mot de passe).
+  // Le mot de passe n'est JAMAIS stocké ici — seul le résultat de l'annulation.
+  @Prop({ default: null })
+  annulationParClient: boolean | null;
+  @Prop({ default: null })
+  annulationMotif: string | null;
+  @Prop({ default: null })
+  annulationCommentaire: string | null;
+  @Prop({ default: null })
+  annulePar: string | null;
+  @Prop({ default: null })
+  annuleLe: Date | null;
+
   // Inverse link to ReunionPV documents that were logged against this DI.
   // Maintained by ReunionPvService.create() via `$push`. Allows the front
   // to list all meeting minutes attached to a DI without scanning the
@@ -185,6 +210,13 @@ export class DiDocument extends Document {
   updatedAt: Date;
 }
 export const DiSchema = SchemaFactory.createForClass(DiDocument);
+// Référence humaine `_idnum` (T{n}) — UNIQUE. Garantie d'intégrité de dernier
+// recours contre les doublons de référence (concurrence de création, ou import
+// absorbant une référence du fichier qui entrerait en collision). Combinée au
+// compteur atomique (`counters/di_ref`), elle rend la génération sûre. Posée sur
+// base sans doublon (vérifié : 0). Migration 010 la crée explicitement sur les
+// bases existantes.
+DiSchema.index({ _idnum: 1 }, { unique: true });
 DiSchema.index({ location_id: 1, isDeleted: 1 });
 DiSchema.index({ di_category_id: 1, isDeleted: 1 });
 // Dashboard analytics — status×createdAt and status×updatedAt cover the
@@ -305,6 +337,17 @@ export class Di {
   retourReason?: string;
   @Field({ nullable: true })
   retourDate?: Date;
+  // Annulation tracking (exposé au front pour l'affichage « Annulée le… par… »).
+  @Field({ nullable: true })
+  annulationParClient?: boolean;
+  @Field({ nullable: true })
+  annulationMotif?: string;
+  @Field({ nullable: true })
+  annulationCommentaire?: string;
+  @Field({ nullable: true })
+  annulePar?: string;
+  @Field({ nullable: true })
+  annuleLe?: Date;
   // ReunionPV ids attached to this DI (inverse link, maintained by
   // ReunionPvService.create). Frontend list view uses this to show the
   // PV count without an extra round-trip to the ReunionPV collection.
@@ -373,6 +416,8 @@ export class Di {
   @Field({ nullable: true })
   final_price: number;
   @Field({ nullable: true })
+  repairEstimate: number;
+  @Field({ nullable: true })
   discount: number;
   @Field({ nullable: true })
   discount_value: number;
@@ -393,7 +438,7 @@ export class Di {
   @Field({ defaultValue: false })
   isSentToCoordinator: boolean;
   @Field({ defaultValue: false })
-  gotComposantFromMagasin: string;
+  gotComposantFromMagasin: boolean;
   @Field({ nullable: true })
   status: string;
   @Field({ nullable: true })
@@ -597,6 +642,18 @@ export class DiTable {
   retourReason?: string;
   @Field({ nullable: true })
   retourDate?: Date;
+
+  // ---- Annulation tracking — motif + qui/quand + « à la demande du client » -
+  @Field({ nullable: true })
+  annulationParClient?: boolean;
+  @Field({ nullable: true })
+  annulationMotif?: string;
+  @Field({ nullable: true })
+  annulationCommentaire?: string;
+  @Field({ nullable: true })
+  annulePar?: string;
+  @Field({ nullable: true })
+  annuleLe?: Date;
 
   // Transition history — single source of truth for the flow timeline dates.
   @Field(() => [StatusHistoryEntry], { nullable: true })

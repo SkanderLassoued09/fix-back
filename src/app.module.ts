@@ -31,13 +31,26 @@ import { OperationalErrorModule } from './operational-error/operational-error.mo
 import { GoogleSheetsModule } from './google-sheets/google-sheets.module';
 import { ReunionPVModule } from './reunion-pv/reunion-pv.module';
 
+// FAIL-FAST : la connexion Mongo DOIT venir de `MONGODB_URI` (chargé par
+// `config/load-env` depuis `.env.${NODE_ENV}`). Plus de fallback silencieux vers
+// `mongodb://localhost:27017/fixtronix` : celui-ci pointait une base DIFFÉRENTE
+// (`fixtronix` ≠ `.env` `fixtronixproddb`) → un poste mal configuré se connectait
+// sans bruit à une base VIDE (catégories absentes, « marche chez moi »). On
+// échoue désormais bruyamment au démarrage plutôt que de partir sur une base
+// fantôme.
+const MONGODB_URI = process.env.MONGODB_URI;
+if (!MONGODB_URI) {
+  throw new Error(
+    'MONGODB_URI manquant. Configurez-le dans .env.${NODE_ENV} (ex. .env.development). ' +
+      'Aucun fallback : refus de démarrer pour éviter une connexion silencieuse à une base vide/erronée.',
+  );
+}
+
 @Module({
   imports: [
     LocationModule,
     CompanysModule,
-    MongooseModule.forRoot(
-      process.env.MONGODB_URI || 'mongodb://localhost:27017/fixtronix',
-    ),
+    MongooseModule.forRoot(MONGODB_URI),
     GraphQLModule.forRoot<ApolloDriverConfig>({
       driver: ApolloDriver,
       // Disable in production by setting GRAPHQL_PLAYGROUND=false.

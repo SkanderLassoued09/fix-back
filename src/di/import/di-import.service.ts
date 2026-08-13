@@ -5,6 +5,13 @@ import * as XLSX from 'xlsx';
 import { DiService } from '../di.service';
 import { ClientsService } from 'src/clients/clients.service';
 import { LocationService } from 'src/location/location.service';
+import { NotificationsGateway } from 'src/notification.gateway';
+import { DiImportJobService } from './di-import-job.service';
+import { TierAliasService } from './tier-alias.service';
+import {
+  normalizeTierName,
+  isValidDecisionKind,
+} from './tier-name.util';
 
 /**
  * Bulk DI import from an .xlsx file — two-phase (dry-run preview → real import).
@@ -76,7 +83,11 @@ const COL_ALIASES: Record<ColKey, string[]> = {
   nDi: ['n di', 'no di', 'numero di', 'num di', 'ndi', 'n di t', 'reference', 'ref'],
   designation: ['designation', 'desgination', 'libelle', 'intitule', 'denomination'],
   nSerie: ['n serie', 'no serie', 'numero serie', 'num serie', 'nserie', 'serie', 'numero de serie', 's n', 'sn'],
-  client: ['client', 'clients', 'nom client', 'societe client', 'raison sociale'],
+  // Colonne TIERS (personne Client OU Société) — le TYPE n'est plus déduit du
+  // libellé de colonne mais résolu par `matchTier` (nom rapproché des Clients ET
+  // des Sociétés existants). Les libellés à consonance « société » ne forcent
+  // donc plus un Client : ils identifient seulement la colonne du tiers.
+  client: ['client', 'clients', 'nom client', 'tiers', 'societe client', 'raison sociale'],
   date: ['date de reception', 'date reception', 'date recue', 'date recu', 'reception', 'date'],
   rangement: ['rangement', 'emplacement', 'localisation', 'location', 'position'],
 };
@@ -86,7 +97,7 @@ export const TEMPLATE_HEADERS = [
   'N° DI',
   'Désignation',
   'N° Série',
-  'Client',
+  'Client / Société',
   'Date de réception',
   'Rangement',
 ];
@@ -109,11 +120,19 @@ export class DiImportService {
   constructor(
     @InjectModel('Di') private readonly diModel: Model<any>,
     @InjectModel('Client') private readonly clientModel: Model<any>,
+    @InjectModel('Company') private readonly companyModel: Model<any>,
     @InjectModel('Location') private readonly locationModel: Model<any>,
     private readonly diService: DiService,
     private readonly clientsService: ClientsService,
     private readonly locationService: LocationService,
+    private readonly jobService: DiImportJobService,
+    private readonly notificationGateway: NotificationsGateway,
+    private readonly aliasService: TierAliasService,
   ) {}
+
+  /** Taille de lot pour l'exécution par job (25–50). Un `yield` entre les lots
+   *  laisse respirer l'event loop ; le volume d'import (centaines) reste rapide. */
+  private static readonly BATCH_SIZE = 25;
 
   // ---------------------------------------------------------------------------
   // Public entrypoints
@@ -128,23 +147,329 @@ export class DiImportService {
     if (parsed.enTeteInvalide) return parsed.report; // global reject, 0 processed
 
     const existing = await this.loadExistingRefs();
-    const report = this.validate(parsed.rows, existing);
+    // Contexte de résolution (caches + ids + alias) chargé UNE fois, partagé
+    // entre la vérification (lecture seule) et la persistance → le dry-run
+    // reflète EXACTEMENT ce que fera l'import réel (même résolution, alias inclus).
+    const resCtx = await this.loadResolutionContext();
+
+    const report = this.validate(parsed.rows, existing, resCtx);
     report.ligneEnTete = parsed.headerLine;
 
     if (opts.dryRun) return report;
 
     // Real import — persist only the rows flagged valid by `validate`.
-    const crees = await this.persist(parsed.rows, report, opts.createdBy);
+    const crees = await this.persist(parsed.rows, report, {
+      ...resCtx,
+      createdBy: opts.createdBy,
+    });
     report.crees = crees;
     return report;
   }
 
+  // ---------------------------------------------------------------------------
+  // Exécution en JOB (phase non interactive, par lots + progression WebSocket)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Démarre l'exécution d'un import en JOB SERVEUR (fire-and-forget) : parse +
+   * valide (100 % non destructif), crée le job `di_import_jobs`, puis lance le
+   * traitement par lots EN ARRIÈRE-PLAN (promesse NON attendue → l'exécution
+   * survit à la fermeture de l'onglet) et renvoie immédiatement `{ jobId, total }`.
+   * Le suivi passe par les événements WS `di-import.progress` (portant `jobId`)
+   * et par l'état persisté du job (consultable après réouverture).
+   */
+  async executeAsJob(
+    buffer: Buffer,
+    opts: {
+      createdBy?: string;
+      /** Résolutions d'ambiguïté « both » tranchées par l'utilisateur à l'écran
+       *  de vérification (par n° de ligne). PAS de mémoire inter-imports ici
+       *  (tier_aliases = étape ultérieure) — décision valable pour CE lot. */
+      decisions?: Array<{ ligne: number; kind: 'client' | 'company' }>;
+    },
+  ): Promise<{ jobId?: string; total: number; report?: ImportReport }> {
+    const parsed = this.parse(buffer);
+    if (parsed.enTeteInvalide) return { total: 0, report: parsed.report };
+
+    const decisions = new Map<number, 'client' | 'company'>(
+      (opts.decisions ?? []).map((d) => [d.ligne, d.kind]),
+    );
+
+    const existing = await this.loadExistingRefs();
+    const resCtx = await this.loadResolutionContext();
+    const report = this.validate(parsed.rows, existing, resCtx, decisions);
+    report.ligneEnTete = parsed.headerLine;
+
+    // Seules les lignes VALIDES (non erreur) sont exécutées.
+    const errorLines = new Set(report.erreurs.map((e) => e.ligne));
+    const toImport = parsed.rows.filter((r) => !errorLines.has(r.ligne));
+
+    const job = await this.jobService.create({
+      createdBy: opts.createdBy,
+      total: toImport.length,
+    });
+
+    // Fire-and-forget : le traitement vit côté serveur, indépendant du client.
+    // `processJob` gère lui-même son échec (→ FAILED) ; le `.catch` est un
+    // dernier filet si même la mise à jour d'échec venait à rejeter.
+    this.processJob(job.jobId, toImport, {
+      ...resCtx,
+      createdBy: opts.createdBy,
+      decisions,
+    }).catch((err) =>
+      this.logger.error(
+        `processJob ${job.jobId} a rejeté hors gestion: ${(err as Error)?.message ?? err}`,
+      ),
+    );
+
+    return { jobId: job.jobId, total: toImport.length };
+  }
+
+  /**
+   * Traitement PAR LOTS d'un job d'import :
+   *   - `markRunning` puis lots de `BATCH_SIZE` lignes ;
+   *   - par ligne : résolution tiers (Société/Client, cf. `matchTier`) + création
+   *     via `DiService.createDi` (référence forcée du fichier → l'index unique +
+   *     `bumpDiRefTo` restent la garantie d'intégrité) ;
+   *   - IDEMPOTENT : une référence déjà en base (E11000) est IGNORÉE, jamais
+   *     recréée ni comptée en erreur → un ré-lancement du même lot ne duplique pas ;
+   *   - après chaque lot : `incrementProgress` (atomique) + événement WS + `yield` ;
+   *   - fin : `COMPLETED` + rapport stocké. Erreur FATALE (infra) : `FAILED`, erreur
+   *     stockée, les lignes déjà créées RESTENT (aucune suppression).
+   */
+  private async processJob(
+    jobId: string,
+    rows: ParsedRow[],
+    ctx: {
+      clientCache: Map<string, string>;
+      companyCache: Map<string, string>;
+      clientIds?: Set<string>;
+      companyIds?: Set<string>;
+      aliasMap?: Map<string, any>;
+      createdBy?: string;
+      decisions?: Map<number, 'client' | 'company'>;
+    },
+    report?: ImportReport,
+  ): Promise<void> {
+    const rep: ImportReport =
+      report ??
+      ({ ligneEnTete: null, total: rows.length, valides: rows.length, warnings: [], erreurs: [], lignes: [] } as ImportReport);
+    const total = rows.length;
+    let dis = 0;
+    let clientsCreated = 0;
+    let locationsCreated = 0;
+    let ignorees = 0;
+
+    try {
+      await this.jobService.markRunning(jobId);
+      const locationCache = await this.buildLocationCache();
+      this.emitProgress(jobId, 0, total, null, 'RUNNING');
+
+      for (let i = 0; i < rows.length; i += DiImportService.BATCH_SIZE) {
+        const batch = rows.slice(i, i + DiImportService.BATCH_SIZE);
+        let lastRef: string | null = null;
+
+        for (const row of batch) {
+          lastRef = row.nDi;
+          try {
+            const tier = this.resolveTier(row.clientName, ctx);
+            let clientId: string | undefined;
+            let companyId: string | undefined;
+            if (tier.kind === 'both') {
+              // Résolu par la décision utilisateur (l'écran de vérification l'a
+              // exigée ; les non tranchées ont été exclues au validate). Le
+              // `tierId` mémorisé est BACKEND (jamais fourni par le front).
+              const decided = ctx.decisions?.get(row.ligne);
+              if (decided === 'company') {
+                companyId = tier.companyId;
+                await this.rememberDecision(
+                  row.clientName,
+                  tier.companyId,
+                  'SOCIETE',
+                  ctx.createdBy,
+                );
+              } else if (decided === 'client') {
+                clientId = tier.clientId;
+                await this.rememberDecision(
+                  row.clientName,
+                  tier.clientId,
+                  'CLIENT',
+                  ctx.createdBy,
+                );
+              } else {
+                // GARDE D'INVARIANT (défense en profondeur) : une ligne « both »
+                // ne peut JAMAIS être créée sans rattachement. Normalement
+                // écartée au validate (whitelist `kind`) ; si une décision
+                // invalide atteignait tout de même ce point (payload forgé /
+                // futur autre client), on lève → l'erreur est collectée par
+                // ligne, AUCUNE DI n'est créée pour elle.
+                throw new Error(
+                  `Décision d'ambiguïté invalide pour « ${row.clientName} » : «kind» attendu « client » ou « company ».`,
+                );
+              }
+            } else if (tier.kind === 'company') {
+              companyId = tier.companyId;
+            } else if (tier.kind === 'client') {
+              clientId = tier.clientId;
+            } else {
+              const client = await this.resolveClient(
+                row.clientName,
+                ctx.clientCache,
+              );
+              clientId = client.id;
+              if (client.created) clientsCreated++;
+            }
+
+            let locationId: string | undefined;
+            if (row.rangement) {
+              const loc = await this.resolveLocation(
+                row.rangement,
+                locationCache,
+              );
+              locationId = loc.id;
+              if (loc.created) locationsCreated++;
+            }
+
+            await this.diService.createDi(
+              {
+                title: row.designation,
+                nSerie: row.nSerie,
+                client_id: clientId,
+                company_id: companyId,
+                location_id: locationId,
+                type_client: companyId ? 'Company' : 'Client',
+                status: 'CREATED',
+                dateReception: row.dateValue ?? undefined,
+                createdBy: ctx.createdBy,
+              } as any,
+              { forcedRef: row.nDi, skipNotify: true },
+            );
+            dis++;
+          } catch (err) {
+            if (this.isDuplicateKeyError(err)) {
+              // Idempotence : la référence existe déjà → IGNORÉE (ni recréation,
+              // ni erreur). Couvre le ré-lancement d'un lot / la reprise.
+              ignorees++;
+            } else {
+              rep.erreurs.push({
+                ligne: row.ligne,
+                valeurs: row.raw,
+                motifs: [
+                  `Échec de création : ${(err as Error)?.message ?? err}`,
+                ],
+              });
+            }
+          }
+        }
+
+        const updated = await this.jobService.incrementProgress(
+          jobId,
+          batch.length,
+          lastRef ?? undefined,
+        );
+        this.emitProgress(
+          jobId,
+          updated?.done ?? Math.min(i + batch.length, total),
+          total,
+          lastRef,
+          'RUNNING',
+        );
+        await this.yieldToEventLoop();
+      }
+
+      rep.crees = {
+        dis,
+        clients: clientsCreated,
+        locations: locationsCreated,
+        ignorees,
+      };
+      await this.jobService.complete(jobId, rep);
+      this.emitProgress(jobId, total, total, null, 'COMPLETED');
+    } catch (err) {
+      // Erreur FATALE (infra) : job FAILED, erreur stockée, rapport PARTIEL
+      // conservé — les DI déjà créées ne sont JAMAIS supprimées.
+      rep.crees = {
+        dis,
+        clients: clientsCreated,
+        locations: locationsCreated,
+        ignorees,
+      };
+      await this.jobService.fail(
+        jobId,
+        (err as Error)?.message ?? String(err),
+        rep,
+      );
+      this.emitProgress(jobId, dis + ignorees, total, null, 'FAILED');
+    }
+  }
+
+  /** Émission de progression — best-effort : un échec WS ne fait JAMAIS échouer
+   *  le job (l'état fiable est en base). Le `jobId` est TOUJOURS présent. */
+  private emitProgress(
+    jobId: string,
+    done: number,
+    total: number,
+    currentRef: string | null,
+    phase: string,
+  ): void {
+    try {
+      this.notificationGateway.diImportProgress({
+        jobId,
+        done,
+        total,
+        currentRef: currentRef ?? null,
+        phase,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `WS di-import.progress échec (job ${jobId}): ${(err as Error)?.message ?? err}`,
+      );
+    }
+  }
+
+  /** Cède la main à l'event loop entre deux lots. */
+  private yieldToEventLoop(): Promise<void> {
+    return new Promise((resolve) => setImmediate(resolve));
+  }
+
+  /** Mémorise une décision d'ambiguïté en alias (best-effort : un échec
+   *  d'enregistrement ne fait PAS échouer l'import de la ligne). `tierId` est
+   *  BACKEND-dérivé ; `record` le revalide côté serveur de toute façon. */
+  private async rememberDecision(
+    importedName: string,
+    tierId: string | undefined,
+    type: 'CLIENT' | 'SOCIETE',
+    decidedBy?: string,
+  ): Promise<void> {
+    if (!tierId) return;
+    try {
+      await this.aliasService.record({ importedName, tierId, type, decidedBy });
+    } catch (err) {
+      this.logger.warn(
+        `Alias non mémorisé (${importedName}): ${(err as Error)?.message ?? err}`,
+      );
+    }
+  }
+
+  /** Détecte une violation d'unicité Mongo (index `_idnum`) → idempotence. */
+  private isDuplicateKeyError(err: any): boolean {
+    return (
+      !!err &&
+      (err.code === 11000 ||
+        err.code === 11001 ||
+        /E11000|duplicate key/i.test((err as Error)?.message ?? ''))
+    );
+  }
+
   /** Build the downloadable .xlsx model (headers + two example rows). */
   buildTemplate(): Buffer {
+    // Exemples NEUTRES : un Client (personne) + une Société — le modèle ne doit
+    // pas enseigner de tiers réels (les anciens COGEMHY/PERSO(PROMODAR) étaient
+    // de vraies Sociétés → il apprenait le doublon Client↔Société).
     const rows = [
       TEMPLATE_HEADERS,
-      ['T1394', 'AGRO NADHOUR', '***', 'COGEMHY', '18/06/2026', 'A28'],
-      ['T1345', 'CARTE FOUR', '4821810100', 'PERSO (PROMODAR)', '04/05/2026', 'A15'],
+      ['T1394', 'AGRO NADHOUR', '***', 'DUPONT Jean', '18/06/2026', 'A28'],
+      ['T1345', 'CARTE FOUR', '4821810100', 'EXEMPLE SARL', '04/05/2026', 'A15'],
     ];
     const ws = XLSX.utils.aoa_to_sheet(rows);
     ws['!cols'] = [{ wch: 10 }, { wch: 24 }, { wch: 14 }, { wch: 22 }, { wch: 18 }, { wch: 12 }];
@@ -286,6 +611,14 @@ export class DiImportService {
   private validate(
     rows: ParsedRow[],
     existing: { refs: Set<string>; nextAuto: number },
+    resCtx: {
+      clientCache: Map<string, string>;
+      companyCache: Map<string, string>;
+      clientIds?: Set<string>;
+      companyIds?: Set<string>;
+      aliasMap?: Map<string, any>;
+    },
+    decisions?: Map<number, 'client' | 'company'>,
   ): ImportReport {
     // Intra-file duplicate detection (case-sensitive on the exact ref string).
     const seen = new Map<string, number>();
@@ -302,6 +635,14 @@ export class DiImportService {
     for (const row of rows) {
       const motifs: string[] = [];
 
+      // Résolution du tiers en LECTURE SEULE (Client ET Société existants) —
+      // même logique qu'au persist. « des deux côtés » = collision non
+      // automatisable → à trancher manuellement (bloquant tant que la refonte
+      // interactive n'est pas là).
+      const tier = row.clientName
+        ? this.resolveTier(row.clientName, resCtx)
+        : ({ kind: 'none' } as ReturnType<DiImportService['resolveTier']>);
+
       if (!row.nDi) motifs.push('N° DI manquant');
       if (!row.designation) motifs.push('Désignation manquante');
       if (!row.clientName) motifs.push('Client manquant');
@@ -310,6 +651,21 @@ export class DiImportService {
       }
       if (row.nDi && (seen.get(row.nDi) ?? 0) > 1) {
         motifs.push(`N° DI « ${row.nDi} » en doublon dans le fichier`);
+      }
+      // Ambiguïté « both » : bloquante SAUF si l'utilisateur l'a tranchée à
+      // l'écran de vérification par une décision VALIDE. Le `kind` est filtré
+      // par la whitelist stricte : une valeur absente OU non conforme
+      // (« foo », « companyxxx », …) est traitée comme NON tranchée → la ligne
+      // est rejetée (jamais importée sans rattachement).
+      const rawDecided =
+        tier.kind === 'both' ? decisions?.get(row.ligne) : undefined;
+      const decidedTier = isValidDecisionKind(rawDecided)
+        ? rawDecided
+        : undefined;
+      if (tier.kind === 'both' && !decidedTier) {
+        motifs.push(
+          `« ${row.clientName} » existe comme Client ET comme Société — à trancher (rattachement manuel requis)`,
+        );
       }
 
       if (motifs.length > 0) {
@@ -321,6 +677,30 @@ export class DiImportService {
       // Valid row → may still carry non-blocking warnings.
       valides++;
       const rowWarnings: string[] = [];
+      // Aperçu de la résolution du tiers (informe l'utilisateur AVANT écriture).
+      // Un alias appliqué est SIGNALÉ (jamais silencieux) avec l'auteur/la date.
+      if (tier.viaAlias) {
+        const who = tier.alias?.decidedBy ? ` — décision de ${tier.alias.decidedBy}` : '';
+        rowWarnings.push(
+          `Auto-résolu par alias → ${
+            tier.kind === 'company' ? 'Société' : 'Client'
+          } « ${row.clientName} »${who} (modifiable)`,
+        );
+      } else if (tier.kind === 'both' && decidedTier) {
+        rowWarnings.push(
+          `Ambiguïté résolue → rattaché ${
+            decidedTier === 'company' ? 'à la Société' : 'au Client'
+          } « ${row.clientName} »`,
+        );
+      } else if (tier.kind === 'company') {
+        rowWarnings.push(
+          `Rattaché à la Société existante « ${row.clientName} » (aucun Client créé)`,
+        );
+      } else if (tier.kind === 'none') {
+        rowWarnings.push(
+          `Tiers « ${row.clientName} » inconnu — un Client sera créé (fiche à compléter)`,
+        );
+      }
       if (!/^T\d+$/.test(row.nDi)) {
         rowWarnings.push(`Format de réf « ${row.nDi} » inhabituel (attendu T{n})`);
       }
@@ -363,13 +743,20 @@ export class DiImportService {
   private async persist(
     rows: ParsedRow[],
     report: ImportReport,
-    createdBy?: string,
+    ctx: {
+      clientCache: Map<string, string>;
+      companyCache: Map<string, string>;
+      clientIds?: Set<string>;
+      companyIds?: Set<string>;
+      aliasMap?: Map<string, any>;
+      createdBy?: string;
+    },
   ): Promise<ImportCrees> {
     // Rows that errored during validation are excluded from the import set.
     const errorLines = new Set(report.erreurs.map((e) => e.ligne));
     const toImport = rows.filter((r) => !errorLines.has(r.ligne));
 
-    const clientCache = await this.buildClientCache();
+    const { clientCache, createdBy } = ctx;
     const locationCache = await this.buildLocationCache();
     let dis = 0;
     let clientsCreated = 0;
@@ -377,8 +764,20 @@ export class DiImportService {
 
     for (const row of toImport) {
       try {
-        const client = await this.resolveClient(row.clientName, clientCache);
-        if (client.created) clientsCreated++;
+        // Résolution (alias inclus) : Société/Client existant ou aliasé →
+        // rattacher ; inconnu → créer un Client. « both » est exclu (erreur).
+        const tier = this.resolveTier(row.clientName, ctx);
+        let clientId: string | undefined;
+        let companyId: string | undefined;
+        if (tier.kind === 'company') {
+          companyId = tier.companyId;
+        } else if (tier.kind === 'client') {
+          clientId = tier.clientId;
+        } else {
+          const client = await this.resolveClient(row.clientName, clientCache);
+          clientId = client.id;
+          if (client.created) clientsCreated++;
+        }
 
         let locationId: string | undefined;
         if (row.rangement) {
@@ -390,9 +789,10 @@ export class DiImportService {
         const input: any = {
           title: row.designation,
           nSerie: row.nSerie,
-          client_id: client.id,
+          client_id: clientId,
+          company_id: companyId,
           location_id: locationId,
-          type_client: 'Client',
+          type_client: companyId ? 'Company' : 'Client',
           status: 'CREATED',
           dateReception: row.dateValue ?? undefined,
           createdBy,
@@ -459,6 +859,121 @@ export class DiImportService {
     return map;
   }
 
+  /** Cache Sociétés par nom normalisé (name + raisonSociale). Lecture seule. */
+  private async buildCompanyCache(): Promise<Map<string, string>> {
+    const docs = await this.companyModel
+      .find({ isDeleted: { $ne: true } }, { _id: 1, name: 1, raisonSociale: 1 })
+      .lean();
+    const map = new Map<string, string>();
+    for (const c of docs) {
+      for (const label of [(c as any).name, (c as any).raisonSociale]) {
+        const key = this.norm(label);
+        if (key && !map.has(key)) map.set(key, (c as any)._id);
+      }
+    }
+    return map;
+  }
+
+  /** Résout un nom de tiers en LECTURE SEULE contre Sociétés ET Clients
+   *  existants (ne crée rien). `both` = présent des DEUX côtés → collision à
+   *  trancher (jamais d'automatisme). Sert au dry-run ET au persist (cohérence). */
+  private matchTier(
+    name: string,
+    clientCache: Map<string, string>,
+    companyCache: Map<string, string>,
+  ): {
+    kind: 'company' | 'client' | 'both' | 'none';
+    companyId?: string;
+    clientId?: string;
+  } {
+    const key = this.norm(name);
+    const companyId = key ? companyCache.get(key) : undefined;
+    const clientId = key ? clientCache.get(key) : undefined;
+    if (companyId && clientId) return { kind: 'both', companyId, clientId };
+    if (companyId) return { kind: 'company', companyId };
+    if (clientId) return { kind: 'client', clientId };
+    return { kind: 'none' };
+  }
+
+  /** Contexte de résolution chargé UNE fois par import (caches nom→id, ensembles
+   *  d'ids pour valider les alias, et la map des alias). Partagé dry-run ↔
+   *  exécution → résolution IDENTIQUE. */
+  private async loadResolutionContext(): Promise<{
+    clientCache: Map<string, string>;
+    companyCache: Map<string, string>;
+    clientIds: Set<string>;
+    companyIds: Set<string>;
+    aliasMap: Map<string, any>;
+  }> {
+    const [clients, companies, aliasMap] = await Promise.all([
+      this.clientModel
+        .find({ isDeleted: { $ne: true } }, { _id: 1, first_name: 1, last_name: 1 })
+        .lean(),
+      this.companyModel
+        .find({ isDeleted: { $ne: true } }, { _id: 1, name: 1, raisonSociale: 1 })
+        .lean(),
+      this.aliasService.getAliasMap(),
+    ]);
+    const clientCache = new Map<string, string>();
+    const clientIds = new Set<string>();
+    for (const c of clients as any[]) {
+      clientIds.add(c._id);
+      const key = this.norm(`${c.first_name ?? ''} ${c.last_name ?? ''}`);
+      if (key && !clientCache.has(key)) clientCache.set(key, c._id);
+    }
+    const companyCache = new Map<string, string>();
+    const companyIds = new Set<string>();
+    for (const c of companies as any[]) {
+      companyIds.add(c._id);
+      for (const label of [c.name, c.raisonSociale]) {
+        const key = this.norm(label);
+        if (key && !companyCache.has(key)) companyCache.set(key, c._id);
+      }
+    }
+    return { clientCache, companyCache, clientIds, companyIds, aliasMap };
+  }
+
+  /**
+   * Résolution FINALE d'un tiers = `matchTier` + application éventuelle d'un
+   * ALIAS. Sécurité : si la situation courante est AMBIGUË (« both »), l'alias
+   * n'est JAMAIS appliqué (on redemande). Sinon un alias COHÉRENT (`isValid` :
+   * tiers présent + bon type) prime et pointe le tiers précis (résout aussi les
+   * variantes de nom / homonymes). Un alias incohérent est ignoré.
+   */
+  private resolveTier(
+    name: string,
+    ctx: {
+      clientCache: Map<string, string>;
+      companyCache: Map<string, string>;
+      clientIds?: Set<string>;
+      companyIds?: Set<string>;
+      aliasMap?: Map<string, any>;
+    },
+  ): {
+    kind: 'company' | 'client' | 'both' | 'none';
+    companyId?: string;
+    clientId?: string;
+    viaAlias?: boolean;
+    alias?: any;
+  } {
+    const base = this.matchTier(name, ctx.clientCache, ctx.companyCache);
+    if (base.kind === 'both') return base; // ambigu → alias NON appliqué
+    const alias = ctx.aliasMap?.get(this.norm(name));
+    if (
+      alias &&
+      this.aliasService.isValid(
+        alias,
+        ctx.clientIds ?? new Set(),
+        ctx.companyIds ?? new Set(),
+      )
+    ) {
+      return alias.type === 'SOCIETE'
+        ? { kind: 'company', companyId: alias.tierId, viaAlias: true, alias }
+        : { kind: 'client', clientId: alias.tierId, viaAlias: true, alias };
+    }
+    return base;
+  }
+
   private async resolveClient(
     name: string,
     cache: Map<string, string>,
@@ -505,15 +1020,9 @@ export class DiImportService {
   // Primitives
   // ---------------------------------------------------------------------------
 
-  /** Normalise a label / name: lower-case, strip accents, collapse to spaces. */
+  /** Normalise a label / name — clé PARTAGÉE avec les alias (`tier_aliases`). */
   private norm(s: any): string {
-    return String(s ?? '')
-      .normalize('NFD')
-      .replace(/[̀-ͯ]/g, '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .trim()
-      .replace(/\s+/g, ' ');
+    return normalizeTierName(s);
   }
 
   /** Normalise a cell to a trimmed string (numbers → plain integer string). */

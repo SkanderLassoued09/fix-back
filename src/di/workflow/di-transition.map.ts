@@ -52,7 +52,14 @@ export const DI_TRANSITIONS = {
    */
   MANAGER_ADMIN_TO_PENDING3: {
     key: 'MANAGER_ADMIN_TO_PENDING3',
-    from: [STATUS_DI.Negotiation1.status, STATUS_DI.Negotiation2.status],
+    // Approval confirmé (BC uploadé en WAITING_BC) ou négociation 2 → PENDING3.
+    // Legacy ATTENTE_BC_DEVIS/NEGOTIATION1 tolérés (DI en vol avant migration 008).
+    from: [
+      STATUS_DI.WaitingBc.status,
+      STATUS_DI.Negotiation2.status,
+      'ATTENTE_BC_DEVIS',
+      'NEGOTIATION1',
+    ],
     to: STATUS_DI.Pending3.status,
     currentRoles: STATUS_DI.Pending3.role,
     allowedActorRoles: [Role.MANAGER, Role.ADMIN_MANAGER],

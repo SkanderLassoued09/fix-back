@@ -6,9 +6,13 @@ import { STATUS_DI } from './di.status';
 
 /**
  * PDR-based diagnostic exit routing:
- *   - NO PDR (contain_pdr false OR no components to order) → PENDING2 directly,
- *     skipping Magasin ("facturer le diagnostic"). Applies repairable or not.
+ *   - NO PDR (contain_pdr === false) → PENDING2 directly, skipping Magasin
+ *     ("facturer le diagnostic"). Applies repairable or not.
  *   - HAS PDR (contain_pdr true + components) → MagasinEstimation, unchanged.
+ *   - CONTRADICTION (contain_pdr === true mais AUCUN composant) → REFUS
+ *     (BAD_REQUEST). Garde serveur miroir du blocage UI « Suivant » : ne route
+ *     plus silencieusement vers PENDING2, et n'envoie jamais au Magasin une
+ *     demande de pièces vide. Couvre les contournements du front (appel direct).
  * The transition guard already allows INDIAGNOSTIC → PENDING2, so no guard
  * change is needed — this only adds the automatic branch in one back method.
  */
@@ -61,18 +65,21 @@ describe('DiService.changeStatusMagasinEstimation — PDR-based routing', () => 
     expect(svc.diModel.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
-  it('contain_pdr=true but NO components listed → still skips Magasin (nothing to order)', async () => {
+  it('contain_pdr=true but NO components listed → REFUSED (contradiction, no routing)', async () => {
     const svc = makeSvc({
       _id: 'DI1',
       contain_pdr: true,
       array_composants: [],
     });
 
-    await svc.changeStatusMagasinEstimation('DI1');
-
-    expect(svc.diWorkflowService.transition).toHaveBeenCalledWith(
-      expect.objectContaining({ transitionKey: 'MAGASIN_TECH_TO_PENDING2' }),
+    // Déclarer des PDR sans composant est contradictoire → refus explicite
+    // (au lieu de l'ancien routage silencieux vers PENDING2).
+    await expect(svc.changeStatusMagasinEstimation('DI1')).rejects.toThrow(
+      /PDR déclaré sans composant/,
     );
+
+    // Ni transition PENDING2 ni écriture Magasin : la soumission est rejetée.
+    expect(svc.diWorkflowService.transition).not.toHaveBeenCalled();
     expect(svc.diModel.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
