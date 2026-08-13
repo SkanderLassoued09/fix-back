@@ -49,18 +49,33 @@ const findReturning = (rows: any[]): ModelMock => ({
 interface Deps {
   diModel: ModelMock;
   clientModel: ModelMock;
+  companyModel: ModelMock;
   locationModel: ModelMock;
   diService: { createDi: jest.Mock };
   clientsService: { createClient: jest.Mock };
   locationService: { createlocation: jest.Mock };
+  aliasService: {
+    getAliasMap: jest.Mock;
+    isValid: jest.Mock;
+    record: jest.Mock;
+  };
 }
 
-function makeService(over: Partial<{ existingDi: any[]; clients: any[]; locations: any[] }> = {}) {
+function makeService(
+  over: Partial<{
+    existingDi: any[];
+    clients: any[];
+    companies: any[];
+    locations: any[];
+    aliasMap: Map<string, any>;
+  }> = {},
+) {
   let clientSeq = 0;
   let locSeq = 0;
   const deps: Deps = {
     diModel: findReturning(over.existingDi ?? []),
     clientModel: findReturning(over.clients ?? []),
+    companyModel: findReturning(over.companies ?? []),
     locationModel: findReturning(over.locations ?? []),
     diService: { createDi: jest.fn().mockResolvedValue({ _id: 'DI_rand' }) },
     clientsService: {
@@ -73,14 +88,30 @@ function makeService(over: Partial<{ existingDi: any[]; clients: any[]; location
         .fn()
         .mockImplementation(async (i: any) => ({ _id: `L${++locSeq}`, ...i })),
     },
+    aliasService: {
+      getAliasMap: jest.fn().mockResolvedValue(over.aliasMap ?? new Map()),
+      // vraie logique de cohérence : tier présent (par type) dans les ids courants
+      isValid: jest.fn((alias: any, clientIds: Set<string>, companyIds: Set<string>) =>
+        !alias?.tierId
+          ? false
+          : alias.type === 'CLIENT'
+            ? clientIds.has(alias.tierId)
+            : companyIds.has(alias.tierId),
+      ),
+      record: jest.fn().mockResolvedValue({}),
+    },
   };
   const svc = new DiImportService(
     deps.diModel as any,
     deps.clientModel as any,
+    deps.companyModel as any,
     deps.locationModel as any,
     deps.diService as any,
     deps.clientsService as any,
     deps.locationService as any,
+    { create: jest.fn(), markRunning: jest.fn(), incrementProgress: jest.fn(), complete: jest.fn(), fail: jest.fn() } as any,
+    { diImportProgress: jest.fn() } as any,
+    deps.aliasService as any,
   );
   return { svc, deps };
 }
@@ -170,6 +201,35 @@ describe('DiImportService — import (dryRun=false)', () => {
     expect(ids[0]).toBe(ids[1]);
   });
 
+  it('matches an EXISTING Société → links company_id, does NOT create a Client', async () => {
+    const { svc, deps } = makeService({
+      companies: [{ _id: 'CMP1', name: 'COGEMHY' }],
+    });
+    const buf = buildXlsx(HEADERS, [['T1', 'A', '***', 'cogemhy', '', '']]);
+    const report = await svc.run(buf, { dryRun: false });
+
+    expect(report.crees).toEqual({ dis: 1, clients: 0, locations: 0, ignorees: 0 });
+    expect(deps.clientsService.createClient).not.toHaveBeenCalled();
+    const [input] = deps.diService.createDi.mock.calls[0];
+    expect(input.company_id).toBe('CMP1');
+    expect(input.client_id).toBeUndefined();
+    expect(input.type_client).toBe('Company');
+  });
+
+  it('name present as BOTH Client and Société → row error (à trancher), never persisted', async () => {
+    const { svc, deps } = makeService({
+      clients: [{ _id: 'C9', first_name: 'KSTN', last_name: '' }],
+      companies: [{ _id: 'CMP9', name: 'KSTN' }],
+    });
+    const buf = buildXlsx(HEADERS, [['T1', 'A', '***', 'KSTN', '', '']]);
+    const report = await svc.run(buf, { dryRun: false });
+
+    expect(report.erreurs).toHaveLength(1);
+    expect(report.erreurs[0].motifs[0]).toMatch(/Client ET comme Société/i);
+    expect(report.crees!.dis).toBe(0);
+    expect(deps.diService.createDi).not.toHaveBeenCalled();
+  });
+
   it('reuses an EXISTING client/location instead of creating duplicates', async () => {
     const { svc, deps } = makeService({
       clients: [{ _id: 'C9', first_name: 'COGEMHY', last_name: '' }],
@@ -251,5 +311,70 @@ describe('DiImportService — collisions & guards', () => {
     const report = await svc.run(buf, { dryRun: true });
     expect(report.valides).toBe(1);
     expect(report.warnings.some((w) => /inhabituel/i.test(w.message))).toBe(true);
+  });
+});
+
+describe('DiImportService — alias (mémoire des décisions)', () => {
+  const promodarAlias = new Map<string, any>([
+    ['perso promodar', { importedNameNormalized: 'perso promodar', tierId: 'CMP2', type: 'SOCIETE', decidedBy: 'U1' }],
+  ]);
+
+  it('alias COHÉRENT réappliqué : variante de nom → rattachée à la Société aliasée (aucun Client créé)', async () => {
+    const { svc, deps } = makeService({
+      companies: [{ _id: 'CMP2', name: 'PROMODAR' }],
+      aliasMap: promodarAlias,
+    });
+    const buf = buildXlsx(HEADERS, [['T1', 'A', '***', 'PERSO (PROMODAR)', '', '']]);
+    const report = await svc.run(buf, { dryRun: false });
+    expect(report.crees).toEqual({ dis: 1, clients: 0, locations: 0, ignorees: 0 });
+    expect(deps.clientsService.createClient).not.toHaveBeenCalled();
+    const [input] = deps.diService.createDi.mock.calls[0];
+    expect(input.company_id).toBe('CMP2');
+    expect(input.client_id).toBeUndefined();
+  });
+
+  it('alias vers tiers SUPPRIMÉ/inexistant → ignoré → un Client est créé', async () => {
+    const { svc, deps } = makeService({
+      companies: [], // CMP2 n'existe plus → alias incohérent
+      aliasMap: promodarAlias,
+    });
+    const buf = buildXlsx(HEADERS, [['T1', 'A', '***', 'PERSO (PROMODAR)', '', '']]);
+    const report = await svc.run(buf, { dryRun: false });
+    expect(deps.clientsService.createClient).toHaveBeenCalledTimes(1);
+    expect(report.crees!.clients).toBe(1);
+  });
+
+  it('nom « both » MALGRÉ un alias → reste AMBIGU (alias non appliqué aveuglément)', async () => {
+    const aliasBoth = new Map<string, any>([
+      ['cogemhy', { importedNameNormalized: 'cogemhy', tierId: 'CMP1', type: 'SOCIETE', decidedBy: 'U1' }],
+    ]);
+    const { svc } = makeService({
+      clients: [{ _id: 'C9', first_name: 'COGEMHY', last_name: '' }],
+      companies: [{ _id: 'CMP1', name: 'COGEMHY' }],
+      aliasMap: aliasBoth,
+    });
+    const buf = buildXlsx(HEADERS, [['T1', 'A', '***', 'COGEMHY', '', '']]);
+    const report = await svc.run(buf, { dryRun: true });
+    expect(report.erreurs).toHaveLength(1);
+    expect(report.erreurs[0].motifs[0]).toMatch(/Client ET comme Société/i);
+  });
+
+  it('dry-run ET persist utilisent la MÊME résolution (alias appliqué des deux côtés)', async () => {
+    const dry = makeService({ companies: [{ _id: 'CMP2', name: 'PROMODAR' }], aliasMap: promodarAlias });
+    const dryReport = await dry.svc.run(
+      buildXlsx(HEADERS, [['T1', 'A', '***', 'PERSO (PROMODAR)', '', '']]),
+      { dryRun: true },
+    );
+    const dryLine = dryReport.lignes[0];
+    expect(dryLine.statut).toBe('avertissement');
+    expect(dryLine.motifs.some((m) => /alias/i.test(m))).toBe(true);
+
+    const wet = makeService({ companies: [{ _id: 'CMP2', name: 'PROMODAR' }], aliasMap: promodarAlias });
+    await wet.svc.run(
+      buildXlsx(HEADERS, [['T1', 'A', '***', 'PERSO (PROMODAR)', '', '']]),
+      { dryRun: false },
+    );
+    const [input] = wet.deps.diService.createDi.mock.calls[0];
+    expect(input.company_id).toBe('CMP2'); // même cible qu'au dry-run
   });
 });

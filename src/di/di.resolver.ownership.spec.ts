@@ -75,6 +75,7 @@ describe('DiResolver — technician ownership enforcement', () => {
       diService as any,
       makeStatService(ownedStat),
       {} as any,
+      { verifyPassword: jest.fn() } as any,
     );
   });
 
@@ -142,6 +143,7 @@ describe('DiResolver — technician ownership enforcement', () => {
       diService as any,
       makeStatService({ id_tech_rep: 'alice' }),
       {} as any,
+      { verifyPassword: jest.fn() } as any,
     );
     await expect(resolver.changeStatusInRepair(OWNER, 'DI1')).resolves.toBe(
       true,
@@ -153,6 +155,7 @@ describe('DiResolver — technician ownership enforcement', () => {
       diService as any,
       makeStatService(null),
       {} as any,
+      { verifyPassword: jest.fn() } as any,
     );
     await expect(resolver.changeStatusInRepair(OWNER, 'DI1')).rejects.toThrow(
       ForbiddenException,

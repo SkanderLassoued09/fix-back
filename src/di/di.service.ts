@@ -82,6 +82,8 @@ export class DiService {
     private readonly profileService: ProfileService,
     @InjectModel(Stat.name)
     private readonly statModel: Model<Stat>,
+    @InjectModel('Counter')
+    private readonly counterModel: Model<any>,
     private readonly statsService: StatService,
     private readonly notificationGateway: NotificationsGateway,
     private readonly auditService: AuditService,
@@ -429,24 +431,80 @@ export class DiService {
    * (`INMAG-…`, `LIFE-…`, even a previous `DINaN`) are IGNORED so the parse can
    * never yield `NaN`. Next = max(valid)+1, fallback 1 when none.
    *
-   * NOTE: this remains a `max+1` read (not an atomic counter). Two strictly
-   * simultaneous creations could in theory read the same max — acceptable at
-   * this volume; switch to a `counters` doc + `$inc` if that ever bites.
+   * ATOMIQUE : `counters/di_ref` + `$inc` (fin du `max+1` en lecture). Le
+   * compteur est seedé au max existant (idempotent, une fois par process) puis
+   * incrémenté de façon atomique — deux créations concurrentes obtiennent deux
+   * numéros distincts. L'index unique sur `_idnum` reste le garde-fou final.
    */
-  async generateClientId(): Promise<number> {
+  private static readonly DI_REF_COUNTER = 'di_ref';
+  private diRefCounterSeeded = false;
+
+  /**
+   * Liste blanche des motifs d'annulation (atelier de réparation industrielle).
+   * Le front envoie le CODE ; on persiste le libellé. « AUTRE » ⇒ texte libre
+   * obligatoire (cf. `annulerDi`). Source d'autorité : le serveur, pas le front.
+   */
+  private static readonly ANNUL_MOTIFS: Record<string, string> = {
+    PRIX_TROP_ELEVE: 'Prix trop élevé',
+    DELAI_TROP_LONG: 'Délai trop long',
+    PIECE_INTROUVABLE: 'Pièce introuvable / non disponible',
+    IRREPARABLE: 'Équipement irréparable',
+    CLIENT_RENONCE: 'Client a renoncé',
+    REPARE_AILLEURS: 'Réparé ailleurs',
+    DOUBLON_ERREUR: 'Doublon / erreur de saisie',
+    AUTRE: 'Autre',
+  };
+
+  /** Max courant de `_idnum` (scan `^(DI|T)\d+$`) — sert au seed + garde-fou. */
+  private async currentMaxDiRefNumber(): Promise<number> {
     const rows = await this.diModel
       .find({ _idnum: { $regex: '^(DI|T)[0-9]+$' } }, { _idnum: 1 })
       .lean();
     let max = 0;
     for (const r of rows) {
-      // Strip the prefix (DI or T) and read the trailing number; non-matching
-      // ids are skipped (never NaN-poison the max).
       const m = String((r as any)?._idnum ?? '').match(/^(?:DI|T)(\d+)$/);
       if (!m) continue;
       const n = parseInt(m[1], 10);
       if (Number.isFinite(n) && n > max) max = n;
     }
-    return max + 1; // ≥ 1 → never collides with the current max
+    return max;
+  }
+
+  /** Seed idempotent (une fois/process) : porte le compteur AU MOINS au max
+   *  existant. `$max` ne fait jamais redescendre → sûr que la migration ait
+   *  tourné ou non, et sur une base fraîche (max=0 → 1er = T1). */
+  private async ensureDiRefCounterSeeded(): Promise<void> {
+    if (this.diRefCounterSeeded) return;
+    const max = await this.currentMaxDiRefNumber();
+    await this.counterModel.updateOne(
+      { _id: DiService.DI_REF_COUNTER },
+      { $max: { seq: max } },
+      { upsert: true },
+    );
+    this.diRefCounterSeeded = true;
+  }
+
+  /** Prochain numéro de référence DI — ATOMIQUE (`$inc` mono-document). */
+  async nextDiRefNumber(): Promise<number> {
+    await this.ensureDiRefCounterSeeded();
+    const doc = await this.counterModel.findOneAndUpdate(
+      { _id: DiService.DI_REF_COUNTER },
+      { $inc: { seq: 1 } },
+      { new: true, upsert: true, setDefaultsOnInsert: true },
+    );
+    return (doc as any).seq;
+  }
+
+  /** Avance le compteur AU-DESSUS d'une référence absorbée depuis un fichier
+   *  d'import (T{n}), pour qu'une future auto-génération ne la re-produise pas.
+   *  Atomique (`$max`) — n'a d'effet que si `n` dépasse le compteur courant. */
+  async bumpDiRefTo(n: number): Promise<void> {
+    if (!Number.isFinite(n) || n <= 0) return;
+    await this.counterModel.updateOne(
+      { _id: DiService.DI_REF_COUNTER },
+      { $max: { seq: n } },
+      { upsert: true },
+    );
   }
 
   /**
@@ -471,8 +529,12 @@ export class DiService {
       createDiInput._id = `DI_${nanoid(4)}`;
       if (opts?.forcedRef) {
         createDiInput._idnum = opts.forcedRef;
+        // Import absorbant une référence du fichier (T{n}) : avancer le compteur
+        // au-dessus, sinon une future auto-génération re-produirait ce numéro.
+        const m = String(opts.forcedRef).match(/^(?:DI|T)(\d+)$/);
+        if (m) await this.bumpDiRefTo(parseInt(m[1], 10));
       } else {
-        const index = await this.generateClientId();
+        const index = await this.nextDiRefNumber();
         createDiInput._idnum = `T${index}`;
       }
 
@@ -1117,6 +1179,11 @@ export class DiService {
           componentsConfirmedBy: di.componentsConfirmedBy,
           price: di.price ?? null,
           final_price: di.final_price ?? null,
+          annulationParClient: di.annulationParClient,
+          annulationMotif: di.annulationMotif,
+          annulationCommentaire: di.annulationCommentaire,
+          annulePar: di.annulePar,
+          annuleLe: di.annuleLe,
           createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
           image: di?.image?.length > 0 ? di.image : '-',
           client_id: di.client_id?.first_name ?? '-',
@@ -1232,6 +1299,11 @@ export class DiService {
           componentsConfirmedBy: di.componentsConfirmedBy,
           price: di.price ?? null,
           final_price: di.final_price ?? null,
+          annulationParClient: di.annulationParClient,
+          annulationMotif: di.annulationMotif,
+          annulationCommentaire: di.annulationCommentaire,
+          annulePar: di.annulePar,
+          annuleLe: di.annuleLe,
           createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
           image: di?.image?.length > 0 ? di.image : '-',
           client_id: di.client_id?.first_name ?? '-',
@@ -2161,15 +2233,69 @@ export class DiService {
     return result;
   }
 
-  //from manager or AdminsManager to annuler DI
-  // Negotiation1 or Negotiation2 => Annuler
-  async annulerDi(_idDI: string) {
+  // Annulation d'une DI par le coordinateur (confirmée par mot de passe côté
+  // resolver). Autorisée À TOUT MOMENT (décision produit) SAUF si déjà annulée.
+  // Persiste le motif + qui/quand + « à la demande du client ? », puis notifie
+  // Discord. Le mot de passe n'atteint JAMAIS cette couche (vérifié amont).
+  async annulerDi(
+    _idDI: string,
+    data: {
+      parClient: boolean;
+      motif: string;
+      motifAutre?: string;
+      commentaire?: string;
+      annulePar: string;
+    },
+  ) {
+    // Liste blanche des motifs : le code doit exister. « AUTRE » exige un texte.
+    const label = DiService.ANNUL_MOTIFS[data.motif];
+    if (!label) {
+      throw new GraphQLError(
+        `Motif d'annulation invalide: « ${data.motif} ».`,
+        { extensions: { code: 'BAD_REQUEST' } },
+      );
+    }
+    let motifFinal = label;
+    if (data.motif === 'AUTRE') {
+      const texte = (data.motifAutre ?? '').trim();
+      if (!texte) {
+        throw new GraphQLError(
+          'Motif « Autre » : le texte libre est obligatoire.',
+          { extensions: { code: 'BAD_REQUEST' } },
+        );
+      }
+      motifFinal = texte;
+    }
+
+    const di = await this.diModel
+      .findOne({ _id: _idDI })
+      .select('status')
+      .lean();
+    if (!di) {
+      throw new GraphQLError(`DI '${_idDI}' introuvable.`, {
+        extensions: { code: 'NOT_FOUND' },
+      });
+    }
+    if ((di as any).status === STATUS_DI.Annuler.status) {
+      throw new GraphQLError('Cette DI est déjà annulée.', {
+        extensions: { code: 'BAD_REQUEST' },
+      });
+    }
+    // Annulation autorisée depuis n'importe quel statut (échappatoire produit) :
+    // la garde de transition ne restreint pas ANNULER (aucune entrée de table).
+    assertDiTransition((di as any).status, STATUS_DI.Annuler.status);
+
     const updated = await this.diModel.findOneAndUpdate(
       { _id: _idDI },
       {
         $set: {
           current_roles: [Role.ADMIN_MANAGER, Role.ADMIN_TECH, Role.MANAGER],
           status: STATUS_DI.Annuler.status,
+          annulationParClient: !!data.parClient,
+          annulationMotif: motifFinal,
+          annulationCommentaire: (data.commentaire ?? '').trim() || null,
+          annulePar: data.annulePar,
+          annuleLe: new Date(),
         },
       },
       { new: true },
@@ -2440,6 +2566,11 @@ export class DiService {
       status: di.status,
       retourReason: di.retourReason,
       retourDate: di.retourDate,
+      annulationParClient: di.annulationParClient,
+      annulationMotif: di.annulationMotif,
+      annulationCommentaire: di.annulationCommentaire,
+      annulePar: di.annulePar,
+      annuleLe: di.annuleLe,
       pricingRequestSentAt: di.pricingRequestSentAt,
       // Resolve the actor profile ids to NAMES — the flow timeline must never
       // render a raw ObjectId (getTech returns 'Unknown' for a missing/deleted

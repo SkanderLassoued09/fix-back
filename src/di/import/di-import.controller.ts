@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Controller,
   Get,
+  Param,
   Post,
   Query,
   Req,
@@ -14,6 +15,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { Request, Response } from 'express';
 import { RestJwtAuthGuard } from 'src/auth/rest-jwt-auth-guard';
 import { DiImportService } from './di-import.service';
+import { DiImportJobService } from './di-import-job.service';
 
 /**
  * REST surface for the bulk DI import (multipart — outside GraphQL).
@@ -27,7 +29,10 @@ import { DiImportService } from './di-import.service';
  */
 @Controller('di')
 export class DiImportController {
-  constructor(private readonly importService: DiImportService) {}
+  constructor(
+    private readonly importService: DiImportService,
+    private readonly jobService: DiImportJobService,
+  ) {}
 
   @Post('import')
   @UseGuards(RestJwtAuthGuard)
@@ -52,6 +57,57 @@ export class DiImportController {
     const isDryRun = String(dryRun) !== 'false';
     const createdBy = (req as any)?.user?._id;
     return this.importService.run(file.buffer, { dryRun: isDryRun, createdBy });
+  }
+
+  /**
+   * Exécution ASYNCHRONE en JOB : démarre le traitement par lots côté serveur et
+   * renvoie IMMÉDIATEMENT `{ jobId, total }`. La progression arrive via le WS
+   * `di-import.progress` (filtré par `jobId`) et l'état persiste dans
+   * `di_import_jobs` (consultable après fermeture d'onglet). Le chemin synchrone
+   * `POST /di/import?dryRun=false` reste inchangé (non-régression).
+   */
+  @Post('import/execute')
+  @UseGuards(RestJwtAuthGuard)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 8 * 1024 * 1024, files: 1 },
+    }),
+  )
+  async execute(
+    @UploadedFile() file: { originalname?: string; buffer?: Buffer } | undefined,
+    @Req() req: Request,
+  ) {
+    if (!file || !file.buffer) {
+      throw new BadRequestException('Fichier manquant (champ « file »).');
+    }
+    if (!/\.xlsx$/i.test(file.originalname ?? '')) {
+      throw new BadRequestException('Format invalide : un fichier .xlsx est attendu.');
+    }
+    const createdBy = (req as any)?.user?._id;
+    // Décisions d'ambiguité (résolutions « both ») transmises en champ `decisions`
+    // du multipart (JSON). Tolérant : format invalide → ignoré (aucune décision).
+    let decisions: Array<{ ligne: number; kind: 'client' | 'company' }> = [];
+    const rawDecisions = (req as any)?.body?.decisions;
+    if (rawDecisions) {
+      try {
+        const parsed = JSON.parse(rawDecisions);
+        if (Array.isArray(parsed)) decisions = parsed;
+      } catch {
+        /* champ malformé → aucune décision appliquée */
+      }
+    }
+    return this.importService.executeAsJob(file.buffer, { createdBy, decisions });
+  }
+
+  /**
+   * Récupération d'un job (reconnexion/réouverture). SÉCURISÉ : un utilisateur
+   * ne récupère QUE ses propres jobs (`getForUser` → Forbidden sinon).
+   */
+  @Get('import/jobs/:jobId')
+  @UseGuards(RestJwtAuthGuard)
+  async job(@Param('jobId') jobId: string, @Req() req: Request) {
+    const userId = (req as any)?.user?._id;
+    return this.jobService.getForUser(jobId, userId);
   }
 
   @Get('import/template')
