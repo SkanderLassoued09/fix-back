@@ -43,6 +43,9 @@ function makeSvc(di: any) {
     sendDiagnosticFinished: jest.fn().mockResolvedValue(undefined),
   };
   svc.notificationGateway = { updateTicket: jest.fn() };
+  // Notification ERP : le Magasin doit être prévenu quand la DI arrive en
+  // estimation (diagnostic terminé AVEC PDR).
+  svc.notificationService = { emit: jest.fn().mockResolvedValue({}) };
   svc.captureDiscordFailure = jest.fn();
   return svc;
 }
@@ -63,6 +66,12 @@ describe('DiService.changeStatusMagasinEstimation — PDR-based routing', () => 
     );
     // …and did NOT write MagasinEstimation.
     expect(svc.diModel.findOneAndUpdate).not.toHaveBeenCalled();
+    // Pas de PDR → le Magasin n'a rien à estimer → aucune notif d'ESTIMATION
+    // Magasin (la route PENDING2 émet DI_PENDING2 vers la coordination, c'est
+    // normal ; ce qui compte : PAS de DI_MAGASIN_ESTIMATION ici).
+    expect(svc.notificationService.emit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'DI_MAGASIN_ESTIMATION' }),
+    );
   });
 
   it('contain_pdr=true but NO components listed → REFUSED (contradiction, no routing)', async () => {
@@ -99,6 +108,15 @@ describe('DiService.changeStatusMagasinEstimation — PDR-based routing', () => 
     );
     expect(svc.diModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
     expect(svc.diWorkflowService.transition).not.toHaveBeenCalled();
+    // Bug 2 : le Magasin EST notifié à ce moment précis (1er contact avec la DI),
+    // ciblé sur le rôle Magasin, type dédié (distinct de DI_IN_MAGASIN).
+    expect(svc.notificationService.emit).toHaveBeenCalledTimes(1);
+    expect(svc.notificationService.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'DI_MAGASIN_ESTIMATION',
+        notify: { roles: ['Magasin'] },
+      }),
+    );
   });
 });
 
@@ -135,6 +153,12 @@ function makeFinishSvc(di: any) {
     sendDiagnosticFinished: jest.fn().mockResolvedValue(undefined),
   };
   svc.notificationGateway = { updateTicket: jest.fn() };
+  // Notif ERP de clôture : ce chemin (retour → FINISHED direct) ne passe pas par
+  // finalizeFinished → il doit émettre DI_FINISHED lui-même.
+  svc.notificationService = { emit: jest.fn().mockResolvedValue({}) };
+  svc.statsService.findUserLinkedToConcernedDi = jest
+    .fn()
+    .mockResolvedValue(null);
   svc.captureDiscordFailure = jest.fn();
   return svc;
 }
@@ -167,6 +191,22 @@ describe('DiService.changeStatusTofinsh — non-repairable routing', () => {
     expect(svc.diModel.findOneAndUpdate).toHaveBeenCalledTimes(1); // → FINISHED
     expect(svc.diWorkflowService.transition).not.toHaveBeenCalled();
     expect(svc.discordHookService.sendDiFinished).toHaveBeenCalledTimes(1);
+    // Clôture par ce chemin direct → DI_FINISHED émis aussi (sinon PERSONNE
+    // n'est notifié). Rôles de suivi = tous sauf Tech.
+    expect(svc.notificationService.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'DI_FINISHED',
+        notify: {
+          roles: [
+            'Manager',
+            'Admin_Manager',
+            'Admin_Tech',
+            'Coordinator',
+            'Magasin',
+          ],
+        },
+      }),
+    );
   });
 
   it('a reparation-finish (status INREPARATION) is NOT redirected → FINISHED', async () => {

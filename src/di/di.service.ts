@@ -591,6 +591,16 @@ export class DiService {
       // Discord webhook per imported row.
       if (!opts?.skipNotify && di.status === 'PENDING1') {
         this.discordHookService.sendDiPendingNotification(di);
+        // Notif ERP : une DI créée DIRECTEMENT en PENDING1 (case cochée à la
+        // création) doit prévenir la coordination — sinon la cloche ne reçoit
+        // rien (seul Discord partait). Best-effort.
+        await this.emitDiHandoff(
+          di._id as any,
+          di,
+          'DI_PENDING1',
+          `Nouvelle DI à affecter (${(di as any)?._idnum ?? di._id})`,
+          ['Coordinator'],
+        );
       }
 
       return di;
@@ -738,9 +748,13 @@ export class DiService {
           type: 'DI_DOC_DEVIS',
           diId: _id,
           actorId: null,
-          message: `Devis ajouté (${(di as any)?._idnum ?? _id})`,
+          message: `DI ${
+            (di as any)?._idnum ?? _id
+          } — devis ajouté (à vérifier), en attente de BC`,
           payload: { doc: 'Devis' },
-          notify: { roles: ['Coordinator'] },
+          notify: {
+            roles: ['Manager', 'Coordinator', 'Admin_Tech', 'Admin_Manager'],
+          },
         });
       } catch (err) {
         await this.captureDiscordFailure('erp-notification', err);
@@ -878,6 +892,14 @@ export class DiService {
         // Completes the BL + Facture pair? Auto-close if waiting (atomic).
         await this.maybeAdvanceDocGate(_id);
       }
+
+      // NB : PAS de notification ERP « facture ajoutée » ici. La facture est le
+      // document de CLÔTURE : dans le chemin normal, `maybeAdvanceDocGate`
+      // ci-dessus fait passer la DI à FINISHED, qui émet déjà `DI_FINISHED`
+      // (tous les rôles sauf Tech). Un `DI_DOC_FACTURE` en plus ferait doublon
+      // pour le même moment métier. La matrice n'a d'ailleurs pas de ligne
+      // « facture uploadée ».
+
       // Return the fresh DI (mutation is typed `() => Di`).
       return await this.diModel.findOne({ _id });
     } catch (error) {
@@ -890,6 +912,29 @@ export class DiService {
     try {
       const di = await this.diModel.findOne({ _id });
       if (!di) throw new Error(`DI '${_id}' not found`);
+
+      // GARDE P3 — pas de BC tant que le devis n'est pas présent. C'est LA vraie
+      // garde (le grisage front n'est que du confort) : elle couvre aussi les
+      // appels API directs. On échoue AVANT l'upload Drive (fail-fast, pas de
+      // fichier orphelin).
+      //
+      // « Devis présent » = ref structurée `driveDocs.Devis` (DI récentes) OU
+      // l'ancien champ `devis` (DI legacy pré-split). Conséquence pour les 42 DI
+      // legacy en ATTENTE_BC_DEVIS/NEGOTIATION1 : celles qui ONT déjà un devis
+      // (champ `devis` renseigné) passent ; celles SANS devis sont bloquées —
+      // c'est exactement le comportement voulu (migration 008 = « devis présent »
+      // → WAITING_BC, « devis absent » → WAITING_DEVIS), pas un blocage absurde.
+      // Retour (ignoreCount>0) : le devis du cycle initial reste sur la DI, donc
+      // la garde passe naturellement (les docs de retour vont en logsDi).
+      const hasDevis =
+        this.isDriveDocRef((di as any)?.driveDocs?.Devis) ||
+        !!(di as any)?.devis;
+      if (!hasDevis) {
+        throw new GraphQLError(
+          'Bon de commande refusé : le devis doit être uploadé avant le BC.',
+          { extensions: { code: 'BC_REQUIRES_DEVIS' } },
+        );
+      }
 
       const { webViewLink, driveFileId, fileName } =
         await this.uploadDiDocToDrive(di, pdf, 'BC');
@@ -930,9 +975,11 @@ export class DiService {
           type: 'DI_DOC_BC',
           diId: _id,
           actorId: null,
-          message: `Bon de commande ajouté (${(di as any)?._idnum ?? _id})`,
+          message: `DI ${
+            (di as any)?._idnum ?? _id
+          } — bon de commande ajouté (à vérifier)`,
           payload: { doc: 'BC' },
-          notify: { roles: ['Coordinator'] },
+          notify: { roles: ['Admin_Manager'] },
         });
       } catch (err) {
         await this.captureDiscordFailure('erp-notification', err);
@@ -1461,6 +1508,15 @@ export class DiService {
       skipRoleValidation: true,
     });
 
+    // Relance manager → la COORDINATION peut (ré)affecter un technicien.
+    await this.emitDiHandoff(
+      _idDI,
+      result.di,
+      'DI_PENDING1',
+      `DI à affecter au diagnostic (${(result.di as any)?._idnum ?? _idDI})`,
+      ['Coordinator'],
+    );
+
     return result.di;
   }
 
@@ -1499,6 +1555,17 @@ export class DiService {
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
+
+    // Diagnostic terminé → DI en PENDING2 : la COORDINATION doit router la suite.
+    await this.emitDiHandoff(
+      _idDI,
+      result.di,
+      'DI_PENDING2',
+      `DI en attente de suite après diagnostic (${
+        (result.di as any)?._idnum ?? _idDI
+      })`,
+      ['Coordinator'],
+    );
 
     return result.di;
   }
@@ -2063,6 +2130,19 @@ export class DiService {
       content: { result: finished, states: finished },
       target: {},
     });
+
+    // FIN D'AFFAIRE : ce n'est pas de l'action mais de la CLÔTURE (facturation,
+    // suivi client, KPI). Matrice : TOUS les rôles de suivi sauf le Tech
+    // (le technicien a fini son intervention, plus rien à faire de son côté).
+    // Point UNIQUE = un seul emit par FINISHED réel, quel que soit le chemin
+    // d'entrée. Acteur inconnu (contexte interne).
+    await this.emitDiHandoff(
+      finished?._id,
+      finished,
+      'DI_FINISHED',
+      `Intervention terminée (${finished?._idnum ?? finished?._id})`,
+      ['Manager', 'Admin_Manager', 'Admin_Tech', 'Coordinator', 'Magasin'],
+    );
   }
 
   /**
@@ -2169,6 +2249,18 @@ export class DiService {
         content: { result: waiting, states: waiting },
         target: {},
       });
+      // Réparation TERMINÉE → la DI attend son BL. On notifie la coordination et
+      // les rôles de suivi (le Tech a fini, il est exclu). Émis AVANT la cascade
+      // documentaire ci-dessous pour refléter le moment réel de fin de répa.
+      await this.emitDiHandoff(
+        _id,
+        waiting,
+        'DI_REP_FINISHED',
+        `DI ${
+          (waiting as any)?._idnum ?? _id
+        } — réparation terminée, en attente de BL`,
+        ['Coordinator', 'Manager', 'Admin_Tech', 'Admin_Manager'],
+      );
       // Si des documents étaient déjà présents (ex. ré-upload en retour avant la
       // fin), la chaîne cascade immédiatement (WAITING_BL → WAITING_FACTURE →
       // FINISHED) — idempotent/no-op sinon.
@@ -2212,6 +2304,18 @@ export class DiService {
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
+
+    // CLÔTURE : ce chemin (retour non réparable → FINISHED direct) ne passe PAS
+    // par `finalizeFinished`, donc il faut émettre `DI_FINISHED` ICI aussi —
+    // sinon une DI clôturée par ce chemin ne notifie PERSONNE. Mêmes rôles que
+    // finalizeFinished (tous les rôles de suivi sauf le Tech).
+    await this.emitDiHandoff(
+      result?._id,
+      result,
+      'DI_FINISHED',
+      `Intervention terminée (${(result as any)?._idnum ?? result?._id})`,
+      ['Manager', 'Admin_Manager', 'Admin_Tech', 'Coordinator', 'Magasin'],
+    );
 
     return result;
   }
@@ -2257,6 +2361,17 @@ export class DiService {
     } else {
       await this.statsService.updateStatus(_id, STATUS_DI.Pending1.status);
     }
+    // Notif ERP : « Renvoyer au diagnostic » (PRICING → PENDING1) renvoie la DI
+    // à la coordination pour ré-affecter un tech → elle doit être notifiée.
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_PENDING1',
+      `DI renvoyée au diagnostic — à réaffecter (${
+        (result as any)?._idnum ?? _id
+      })`,
+      ['Coordinator'],
+    );
     return result;
   }
 
@@ -2591,6 +2706,26 @@ export class DiService {
   }
 
   /**
+   * Détail d'UNE DI dans la MÊME projection que la liste coordinatrice
+   * (`mapCoordinatorDiRow` : noms client/société/lieu résolus, techDiag/techRep,
+   * documents, historique d'annulation…). Alimente le modal détail PARTAGÉ
+   * ouvert par un clic sur une notification (deep-link), depuis n'importe quelle
+   * page. Renvoie `null` si la DI est introuvable.
+   */
+  async getDiDetailById(_id: string) {
+    const di = await this.diModel
+      .findOne({ _id })
+      .populate('client_id', 'first_name last_name')
+      .populate('company_id', 'name')
+      .populate('createdBy', 'firstName lastName')
+      .populate('location_id', 'location_name')
+      .populate('di_category_id', '_id category')
+      .exec();
+    if (!di) return null;
+    return this.mapCoordinatorDiRow(di);
+  }
+
+  /**
    * SOURCE UNIQUE de la projection d'une DI pour les vues coordinatrice
    * (liste paginée ET recherche). `get_coordinatorDI` et `searchCoordinatorDI`
    * DOIVENT renvoyer EXACTEMENT les mêmes champs : sinon une DI atteinte par
@@ -2919,6 +3054,14 @@ export class DiService {
       target: {},
     });
 
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_PENDING1',
+      `DI à affecter au diagnostic (${(result as any)?._idnum ?? _id})`,
+      ['Coordinator'],
+    );
+
     return result;
   }
 
@@ -2993,6 +3136,14 @@ export class DiService {
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
+
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_IN_MAGASIN',
+      `DI arrivée au magasin (${(result as any)?._idnum ?? _id})`,
+      ['Magasin'],
+    );
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
@@ -3069,6 +3220,22 @@ export class DiService {
       );
     }
 
+    // C'EST ICI que la DI arrive au Magasin après un diagnostic AVEC PDR : le
+    // magasin doit estimer les composants. C'est le PREMIER contact du magasin
+    // avec la DI → on le notifie (auparavant : aucune notification à ce moment).
+    // Distinct de `DI_IN_MAGASIN` (phase préparation/sourcing APRÈS le BC, non
+    // consécutive : MagasinEstimation → PENDING2 → … → BC → CONFIRMATION), donc
+    // AUCUN doublon.
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_MAGASIN_ESTIMATION',
+      `DI ${
+        (result as any)?._idnum ?? _id
+      } — diagnostic terminé, composants à estimer`,
+      ['Magasin'],
+    );
+
     this.notificationGateway.updateTicket({
       action: 'updateState',
       content: { result, states: result },
@@ -3115,6 +3282,14 @@ export class DiService {
       await this.captureDiscordFailure('discord-notification', err);
     }
 
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_PENDING2',
+      `DI en attente de suite (${(result as any)?._idnum ?? _id})`,
+      ['Coordinator'],
+    );
+
     // existing socket notification
     this.notificationGateway.updateTicket({
       action: 'updateState',
@@ -3160,6 +3335,17 @@ export class DiService {
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
+
+    // Le demandeur (`pricingRequestSentBy`) est l'ACTEUR → exclu de ses propres
+    // notifications ; l'admin qui doit fixer le prix est prévenu.
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_PRICING',
+      `Prix à fixer (${(result as any)?._idnum ?? _id})`,
+      ['Admin_Manager', 'Admin_Tech'],
+      { id: pricingRequestSentBy ?? null },
+    );
 
     // existing notifications
     this.notificationGateway.sendNotifcationToAdmins(
@@ -3225,6 +3411,14 @@ export class DiService {
       await this.captureDiscordFailure('discord-notification', err);
     }
 
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_NEGOTIATION1',
+      `DI ${(result as any)?._idnum ?? _id} en attente de devis`,
+      ['Manager', 'Coordinator', 'Admin_Tech', 'Admin_Manager'],
+    );
+
     this.notificationGateway.updateTicket({
       action: 'updateState',
       content: { result, states: result },
@@ -3264,6 +3458,14 @@ export class DiService {
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
+
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_NEGOTIATION2',
+      `DI en négociation admin (${(result as any)?._idnum ?? _id})`,
+      ['Admin_Manager'],
+    );
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
@@ -3348,6 +3550,14 @@ export class DiService {
       await this.captureDiscordFailure('discord-notification', err);
     }
 
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_PENDING3',
+      `DI à affecter en réparation (${(result as any)?._idnum ?? _id})`,
+      ['Coordinator'],
+    );
+
     // existing socket notification
     this.notificationGateway.updateTicket({
       action: 'updateState',
@@ -3389,6 +3599,36 @@ export class DiService {
       await this.discordHookService.sendDiInReparation(result);
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
+    }
+
+    // Notification ERP CIBLÉE sur le technicien affecté à la RÉPARATION — MIROIR
+    // exact de l'affectation diagnostic (`coordinator_ToDiag` → DI_ASSIGNED_DIAG).
+    // Auparavant : le tech réparateur n'était JAMAIS notifié (l'émetteur
+    // `coordinator_ToRep` était du code mort ; le vrai chemin `affectForRep` ne
+    // faisait qu'un `updateTicket`). Le tech est porté par la Stat (`id_tech_rep`,
+    // posé par `affectForRep` juste avant ce passage en réparation). Best-effort.
+    let repTechId: string | null = null;
+    try {
+      const stat: any = await this.statsService.findUserLinkedToConcernedDi(_id);
+      repTechId = stat?.id_tech_rep ?? null;
+    } catch {
+      /* tech = contexte best-effort — n'échoue jamais la transition */
+    }
+    if (repTechId) {
+      try {
+        await this.notificationService.emit({
+          type: 'DI_ASSIGNED_REP',
+          diId: _id,
+          actorId: null,
+          message: `Nouvelle DI affectée en réparation (${
+            (result as any)?._idnum ?? _id
+          })`,
+          payload: { status: STATUS_DI.Reparation.status },
+          notify: { userIds: [repTechId] },
+        });
+      } catch (err) {
+        await this.captureDiscordFailure('erp-notification', err);
+      }
     }
 
     this.notificationGateway.updateTicket({
@@ -3652,9 +3892,13 @@ export class DiService {
         type: 'DI_DOC_BL',
         diId: _id,
         actorId: null,
-        message: `Bon de livraison ajouté (${di?._idnum ?? _id})`,
+        message: `DI ${
+          di?._idnum ?? _id
+        } — bon de livraison ajouté, en attente de facture`,
         payload: { doc: 'BL' },
-        notify: { roles: ['Coordinator'] },
+        notify: {
+          roles: ['Coordinator', 'Manager', 'Admin_Tech', 'Admin_Manager'],
+        },
       });
     } catch (err) {
       await this.captureDiscordFailure('erp-notification', err);
@@ -3684,6 +3928,35 @@ export class DiService {
       await this.captureDiscordFailure('erp-notification', err);
     }
   }
+
+  /**
+   * Point d'aide UNIQUE pour les hand-offs de statut : un seul `emit()` (via le
+   * point central), mapping de rôles centralisé, acteur exclu de ses propres
+   * notifications (géré par `emit`). Best-effort — n'échoue jamais la transition.
+   */
+  private async emitDiHandoff(
+    _id: string,
+    di: any,
+    type: string,
+    message: string,
+    roles: string[],
+    actor?: { id?: string | null; role?: string | null },
+  ): Promise<void> {
+    try {
+      await this.notificationService.emit({
+        type,
+        diId: _id,
+        actorId: actor?.id ?? null,
+        actorRole: actor?.role ?? null,
+        message,
+        payload: { status: di?.status ?? null },
+        notify: { roles },
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('erp-notification', err);
+    }
+  }
+
   async changeToPending1(_id: string) {
     const pending1 = await this.diModel.updateOne(
       { _id },
@@ -3697,6 +3970,16 @@ export class DiService {
       content: { di, states: di },
       target: {},
     });
+
+    // Notif ERP : passage en PENDING1 → la coordination doit affecter la DI.
+    const fresh: any = await this.diModel.findOne({ _id }).lean();
+    await this.emitDiHandoff(
+      _id,
+      fresh,
+      'DI_PENDING1',
+      `Nouvelle DI à affecter (${fresh?._idnum ?? _id})`,
+      ['Coordinator'],
+    );
 
     return pending1;
   }

@@ -9,6 +9,7 @@ import {
 import { DiService } from './di.service';
 import {
   Di,
+  DiTable,
   DiTableData,
   LogsDiData,
   StatusCount,
@@ -161,6 +162,13 @@ export class DiResolver {
     } catch (error) {
       throw new Error(error);
     }
+  }
+
+  /** Détail d'UNE DI (même projection que la liste coordinatrice) pour le modal
+   *  détail partagé ouvert au clic d'une notification (deep-link). */
+  @Query(() => DiTable, { nullable: true })
+  async getDiDetail(@Args('_id') _id: string) {
+    return this.diService.getDiDetailById(_id);
   }
 
   @Mutation(() => Di)
