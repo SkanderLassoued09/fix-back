@@ -40,9 +40,42 @@ flowchart TD
 **ACTION dispatcher** — `runAction(action)`:
 - `DETECT_STAGNANT_DI` → stagnation detection
 - `SYNC_GOOGLE_SHEETS` → Google Sheets sync
+- `SYNC_ACTIONS_EN_COURS` / `SYNC_JIRA_DUE_SOON` / `SYNC_JIRA_TASKS` → sync jobs
+- `TEST_DISCORD_CHANNELS` → webhook diagnostic (disabled in production)
+- `DIGEST_DI_ARCHIVE_INCOMPLETES` → documentary-completion digest
+- `REUNION_REMINDER` → meeting reminders
+- `BACKUP_DB_TO_DRIVE` → nightly DB backup to Drive (see below)
 - unknown → logs an error
 
 npm aliases: `npm run action:detect-stagnant-di`, `npm run action:sync-google-sheets` ([package.json](../../fix-back/package.json)).
+
+---
+
+## DB backup ([`db-backup/db-backup.service.ts`](../../fix-back/src/db-backup/db-backup.service.ts))
+
+`BACKUP_DB_TO_DRIVE` — daily at **18:00 Africa/Tunis** via the system crontab.
+
+`mongodump --gzip --archive` on the ACTIVE environment's `MONGODB_URI` → upload to a
+per-environment Drive folder through the **existing** `GoogleDriveService` → keep the newest
+`DB_BACKUP_RETENTION` (default 30) → Discord line on success, alert on failure.
+
+| Point | Behaviour |
+|-------|-----------|
+| File name | `backup_db_{YYYY-MM-DD}_{HHmm}.gz` (Africa/Tunis). **No env in the name** — the *folder* separates environments. |
+| Folder | `DB_BACKUP_FOLDER_ID`, else `BACKUPS_{PROD\|PREPROD\|DEV}` under the env's `GOOGLE_DRIVE_PARENT_FOLDER_ID`. |
+| Temp file | Always removed in a `finally`, upload succeeded or not. |
+| Verification | Dump must be **> 0 bytes** and the upload must return a Drive file id — otherwise the run fails and alerts. |
+| Retention | Purges **only after** a confirmed upload; only files matching `backup_db_*.gz`. A delete failure doesn't fail the backup. |
+| Alerts | Uses the **ungated** `deliverEmbed` path (`postEmbed` is muted by `DISCORD_NOTIFS_DISABLED`) → APP_ALERT channel. |
+| Security | The full Mongo URI is **never logged** (only the DB name); a publicly-shared backup folder triggers a loud Discord alert. |
+
+> ⚠️ **Server prerequisite:** `mongodump` is the SYSTEM package `mongodb-database-tools`
+> (**not** npm) and is **absent from the current [Dockerfile](../../fix-back/Dockerfile)**
+> (`node:20-alpine` + nest CLI only). Install it (`apk add mongodb-tools` /
+> `apt install mongodb-database-tools`) or set `MONGODUMP_PATH`.
+
+> ⚠️ **All three `.env.*` currently point at the SAME database** (`fixtronixproddb`), so a dev
+> or preprod backup dumps production data into its own environment folder.
 
 > Adding a new action = one case in `runAction` + a trigger method + (optional) a `package.json` alias. The bootstrap file (`main.ts`) is never touched.
 

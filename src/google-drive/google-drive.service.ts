@@ -585,6 +585,92 @@ export class GoogleDriveService {
   }
 
   /**
+   * List non-trashed files directly under `folderId`, NEWEST FIRST, with their
+   * name / createdTime / size. Folders are excluded — a retention purge must
+   * never consider a sub-folder a "backup".
+   *
+   * Used by the DB-backup retention policy (`DbBackupService`) to find the
+   * files to drop once the newest N are kept. `pageSize` is capped at 1000
+   * (Drive's max); a backup folder holding more than that is its own incident.
+   *
+   * Scope note: `drive.file` only sees files THIS app created — which is
+   * exactly the desired blast radius for a delete path (a file dropped in the
+   * folder by hand is invisible here and can never be purged by us).
+   */
+  async listFilesInFolder(
+    folderId: string,
+    pageSize = 1000,
+  ): Promise<Array<{ id: string; name: string; createdTime: string; size: number }>> {
+    const drive = await this.ensureClient();
+    const q = [
+      `'${folderId}' in parents`,
+      `mimeType != 'application/vnd.google-apps.folder'`,
+      'trashed = false',
+    ].join(' and ');
+    const res = await this.callWithRetry('listFilesInFolder', () =>
+      drive.files.list({
+        q,
+        fields: 'files(id, name, createdTime, size)',
+        orderBy: 'createdTime desc',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        pageSize: Math.min(Math.max(pageSize, 1), 1000),
+      }),
+    );
+    return (res.data.files ?? [])
+      .filter((f) => !!f.id)
+      .map((f) => ({
+        id: f.id as string,
+        name: f.name ?? '',
+        createdTime: f.createdTime ?? '',
+        size: Number(f.size ?? 0),
+      }));
+  }
+
+  /**
+   * Permanently delete a Drive file by id (NOT a trash move — the retention
+   * purge must actually reclaim quota; a trashed file still counts against it
+   * for 30 days). Throws on failure so the caller can report a partial purge
+   * instead of silently believing the folder is bounded.
+   */
+  async deleteFile(fileId: string): Promise<void> {
+    const drive = await this.ensureClient();
+    await this.callWithRetry('deleteFile', () =>
+      drive.files.delete({ fileId, supportsAllDrives: true }),
+    );
+    this.logger.log(`Deleted Drive file ${fileId}`);
+  }
+
+  /**
+   * Read a file's sharing state — used by the DB-backup action to assert the
+   * backup folder is NOT public before pushing a full database dump into it.
+   * Returns the raw permission rows plus a computed `isPublic` flag
+   * (`type` of `anyone` = link-shared to the world).
+   */
+  async getFilePermissions(fileId: string): Promise<{
+    isPublic: boolean;
+    permissions: Array<{ id: string; type: string; role: string }>;
+  }> {
+    const drive = await this.ensureClient();
+    const res = await this.callWithRetry('getFilePermissions', () =>
+      drive.permissions.list({
+        fileId,
+        fields: 'permissions(id, type, role)',
+        supportsAllDrives: true,
+      }),
+    );
+    const permissions = (res.data.permissions ?? []).map((p) => ({
+      id: p.id ?? '',
+      type: p.type ?? '',
+      role: p.role ?? '',
+    }));
+    return {
+      isPublic: permissions.some((p) => p.type === 'anyone'),
+      permissions,
+    };
+  }
+
+  /**
    * Stream a Drive file's bytes by id (read-only), via the same authenticated
    * client used for uploads. Returns the content stream plus its mimeType/name
    * so a controller can proxy it to the browser (Drive files are private, so
