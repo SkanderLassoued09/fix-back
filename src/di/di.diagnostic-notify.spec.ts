@@ -37,9 +37,16 @@ describe('Diagnostic assignment — single complete Discord notification', () =>
         .mockImplementation(() => ({
           save: jest.fn().mockResolvedValue({ _id: 's1', id_tech_diag: 'u1' }),
         }));
-      svc.StatModel.findOne = jest
-        .fn()
-        .mockResolvedValue({ toObject: () => ({ _id: 's1', id_tech_diag: 'u1' }) });
+      // Filter-aware : le contrôle de réaffectation (`{ _idDi }`) ne trouve
+      // AUCUN Stat sur une première affectation ; la relecture `statTech`
+      // (`{ _id }`) renvoie le doc sauvegardé.
+      svc.StatModel.findOne = jest.fn((filter: any) =>
+        Promise.resolve(
+          filter && filter._id
+            ? { toObject: () => ({ _id: 's1', id_tech_diag: 'u1' }) }
+            : null,
+        ),
+      );
       svc.profileService = {
         findProlileById: jest.fn().mockResolvedValue({ _id: 'u1', firstName: 'tech' }),
       };

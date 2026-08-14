@@ -868,6 +868,22 @@ export class DiscordHookService {
     });
   }
 
+  async sendDiAbandoned(di: any, motif: string) {
+    const ctx = await this.buildContext(di);
+    await this.postEmbed('GENERAL_ATELIER', {
+      embeds: [
+        {
+          title: '🚫 Diagnostic abandonné',
+          description: `Un technicien a abandonné le diagnostic — motif : ${motif}. DI renvoyée à la coordination (PENDING1) pour réaffectation.`,
+          color: 15105570,
+          fields: this.buildBaseFields(ctx),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
   async sendDiRetour(di: any, level: 1 | 2 | 3) {
     const ctx = await this.buildContext(di);
     const titles = {
