@@ -32,7 +32,10 @@ describe('AppCronService — TEST_DISCORD_CHANNELS', () => {
     }
     discord = { sendTestEmbed: jest.fn().mockResolvedValue(undefined) };
     svc = new AppCronService(
-      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      // diService, gateway, audit, stagnation, stagnationDailyReport,
+      // sheetSync, jira (7 unused mocks) …
+      {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      // … then discordHookService (the one under test),
       discord as any,
       // DiArchiveDigestService — not used in TEST_DISCORD_CHANNELS specs.
       {} as any,

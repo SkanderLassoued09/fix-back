@@ -67,6 +67,10 @@ function makeSvc(status: string | null = 'INDIAGNOSTIC', ignoreCount = 0) {
       .mockResolvedValue({ di: { _id: 'DI1', status: 'PENDING1' } }),
   };
   svc.discordHookService = { sendDiAbandoned: jest.fn().mockResolvedValue({}) };
+  // Broadcast temps réel des listes (autres profils voient PENDING1 sans refresh).
+  svc.notificationGateway = { updateTicket: jest.fn() };
+  // Notif ERP d'abandon → coordination (réaffecter) + Admin_Manager/Admin_Tech.
+  svc.notificationService = { emit: jest.fn().mockResolvedValue({}) };
   svc.captureDiscordFailure = jest.fn();
   return svc;
 }
@@ -87,6 +91,13 @@ describe('DiService.abandonDi — gardes & orchestration', () => {
       transitionKey: 'TECH_ABANDON_TO_PENDING1',
     });
     expect(svc.discordHookService.sendDiAbandoned).toHaveBeenCalledTimes(1);
+    // Alerte ERP : coordination (réaffecter) + Admin_Manager + Admin_Tech.
+    expect(svc.notificationService.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'DI_ABANDONED',
+        notify: { roles: ['Coordinator', 'Admin_Manager', 'Admin_Tech'] },
+      }),
+    );
     expect(di.status).toBe('PENDING1');
   });
 

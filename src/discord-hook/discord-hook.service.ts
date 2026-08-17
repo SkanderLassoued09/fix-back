@@ -1313,6 +1313,54 @@ export class DiscordHookService {
   }
 
   /**
+   * Rappel quotidien des DI STAGNANTES (≥ seuil) — feuille du jour générée.
+   * UNE seule embed vers `fixtronix-app-alert` via le chemin NON-gated
+   * `deliverEmbed` (comme le digest Jira/stagnation), donc NON impacté par
+   * `DISCORD_NOTIFS_DISABLED` — que l'on NE modifie pas.
+   */
+  async sendDailyStagnationReminder(report: {
+    date: string; // YYYY-MM-DD (worksheet name)
+    count: number;
+    seuil: number;
+    unite: string;
+    examples: string[]; // _idNum refs (up to ~8)
+    spreadsheetUrl?: string; // lien PROFOND vers l'onglet du jour (gid)
+  }): Promise<void> {
+    const when = new Intl.DateTimeFormat('fr-FR', {
+      timeZone: 'Africa/Tunis',
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(new Date());
+    // Lien cliquable vers la feuille du jour — titre + ligne « Détails ».
+    const link = report.spreadsheetUrl
+      ? `\n🔗 [Ouvrir la feuille « ${report.date} »](${report.spreadsheetUrl})`
+      : '';
+    await this.deliverEmbed('APP_ALERT', {
+      embeds: [
+        {
+          title: '⏳ Rappel quotidien — DI stagnantes',
+          ...(report.spreadsheetUrl ? { url: report.spreadsheetUrl } : {}),
+          description:
+            `${report.count} DI stagnante(s) dans le même statut depuis ≥ ${report.seuil} ${report.unite}.\n` +
+            `Feuille du jour : \`${report.date}\` · ${when} (Africa/Tunis).` +
+            link,
+          color: 16289308, // orange (WARNING)
+          fields: report.examples.length
+            ? [
+                {
+                  name: `Exemples (${report.examples.length})`,
+                  value: report.examples.map((r) => `• ${r}`).join('\n'),
+                },
+              ]
+            : [],
+          footer: { text: 'Fixtronix · Rappel stagnation quotidien' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  /**
    * Catalog event — a NEW composant was added to the parts catalog (NOT an
    * update). Useful for procurement / admin visibility: who added what, at
    * what price, in what category. Routes through the DI events webhook to

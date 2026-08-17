@@ -212,6 +212,53 @@ export class StagnationService {
   }
 
   /**
+   * Read-side pour le RAPPORT QUOTIDIEN de stagnation (feuille + rappel ERP +
+   * Discord). Retourne les DI ouvertes restées dans le MÊME statut depuis
+   * `thresholdHours` (défaut 24h). La source « statut changé à » est
+   * `statusUpdatedAt` (estampillé à CHAQUE transition ; se réinitialise donc à
+   * WAITING_DEVIS → WAITING_BC) ; repli `updatedAt` pour les DI legacy. Ne crée
+   * AUCUNE alerte — c'est un pur read (le seuil 48h de `detectStagnantDi` reste
+   * inchangé pour l'inbox d'alertes).
+   */
+  async getStagnantForDailyReport(thresholdHours = 24): Promise<
+    Array<{
+      _id: string;
+      idNum: string;
+      status: string;
+      statusChangedAt: Date;
+      ageHours: number;
+    }>
+  > {
+    const nowMs = Date.now();
+    const cutoff = new Date(nowMs - thresholdHours * 60 * 60 * 1000);
+    const rows = await this.diModel
+      .find({
+        isDeleted: { $ne: true },
+        status: { $nin: StagnationService.TERMINAL_STATUSES },
+        $or: [
+          { statusUpdatedAt: { $lte: cutoff } },
+          { statusUpdatedAt: null, updatedAt: { $lte: cutoff } },
+        ],
+      })
+      .select('_id _idnum status statusUpdatedAt updatedAt')
+      .sort({ statusUpdatedAt: 1, updatedAt: 1 })
+      .lean();
+
+    return rows.map((d: any) => {
+      const changedAt = d.statusUpdatedAt ?? d.updatedAt;
+      return {
+        _id: String(d._id),
+        idNum: d._idnum ?? String(d._id),
+        status: d.status,
+        statusChangedAt: changedAt,
+        ageHours: Math.round(
+          (nowMs - new Date(changedAt).getTime()) / (60 * 60 * 1000),
+        ),
+      };
+    });
+  }
+
+  /**
    * Read-side: list currently-stagnant DIs grouped by threshold. Useful for
    * dashboards and the future "stuck DI" admin view.
    */

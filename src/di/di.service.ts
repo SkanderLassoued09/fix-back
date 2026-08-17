@@ -614,6 +614,13 @@ export class DiService {
           `Nouvelle DI à affecter (${(di as any)?._idnum ?? di._id})`,
           ['Coordinator'],
         );
+        // TEMPS RÉEL des LISTES : diffuse l'état pour que la liste coordinatrice
+        // APPENDE la nouvelle DI sans refresh manuel.
+        this.notificationGateway.updateTicket({
+          action: 'updateState',
+          content: { result: di, states: di },
+          target: {},
+        });
       }
 
       return di;
@@ -1531,6 +1538,14 @@ export class DiService {
       `DI à affecter au diagnostic (${(result.di as any)?._idnum ?? _idDI})`,
       ['Coordinator'],
     );
+
+    // TEMPS RÉEL des LISTES : le workflow ne diffuse pas `updateTicket` → sans
+    // ça la liste coordinatrice n'appende pas la DI passée en PENDING1.
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { result: result.di, states: result.di },
+      target: {},
+    });
 
     return result.di;
   }
@@ -2592,12 +2607,36 @@ export class DiService {
       transitionKey: 'TECH_ABANDON_TO_PENDING1',
     });
 
+    // 2.5) TEMPS RÉEL : le workflow ne diffuse PAS `updateTicket`. Sans ça, les
+    //      autres profils (coordination…) ne voient le passage en PENDING1
+    //      qu'après un refresh manuel. On diffuse donc l'état ici.
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { result: result.di, states: result.di },
+      target: {},
+    });
+
     // 3) Notification coordination (best-effort — n'échoue jamais l'abandon).
     try {
       await this.discordHookService.sendDiAbandoned(result.di, motifFinal);
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
+
+    // 4) Notification ERP : le technicien a ANNULÉ/ABANDONNÉ la DI (retour
+    //    PENDING1). Le message NOMME le technicien (qui a fait l'action) → la
+    //    coordination sait qui réaffecter, les Admin_Manager/Admin_Tech
+    //    (propriétaires) sont alertés. Best-effort.
+    const who = data.abandonedBy || 'un technicien';
+    await this.emitDiHandoff(
+      _idDI,
+      result.di,
+      'DI_ABANDONED',
+      `${who} a annulé la DI ${
+        (result.di as any)?._idnum ?? _idDI
+      } — à réaffecter${motifFinal ? ' (' + motifFinal + ')' : ''}`,
+      ['Coordinator', 'Admin_Manager', 'Admin_Tech'],
+    );
 
     return result.di;
   }
@@ -4096,16 +4135,18 @@ export class DiService {
       { $set: { status: STATUS_DI.Pending1.status } },
     );
 
-    const di = this.getDiById(_id);
-
+    // BUG corrigé : `getDiById` renvoie une PROMESSE — l'ancien code diffusait
+    // la promesse (non attendue) dans `updateTicket`, donc la liste des autres
+    // profils ne pouvait PAS appender la DI. On récupère la DI réelle et on la
+    // diffuse (temps réel des listes).
+    const fresh: any = await this.diModel.findOne({ _id }).lean();
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { result: fresh, states: fresh },
       target: {},
     });
 
     // Notif ERP : passage en PENDING1 → la coordination doit affecter la DI.
-    const fresh: any = await this.diModel.findOne({ _id }).lean();
     await this.emitDiHandoff(
       _id,
       fresh,

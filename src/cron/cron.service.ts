@@ -6,6 +6,7 @@ import { DiService } from 'src/di/di.service';
 import { Di } from 'src/di/entities/di.entity';
 import { NotificationsGateway } from 'src/notification.gateway';
 import { StagnationService } from 'src/stagnation/stagnation.service';
+import { StagnationDailyReportService } from 'src/stagnation/stagnation-daily-report.service';
 import { SheetSyncService } from 'src/google-sheets/sheet-sync.service';
 import { JiraCronNotificationService } from 'src/jira-cron-notification/jira-cron-notification.service';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
@@ -34,6 +35,7 @@ export class AppCronService {
     private readonly notificationsGateway: NotificationsGateway,
     private readonly auditService: AuditService,
     private readonly stagnationService: StagnationService,
+    private readonly stagnationDailyReportService: StagnationDailyReportService,
     private readonly sheetSyncService: SheetSyncService,
     private readonly jiraCronNotificationService: JiraCronNotificationService,
     private readonly discordHookService: DiscordHookService,
@@ -300,6 +302,7 @@ export class AppCronService {
    */
   @Cron('0 8 * * *', { timeZone: 'Africa/Tunis' })
   async triggerStagnationDetection() {
+    // (A) Inbox d'alertes 48h existant — INCHANGÉ (persistance + digest Discord).
     try {
       const result = await this.stagnationService.detectStagnantDi();
       const total = result.buckets.reduce((sum, b) => sum + b.count, 0);
@@ -318,6 +321,20 @@ export class AppCronService {
     } catch (err) {
       this.logger.error(
         `Stagnation cron failed: ${(err as Error).stack ?? err}`,
+      );
+    }
+
+    // (B) Rapport quotidien 24h — feuille Google du jour + rappel ERP
+    //     (DAILY_REMINDER) + Discord APP_ALERT. Idempotent (dispatch record).
+    //     Isolé dans son propre try/catch pour ne jamais casser (A) ni le cron.
+    try {
+      const report = await this.stagnationDailyReportService.run();
+      this.logger.log(
+        `Daily stagnation report · date=${report.date} · detected=${report.detected} · dispatched=${report.dispatched} · skipped=${report.skipped}`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Daily stagnation report failed: ${(err as Error).stack ?? err}`,
       );
     }
   }

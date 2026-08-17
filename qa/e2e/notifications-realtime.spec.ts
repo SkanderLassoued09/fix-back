@@ -43,6 +43,9 @@ const ROLE_VALUE: Record<string, string> = {
 
 const roleUsers: Record<string, { _id: string; username: string }> = {};
 const sockets: Record<string, { socket: any; received: any[] }> = {};
+// Broadcast `updateTicket` (rafraîchit les LISTES de tous les profils en temps
+// réel — indépendant des notifications ERP ciblées).
+const updateTicketEvents: any[] = [];
 const seeded: Array<{ di: string; stat: string }> = [];
 let adminToken = '';
 let apiCtx: any;
@@ -71,6 +74,29 @@ function waitForNotif(
             );
             if (hit) return resolve(hit);
             if (Date.now() - started > ms) return resolve(null);
+            setTimeout(tick, 100);
+        };
+        tick();
+    });
+}
+
+function waitForUpdateTicket(diId: string, ms = 6000): Promise<boolean> {
+    const started = Date.now();
+    const matches = (m: any) => {
+        const c = m?.content ?? {};
+        const ids = [
+            c.result?._id,
+            c.states?._id,
+            c.di?._id,
+            c.result?.di?._id,
+            c.states?.di?._id,
+        ].map((x) => (x == null ? null : String(x)));
+        return ids.includes(diId);
+    };
+    return new Promise((resolve) => {
+        const tick = () => {
+            if (updateTicketEvents.some(matches)) return resolve(true);
+            if (Date.now() - started > ms) return resolve(false);
             setTimeout(tick, 100);
         };
         tick();
@@ -121,6 +147,7 @@ test.beforeAll(async () => {
         });
         const received: any[] = [];
         socket.on('notification.new', (n: any) => received.push(n));
+        socket.on('updateTicket', (m: any) => updateTicketEvents.push(m));
         await new Promise<void>((res, rej) => {
             socket.on('connect', () => res());
             socket.on('connect_error', (e: any) =>
@@ -160,12 +187,17 @@ type Step = {
     techDiag?: boolean; // seed Stat.id_tech_diag = TECH
     techRep?: boolean; // seed Stat.id_tech_rep = TECH
     canRepairFalse?: boolean; // seed can_be_repaired = false (for send-back-to-diag)
+    expectBroadcast?: boolean; // also assert an updateTicket broadcast (list refresh)
+    create?: boolean; // the mutation CREATES the DI (createDi) — no seed, capture _id
 };
 
 const M = (op: string) => `mutation { ${op} }`;
 
 const STEPS: Step[] = [
-    { name: 'DI créée → à affecter', from: 'CREATED', type: 'DI_PENDING1', concerned: ['COORDINATOR'], absent: ['TECH'], mutation: (d) => M(`manager_Pending1(_id: "${d}") { _id status }`) },
+    { name: 'DI créée → à affecter', from: 'CREATED', type: 'DI_PENDING1', concerned: ['COORDINATOR'], absent: ['TECH'], expectBroadcast: true, mutation: (d) => M(`manager_Pending1(_id: "${d}") { _id status }`) },
+    // Création DIRECTE en PENDING1 (case cochée) — c'est LE cas signalé : la
+    // coordination doit être notifiée ET la liste appendre la DI (updateTicket).
+    { name: 'Création DIRECTE en PENDING1 (createDi)', from: 'CREATED', type: 'DI_PENDING1', concerned: ['COORDINATOR'], expectBroadcast: true, create: true, mutation: () => M(`createDi(createDiInput: { title: "QA notif create", status: "PENDING1", can_be_repaired: true }) { _id status _idnum }`) },
     { name: 'Affectation DIAGNOSTIC', from: 'PENDING1', type: 'DI_ASSIGNED_DIAG', concerned: ['TECH'], absent: ['MAGASIN'], techDiag: true, mutation: (d) => M(`coordinatorSendingDiDiag(_idDI: "${d}") { _id status }`) },
     { name: 'Diagnostic terminé → magasin (estimation)', from: 'INDIAGNOSTIC', type: 'DI_MAGASIN_ESTIMATION', concerned: ['MAGASIN'], pdr: true, mutation: (d) => M(`changeStatusMagasinEstimation(_id: "${d}")`) },
     { name: 'Diagnostic → à facturer', from: 'INDIAGNOSTIC', type: 'DI_PENDING2', concerned: ['COORDINATOR'], mutation: (d) => M(`magasinTech_Pending2(_id: "${d}") { _id status }`) },
@@ -179,8 +211,12 @@ const STEPS: Step[] = [
     { name: 'Clôture (FINISHED, retour)', from: 'INDIAGNOSTIC', type: 'DI_FINISHED', concerned: ['MANAGER', 'ADMIN_MANAGER', 'ADMIN_TECH', 'COORDINATOR', 'MAGASIN'], absent: ['TECH'], ignoreCount: 1, mutation: (d) => M(`changestatusToFinishReparation(_id: "${d}") { _id status }`) },
     // PENDING1 par d'AUTRES chemins que manager_Pending1 (bugs corrigés : la
     // coordination n'était pas notifiée sur ces passages en PENDING1).
-    { name: 'Passage PENDING1 (changeToPending1)', from: 'CREATED', type: 'DI_PENDING1', concerned: ['COORDINATOR'], mutation: (d) => M(`changeToPending1(_id: "${d}")`) },
+    { name: 'Passage PENDING1 (changeToPending1)', from: 'CREATED', type: 'DI_PENDING1', concerned: ['COORDINATOR'], expectBroadcast: true, mutation: (d) => M(`changeToPending1(_id: "${d}")`) },
     { name: 'Renvoi au diagnostic (PRICING → PENDING1)', from: 'PRICING', type: 'DI_PENDING1', concerned: ['COORDINATOR'], canRepairFalse: true, mutation: (d) => M(`sendDiBackToDiagnostic(_id: "${d}") { _id status }`) },
+    // Nouvelle feature ABANDON : le tech abandonne le diagnostic → la DI revient
+    // en PENDING1 et on alerte la coordination (réaffecter) + Admin_Manager /
+    // Admin_Tech (propriétaires). Le Tech (auteur) et le Magasin ne reçoivent rien.
+    { name: 'ABANDON diagnostic par le tech', from: 'INDIAGNOSTIC', type: 'DI_ABANDONED', concerned: ['COORDINATOR', 'ADMIN_MANAGER', 'ADMIN_TECH'], absent: ['TECH', 'MAGASIN'], techDiag: true, expectBroadcast: true, mutation: (d) => M(`abandonDi(AbandonDiInput: { diId: "${d}", motif: "PANNE_NON_IDENTIFIABLE" }) { _id status }`) },
     { name: 'RETOUR 1', from: 'PENDING1', type: 'DI_RETOUR_1', concerned: ['MANAGER', 'COORDINATOR'], mutation: (d) => M(`changeStatusRetour1(_id: "${d}")`) },
     { name: 'RETOUR 2', from: 'RETOUR1', type: 'DI_RETOUR_2', concerned: ['MANAGER', 'COORDINATOR'], mutation: (d) => M(`changeStatusRetour2(_id: "${d}")`) },
     { name: 'RETOUR 3', from: 'RETOUR2', type: 'DI_RETOUR_3', concerned: ['MANAGER', 'COORDINATOR'], mutation: (d) => M(`changeStatusRetour3(_id: "${d}")`) },
@@ -188,46 +224,61 @@ const STEPS: Step[] = [
 
 STEPS.forEach((s, i) => {
     test(`${String(i + 1).padStart(2, '0')} ${s.name} → ${s.type} → [${s.concerned.join(', ')}]`, async () => {
-        const di = `DI_ntf_${TAG}_${i}`;
+        let di: string;
         const stat = `STAT_ntf_${TAG}_${i}`;
-        seeded.push({ di, stat });
 
-        await withProdDb(async (db) => {
-            await db.collection('dis').insertOne({
-                _id: di,
-                _idnum: `NTF-${TAG}-${i}`,
-                title: 'QA notif realtime',
-                status: s.from,
-                client_id: null,
-                isDeleted: false,
-                can_be_repaired: !s.canRepairFalse,
-                contain_pdr: !!s.pdr,
-                array_composants: s.pdr ? [{ nameComposant: 'Fusible', quantity: 1 }] : [],
-                ignoreCount: s.ignoreCount ?? 0,
-                current_roles: ['Manager'],
-                createdAt: new Date(),
-                updatedAt: new Date(),
+        if (s.create) {
+            // createDi génère son PROPRE _id → on crée d'abord, on récupère l'_id.
+            const r = await gqlPost(apiCtx, s.mutation(''), adminToken);
+            expect(
+                r.errors ?? [],
+                `create "${s.name}" errored: ${JSON.stringify(r.errors)}`,
+            ).toHaveLength(0);
+            di = r.data?.createDi?._id;
+            expect(di, 'createDi returned an _id').toBeTruthy();
+            seeded.push({ di, stat: '' });
+        } else {
+            di = `DI_ntf_${TAG}_${i}`;
+            seeded.push({ di, stat });
+            await withProdDb(async (db) => {
+                await db.collection('dis').insertOne({
+                    _id: di,
+                    _idnum: `NTF-${TAG}-${i}`,
+                    title: 'QA notif realtime',
+                    status: s.from,
+                    client_id: null,
+                    isDeleted: false,
+                    can_be_repaired: !s.canRepairFalse,
+                    contain_pdr: !!s.pdr,
+                    array_composants: s.pdr
+                        ? [{ nameComposant: 'Fusible', quantity: 1 }]
+                        : [],
+                    ignoreCount: s.ignoreCount ?? 0,
+                    current_roles: ['Manager'],
+                    createdAt: new Date(),
+                    updatedAt: new Date(),
+                });
+                await db.collection('stats').insertOne({
+                    _id: stat,
+                    _idDi: di,
+                    diRef: di,
+                    id_tech_diag: s.techDiag ? roleUsers.TECH._id : null,
+                    id_tech_rep: s.techRep ? roleUsers.TECH._id : null,
+                    status: s.from,
+                    ignoreCount: s.ignoreCount ?? 0,
+                    retour_count: 0,
+                    pauseLogs: [],
+                    createdAt: new Date(),
+                    updatedAt: new Date(),
+                });
             });
-            await db.collection('stats').insertOne({
-                _id: stat,
-                _idDi: di,
-                diRef: di,
-                id_tech_diag: s.techDiag ? roleUsers.TECH._id : null,
-                id_tech_rep: s.techRep ? roleUsers.TECH._id : null,
-                status: s.from,
-                ignoreCount: s.ignoreCount ?? 0,
-                retour_count: 0,
-                pauseLogs: [],
-                createdAt: new Date(),
-                updatedAt: new Date(),
-            });
-        });
 
-        const r = await gqlPost(apiCtx, s.mutation(di), adminToken);
-        expect(
-            r.errors ?? [],
-            `mutation for "${s.name}" errored: ${JSON.stringify(r.errors)}`,
-        ).toHaveLength(0);
+            const r = await gqlPost(apiCtx, s.mutation(di), adminToken);
+            expect(
+                r.errors ?? [],
+                `mutation for "${s.name}" errored: ${JSON.stringify(r.errors)}`,
+            ).toHaveLength(0);
+        }
 
         // Only assert roles that actually have a user in this DB.
         const concerned = s.concerned.filter((k) => roleUsers[k]);
@@ -258,5 +309,16 @@ STEPS.forEach((s, i) => {
                 expect(has, `[base] no notifications row for ${key} (${s.type})`).toBeTruthy();
             }
         });
+
+        // TEMPS RÉEL des LISTES : certaines étapes doivent aussi diffuser un
+        // `updateTicket` pour que les autres profils voient le nouveau statut
+        // SANS refresh (ex. abandon → PENDING1).
+        if (s.expectBroadcast) {
+            const broadcast = await waitForUpdateTicket(di);
+            expect(
+                broadcast,
+                `[temps réel] pas de broadcast updateTicket pour ${s.name} → les listes des autres profils ne se rafraîchiraient pas`,
+            ).toBeTruthy();
+        }
     });
 });
