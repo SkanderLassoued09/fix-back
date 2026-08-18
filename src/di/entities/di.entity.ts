@@ -87,6 +87,18 @@ export class DiDocument extends Document {
   // ensuite l'estimé au prix final. Optionnel.
   @Prop({ type: Number, default: null })
   repairEstimate: number;
+  // ── Diagnostic payant / non payant ──────────────────────────────────────
+  // Flag de CRÉATION : le diagnostic est-il facturé au client ? `default: true`
+  // = comportement historique. Les DI existantes (sans le champ) résolvent à
+  // `true` sans migration — `default:`, PAS `defaultValue:` qui est inerte ici
+  // (cf. bug isOpenedOnce plus bas). Non payant → prix diagnostic désactivé en
+  // tarification, plancher 150 non appliqué, affichage « Non facturé ».
+  @Prop({ type: Boolean, default: true })
+  diagnosticPayant: boolean;
+  // Estimation du prix du DIAGNOSTIC saisie à la création (parallèle de
+  // repairEstimate) — pré-remplit le prix diagnostic en tarification (modifiable).
+  @Prop({ type: Number, default: null })
+  diagnosticEstimate: number;
   @Prop()
   discount: number;
   @Prop()
@@ -141,6 +153,11 @@ export class DiDocument extends Document {
   remarque_magasin: string;
   @Prop({ nullable: true })
   isErrorFromFixtronix: boolean;
+  // Raccourci RETOUR sans PDR (erreur Fixtronix) : la DI a sauté magasin +
+  // tarification et attend, en PENDING3, que la COORDINATRICE joigne le devis en
+  // l'envoyant en réparation. Posé par `magasinTech_Pending3`, retiré à l'envoi.
+  @Prop({ type: Boolean, default: false })
+  needsDevisBeforeRepair: boolean;
   @Prop({
     nullable: true,
     enum: ['DEFAULT', 'IN_COORDINATOR', 'IN_MAGASIN'],
@@ -160,6 +177,13 @@ export class DiDocument extends Document {
   componentsConfirmedAt: Date | null;
   @Prop({ type: String, ref: 'Profile', default: null })
   componentsConfirmedBy: string | null;
+  // Marqueur d'idempotence du décrément de stock (cycle normal). Passe de
+  // null → date au PREMIER des deux événements : envoi de la liste au
+  // coordinateur, OU entrée en réparation (PENDING3). Ré-armé (remis à null)
+  // à chaque nouveau diagnostic (tech_startDiagnostic) → un Retour re-décrémente
+  // sa nouvelle liste. Interne (pas exposé en GraphQL).
+  @Prop({ default: null })
+  stockDecrementedAt: Date | null;
 
   // ---- Stagnation tracking ------------------------------------------------
   // Stamped every time `status` changes (via the pre-save / pre-update hooks
@@ -446,6 +470,10 @@ export class Di {
   @Field({ nullable: true })
   repairEstimate: number;
   @Field({ nullable: true })
+  diagnosticPayant: boolean;
+  @Field({ nullable: true })
+  diagnosticEstimate: number;
+  @Field({ nullable: true })
   discount: number;
   @Field({ nullable: true })
   discount_value: number;
@@ -487,6 +515,8 @@ export class Di {
   handleSendingNotificationBetweenCoordinatorAndMagasin: string;
   @Field({ nullable: true })
   isErrorFromFixtronix: boolean;
+  @Field({ nullable: true })
+  needsDevisBeforeRepair?: boolean;
 
   // ---- Stagnation tracking ------------------------------------------------
   @Field({ nullable: true })
@@ -644,6 +674,8 @@ export class DiTable {
   remarque_coordinator: string;
   @Field({ nullable: true })
   isErrorFromFixtronix: boolean;
+  @Field({ nullable: true })
+  needsDevisBeforeRepair?: boolean;
   @Field(() => [LogsDi], { nullable: true })
   logs: LogsDi[];
   @Field({ nullable: true })
@@ -660,6 +692,22 @@ export class DiTable {
   componentsConfirmedBy?: string;
   @Field({ nullable: true })
   final_price: number;
+
+  /** Numéro de série de l'équipement — lecture seule dans le dossier DI. */
+  @Field({ nullable: true })
+  nSerie?: string;
+
+  /** Estimation du prix de réparation — SEULE donnée « prix réparation » en base
+   *  (une estimation, PAS un facturé). Nullable → affichage « — » si absente. */
+  @Field({ nullable: true })
+  repairEstimate?: number;
+
+  /** Diagnostic payant (défaut true) + estimation prix diagnostic — pilotent la
+   *  tarification (pré-remplissage/désactivation) et l'affichage « Non facturé ». */
+  @Field({ nullable: true })
+  diagnosticPayant?: boolean;
+  @Field({ nullable: true })
+  diagnosticEstimate?: number;
 
   // ---- Stagnation tracking (surfaced on the table view) -------------------
   @Field({ nullable: true })

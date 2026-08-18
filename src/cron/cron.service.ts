@@ -7,6 +7,7 @@ import { Di } from 'src/di/entities/di.entity';
 import { NotificationsGateway } from 'src/notification.gateway';
 import { StagnationService } from 'src/stagnation/stagnation.service';
 import { StagnationDailyReportService } from 'src/stagnation/stagnation-daily-report.service';
+import { MagasinStockReminderService } from 'src/magasin-stock/magasin-stock-reminder.service';
 import { SheetSyncService } from 'src/google-sheets/sheet-sync.service';
 import { JiraCronNotificationService } from 'src/jira-cron-notification/jira-cron-notification.service';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
@@ -36,6 +37,7 @@ export class AppCronService {
     private readonly auditService: AuditService,
     private readonly stagnationService: StagnationService,
     private readonly stagnationDailyReportService: StagnationDailyReportService,
+    private readonly magasinStockReminderService: MagasinStockReminderService,
     private readonly sheetSyncService: SheetSyncService,
     private readonly jiraCronNotificationService: JiraCronNotificationService,
     private readonly discordHookService: DiscordHookService,
@@ -79,6 +81,9 @@ export class AppCronService {
         break;
       case 'BACKUP_DB_TO_DRIVE':
         await this.triggerBackupDbToDrive();
+        break;
+      case 'MAGASIN_STOCK_REMINDER':
+        await this.triggerMagasinStockReminder();
         break;
       default:
         this.logger.error(`Unknown ACTION: ${action}`);
@@ -335,6 +340,29 @@ export class AppCronService {
     } catch (err) {
       this.logger.error(
         `Daily stagnation report failed: ${(err as Error).stack ?? err}`,
+      );
+    }
+  }
+
+  /**
+   * Rappel quotidien de STOCK MAGASIN — 16:00 Africa/Tunis (aussi via l'ACTION
+   * runtime `ACTION=MAGASIN_STOCK_REMINDER`). Alerte le rôle Magasin (cloche ERP)
+   * sur les composants suivis en stock EN RUPTURE (≤0) ou BIENTÔT VIDES
+   * (≤ `STOCK_LOW_THRESHOLD`, défaut 5). C'est un rappel : il re-part chaque jour
+   * tant que du stock est bas. Erreur isolée → ne casse jamais la boucle cron ;
+   * une journée « rien à signaler » n'émet aucune notification.
+   */
+  @Cron('0 16 * * *', { timeZone: 'Africa/Tunis' })
+  async triggerMagasinStockReminder() {
+    try {
+      const r = await this.magasinStockReminderService.run();
+      this.logger.log(
+        `Magasin stock reminder · seuil=${r.threshold} · rupture=${r.rupture} · ` +
+          `bientôt-vide=${r.low} · notifié=${r.notified}`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Magasin stock reminder failed: ${(err as Error).stack ?? err}`,
       );
     }
   }

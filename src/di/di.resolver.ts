@@ -30,6 +30,8 @@ import { Profile } from 'src/profile/entities/profile.entity';
 import { ProfileService } from 'src/profile/profile.service';
 import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
+import { RolesGuard } from 'src/auth/role-guard';
+import { Roles, Role } from 'src/profile/role-decorator';
 import { GraphQLError } from 'graphql';
 import { error, log } from 'console';
 import { StatService } from 'src/stat/stat.service';
@@ -490,6 +492,31 @@ export class DiResolver {
     await this.diService.setRepairEstimate(_id, estimate);
     return true;
   }
+
+  /** Gouvernance COORDINATRICE — bascule « Diagnostic payant » (verrouillé une
+   *  fois la tarification faite). Rôle TECH refusé (appel API direct compris). */
+  @Mutation(() => Boolean)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.COORDIANTOR, Role.ADMIN_MANAGER, Role.ADMIN_TECH)
+  async setDiagnosticPayant(
+    @Args('diId') diId: string,
+    @Args('payant') payant: boolean,
+  ) {
+    return this.diService.setDiagnosticPayant(diId, payant);
+  }
+
+  /** Verdict « erreur Fixtronix » (phase retour) — décision COORDINATRICE (le
+   *  tech ne juge pas sa propre erreur). Rôle TECH refusé (API directe comprise). */
+  @Mutation(() => Boolean)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.COORDIANTOR, Role.ADMIN_MANAGER, Role.ADMIN_TECH)
+  async setErrorFromFixtronix(
+    @Args('diId') diId: string,
+    @Args('value') value: boolean,
+  ) {
+    return this.diService.setErrorFromFixtronix(diId, value);
+  }
+
   @Mutation(() => Boolean)
   async changeStatusNegociate1(@Args('_id') _id: string) {
     await this.diService.changeStatusNegociate1(_id);
@@ -509,6 +536,22 @@ export class DiResolver {
   @Mutation(() => Boolean)
   async changeStatusRepaire(@Args('_id') _id: string) {
     await this.diService.changeStatusRepaire(_id);
+    return true;
+  }
+
+  /** Envoi en réparation par la COORDINATRICE avec devis OBLIGATOIRE — « un seul
+   *  geste » du raccourci « retour sans pièces » (PENDING3). Joint le devis
+   *  (routé sur le bon cycle), affecte le tech réparateur, passe en réparation.
+   *  Réservé à la coordination : rôle TECH refusé (appel API direct compris). */
+  @Mutation(() => Boolean)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.COORDIANTOR, Role.ADMIN_MANAGER, Role.ADMIN_TECH)
+  async coordinatorSendToRepairWithDevis(
+    @Args('_id') _id: string,
+    @Args('repTechId') repTechId: string,
+    @Args('pdf') pdf: string,
+  ) {
+    await this.diService.coordinatorSendToRepairWithDevis(_id, repTechId, pdf);
     return true;
   }
 

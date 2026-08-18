@@ -1280,6 +1280,12 @@ export class DiService {
           componentsConfirmedBy: di.componentsConfirmedBy,
           price: di.price ?? null,
           final_price: di.final_price ?? null,
+          // Diagnostic payant + estimation prix diagnostic — nécessaires au
+          // PRÉ-REMPLISSAGE du modal de tarification (ouvert depuis la ligne).
+          // `?? true` aligne le défaut « payant » pour les DI legacy.
+          diagnosticPayant: di.diagnosticPayant ?? true,
+          diagnosticEstimate: di.diagnosticEstimate ?? null,
+          needsDevisBeforeRepair: di.needsDevisBeforeRepair ?? false,
           annulationParClient: di.annulationParClient,
           annulationMotif: di.annulationMotif,
           annulationCommentaire: di.annulationCommentaire,
@@ -1401,6 +1407,12 @@ export class DiService {
           componentsConfirmedBy: di.componentsConfirmedBy,
           price: di.price ?? null,
           final_price: di.final_price ?? null,
+          // Diagnostic payant + estimation prix diagnostic — nécessaires au
+          // PRÉ-REMPLISSAGE du modal de tarification (ouvert depuis la ligne).
+          // `?? true` aligne le défaut « payant » pour les DI legacy.
+          diagnosticPayant: di.diagnosticPayant ?? true,
+          diagnosticEstimate: di.diagnosticEstimate ?? null,
+          needsDevisBeforeRepair: di.needsDevisBeforeRepair ?? false,
           annulationParClient: di.annulationParClient,
           annulationMotif: di.annulationMotif,
           annulationCommentaire: di.annulationCommentaire,
@@ -1599,6 +1611,76 @@ export class DiService {
 
     return result.di;
   }
+
+  /**
+   * Raccourci RETOUR sans PDR (erreur Fixtronix) : INDIAGNOSTIC/_Pause → PENDING3.
+   * Le diagnostic d'un retour dont la faute est Fixtronix conclut « aucune pièce »
+   * → magasin ET tarification sont sautés (non facturé) et la DI file directement
+   * en PENDING3, où la COORDINATRICE l'enverra en réparation en y joignant le
+   * devis (traçabilité). Miroir de `magasinTech_Pending2`, cible PENDING3.
+   *
+   * PAS de `assertTransitionAllowed(PENDING3)` ici : la whitelist générique
+   * n'autorise VOLONTAIREMENT pas INDIAGNOSTIC → PENDING3 (sinon on ouvrirait ce
+   * saut à toute autre mutation). La source est validée DUREMENT par le moteur
+   * via `MAGASIN_TECH_TO_PENDING3` (`strictFrom: true`). La condition métier
+   * (retour + sans PDR + erreur Fixtronix) est vérifiée par l'appelant
+   * `changeStatusMagasinEstimation`, seul point d'entrée de ce chemin.
+   */
+  async magasinTech_Pending3(_idDI: string): Promise<Di> {
+    // Fin de la phase diagnostic → ferme le segment de travail courant (cumul
+    // serveur). No-op si déjà fermé par une pause.
+    {
+      const di: any = await this.diModel.findOne({ _id: _idDI }).lean();
+      await this.statsService.closeDiagLeg(_idDI, di?.ignoreCount ?? 0);
+    }
+    const result = await this.diWorkflowService.transition({
+      diId: _idDI,
+      transitionKey: 'MAGASIN_TECH_TO_PENDING3',
+      // NE PAS sauter la validation de source : `strictFrom` doit REFUSER toute
+      // source hors diagnostic. Le rôle est déjà gardé au resolver.
+      skipRoleValidation: true,
+    });
+
+    // Marque la DI comme « en attente du devis coordinatrice » : la carte
+    // Réparation du modal coordinateur bascule alors en mode « joindre le devis »
+    // et bloque l'envoi tant qu'aucun devis n'est attaché.
+    await this.diModel.updateOne(
+      { _id: _idDI },
+      { $set: { needsDevisBeforeRepair: true } },
+    );
+
+    // « Diagnostic Completed » : la DI quitte la phase diagnostic. Ce chemin est
+    // par construction sans PDR et erreur Fixtronix → on renseigne l'embed en
+    // conséquence (les champs du cycle retour vivent sur LogsDi, pas la DI live).
+    try {
+      await this.discordHookService.sendDiagnosticFinished({
+        di: result.di,
+        diag: {
+          can_be_repaired: (result.di as any)?.can_be_repaired,
+          contain_pdr: false,
+          isErrorFromFixtronix: true,
+          remarque_tech_diagnostic: (result.di as any)
+            ?.remarque_tech_diagnostic,
+        },
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('discord-notification', err);
+    }
+
+    // DI en PENDING3 (sans passer par le magasin ni la tarification) → la
+    // COORDINATION doit l'envoyer en réparation (avec devis).
+    await this.emitDiHandoff(
+      _idDI,
+      result.di,
+      'DI_PENDING3',
+      `DI prête pour envoi en réparation — retour sans pièces (${
+        (result.di as any)?._idnum ?? _idDI
+      })`,
+      ['Coordinator'],
+    );
+
+    return result.di;
+  }
   //TODO check if we need to delet this one
   // Negotiation1 or Negotiation2 ==> PENDING3
   // Admin or manager ==> coordinator
@@ -1610,6 +1692,9 @@ export class DiService {
       skipFromValidation: true,
       skipRoleValidation: true,
     });
+    // 📦 Filet décrément stock (voir commitStockDecrementOnce) — chemin
+    // manager/admin → PENDING3. No-op si déjà fait ou sans composants.
+    await this.commitStockDecrementOnce(_idDI);
 
     return result.di;
   }
@@ -1833,7 +1918,13 @@ export class DiService {
             remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
             array_composants: diag.array_composants,
             di_category_id: diag.di_category_id,
-            isErrorFromFixtronix: diag.isErrorFromFixtronix ?? false,
+            // `isErrorFromFixtronix` N'EST PLUS écrit ici : le verdict « erreur
+            // Fixtronix » (phase retour) est désormais tranché par la
+            // COORDINATRICE via `setErrorFromFixtronix` (le tech ne juge pas sa
+            // propre erreur). Une valeur envoyée par le tech est ignorée.
+            // Ré-arme le décrément de stock pour CETTE liste (le tech vient de
+            // (re)saisir array_composants) : le prochain commit décrémentera.
+            stockDecrementedAt: null,
           },
         },
         { new: true },
@@ -2041,6 +2132,50 @@ export class DiService {
       { _id },
       { $set: { repairEstimate: value } },
     );
+  }
+
+  /** Bascule le flag « Diagnostic payant » (gouvernance COORDINATRICE). VERROUILLÉ
+   *  une fois la tarification faite (prix diagnostic fixé) : on ne re-facture pas
+   *  après coup. Guard de rôle posée au resolver. */
+  async setDiagnosticPayant(_id: string, payant: boolean): Promise<boolean> {
+    const di = await this.diModel.findOne({ _id });
+    if (!di) throw new GraphQLError('DI introuvable', {
+      extensions: { code: 'NOT_FOUND', diId: _id },
+    });
+    if (Number(di.price) > 0) {
+      throw new GraphQLError(
+        'Tarification déjà effectuée : le flag « Diagnostic payant » est verrouillé.',
+        { extensions: { code: 'BAD_REQUEST', diId: _id } },
+      );
+    }
+    await this.diModel.updateOne(
+      { _id },
+      { $set: { diagnosticPayant: !!payant } },
+    );
+    return true;
+  }
+
+  /** Écrit le verdict « erreur Fixtronix » (phase retour) — décision
+   *  COORDINATRICE (le tech ne juge pas sa propre erreur). Écrit le Di live ET,
+   *  en retour (`ignoreCount>0`), le snapshot du cycle courant. Guard de rôle
+   *  posée au resolver (refuse le rôle tech, appel direct compris). */
+  async setErrorFromFixtronix(_id: string, value: boolean): Promise<boolean> {
+    const di = await this.diModel.findOne({ _id });
+    if (!di) throw new GraphQLError('DI introuvable', {
+      extensions: { code: 'NOT_FOUND', diId: _id },
+    });
+    await this.diModel.updateOne(
+      { _id },
+      { $set: { isErrorFromFixtronix: !!value } },
+    );
+    if (di.ignoreCount && di.ignoreCount > 0) {
+      await this.logsDiService.setErrorFromFixtronix(
+        _id,
+        di.ignoreCount,
+        !!value,
+      );
+    }
+    return true;
   }
 
   /** A DriveDocRef is a real uploaded doc (object with a driveFileId), not a
@@ -2663,6 +2798,9 @@ export class DiService {
     if (!result) {
       throw new Error('Issue in manager_Negotation_Pendin3 ');
     }
+    // 📦 Filet décrément stock (voir commitStockDecrementOnce) — chemin
+    // négociation → PENDING3. No-op si déjà fait ou sans composants.
+    await this.commitStockDecrementOnce(_idDI);
   }
   //if DI NOT confirmer we sent to Admin Manager
   // Negotiation1  => Negotiation2
@@ -2927,7 +3065,21 @@ export class DiService {
       array_composants: di.array_composants,
       documents: this.buildDocuments((di as any).driveDocs),
       di_category_id: di.di_category_id?.category,
-      remarque_admin_manager: null,
+      // Numéro de série + estimation réparation (manquaient au chemin DiTable →
+      // sections « — » dans le dossier). Passthrough honnête (repairEstimate est
+      // une ESTIMATION, pas un facturé).
+      nSerie: di.nSerie,
+      repairEstimate: di.repairEstimate,
+      // Diagnostic payant + estimation prix diagnostic (tarification + « Non facturé »).
+      // `?? true` : legacy sans le champ = payant (aligne le défaut schéma).
+      diagnosticPayant: di.diagnosticPayant ?? true,
+      diagnosticEstimate: di.diagnosticEstimate,
+      // Marqueur raccourci « retour sans pièces » : pilote la carte Réparation
+      // (mode « joindre le devis » + blocage de l'envoi tant qu'il manque).
+      needsDevisBeforeRepair: di.needsDevisBeforeRepair ?? false,
+      // Correctif : ne plus forcer `null` — surface la vraie remarque admin
+      // (la valeur est déjà requêtée et déclarée sur DiTable).
+      remarque_admin_manager: di.remarque_admin_manager,
       remarque_admin_tech: di.remarque_admin_tech,
       remarque_coordinator: di.remarque_coordinator,
       remarque_magasin: di.remarque_magasin,
@@ -3123,6 +3275,17 @@ export class DiService {
 
   async affectinitialPrice(_id: string, price: number) {
     const pricing = await this.diModel.findOne({ _id });
+
+    // 🔒 GARDE SERVEUR-AUTORITAIRE : un diagnostic marqué NON PAYANT ne peut pas
+    // être facturé, même en appel API direct. Le plancher 150 est front-only ;
+    // ici on REFUSE tout prix diagnostic positif pour une DI non-payante (un
+    // prix nul/absent est un no-op toléré). Le temps de diagnostic reste mesuré.
+    if (pricing?.diagnosticPayant === false && Number(price) > 0) {
+      throw new GraphQLError(
+        'Diagnostic non payant : aucun prix de diagnostic ne peut être facturé.',
+        { extensions: { code: 'BAD_REQUEST', diId: _id } },
+      );
+    }
 
     let updatedDi;
 
@@ -3334,6 +3497,29 @@ export class DiService {
     // it applies whether the DI is repairable or not. The transition guard
     // already permits INDIAGNOSTIC → PENDING2, so no guard change is needed.
     const di: any = await this.diModel.findOne({ _id }).lean();
+
+    // ─── Raccourci RETOUR sans PDR (erreur Fixtronix) → PENDING3 ──────────────
+    // ADDITIF et volontairement ISOLÉ : ne s'active QUE pour le cas métier
+    // (retour + AUCUNE pièce + erreur Fixtronix) ; toute autre combinaison
+    // retombe sur le routage existant ci-dessous, INCHANGÉ.
+    // En RETOUR (ignoreCount>0) le diagnostic du cycle courant est écrit sur la
+    // ligne LogsDi (idIgnore=ignoreCount), PAS sur la DI live → on lit le
+    // SNAPSHOT DU CYCLE pour statuer (contain_pdr / composants / erreur
+    // Fixtronix). Magasin ET tarification sont sautés (non facturé) : la
+    // coordinatrice enverra la DI en réparation en y joignant le devis.
+    const cycle = di?.ignoreCount ?? 0;
+    if (cycle > 0) {
+      const log: any = await this.logsDiService.getLogsById(cycle, _id);
+      const cycleContainPdr = log?.contain_pdr === true;
+      const cycleHasComposants =
+        Array.isArray(log?.array_composants) && log.array_composants.length > 0;
+      const cycleFixtronixError = log?.isErrorFromFixtronix === true;
+      if (!cycleContainPdr && !cycleHasComposants && cycleFixtronixError) {
+        return this.magasinTech_Pending3(_id);
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     const declaredPdr = di?.contain_pdr === true;
     const hasComposants =
       Array.isArray(di?.array_composants) && di.array_composants.length > 0;
@@ -3705,6 +3891,12 @@ export class DiService {
       throw new Error('Issue in changeStatusPending3');
     }
 
+    // 📦 DÉCRÉMENT DE STOCK — FILET : entrée en réparation. Couvre les chemins
+    // magasin qui court-circuitent l'envoi au coordinateur (INMAGASIN/
+    // CONFIRMATION_COMPOSANTS → PENDING3 direct). No-op si déjà décrémenté à
+    // l'envoi (marqueur), et si la DI n'a pas de composants (liste vide).
+    await this.commitStockDecrementOnce(_id);
+
     if (result.ignoreCount > 0) {
       await this.statsService.updateStatus(
         _id,
@@ -3810,6 +4002,48 @@ export class DiService {
     });
 
     return result;
+  }
+
+  /**
+   * Envoi en réparation par la COORDINATRICE, devis OBLIGATOIRE — « un seul
+   * geste ». Sert le cas « retour sans pièces » (PENDING3 via le raccourci
+   * Fixtronix) où ni le magasin ni la tarification n'ont produit de devis : la
+   * coordinatrice joint le devis (traçabilité, non facturé) en envoyant la DI
+   * au réparateur.
+   *
+   * Ordre : (1) devis — `addDevisPDF` route SEUL sur le bon cycle (logsdis en
+   * retour via ignoreCount) ; (2) `affectForRep` écrit le tech réparateur sur la
+   * Stat du cycle courant ; (3) on retire le marqueur `needsDevisBeforeRepair` ;
+   * (4) `changeStatusRepaire` (PENDING3 → REPARATION) lit ce tech pour le
+   * notifier. Devis + tech BLOQUANTS. Garde de rôle COORDINATRICE au resolver.
+   */
+  async coordinatorSendToRepairWithDevis(
+    _idDi: string,
+    repTechId: string,
+    devisPdf: string,
+  ): Promise<Di> {
+    if (!devisPdf) {
+      throw new GraphQLError('Devis obligatoire pour envoyer en réparation.', {
+        extensions: { code: 'BAD_REQUEST' },
+      });
+    }
+    if (!repTechId) {
+      throw new GraphQLError(
+        'Technicien réparateur obligatoire pour envoyer en réparation.',
+        { extensions: { code: 'BAD_REQUEST' } },
+      );
+    }
+    // 1) Devis (upload Drive + routage cycle initial/retour par addDevisPDF).
+    await this.addDevisPDF(_idDi, devisPdf);
+    // 2) Affectation du technicien réparateur (retour-aware, écrit id_tech_rep).
+    await this.statsService.affectForRep(_idDi, repTechId);
+    // 3) La DI n'attend plus le devis → retire le marqueur avant la transition.
+    await this.diModel.updateOne(
+      { _id: _idDi },
+      { $set: { needsDevisBeforeRepair: false } },
+    );
+    // 4) PENDING3 → REPARATION (notifie le tech réparateur affecté ci-dessus).
+    return this.changeStatusRepaire(_idDi) as unknown as Promise<Di>;
   }
 
   /**
@@ -4409,6 +4643,9 @@ export class DiService {
           _id,
           STATUS_DI.ConfirmationComposants.status,
         );
+        // 📦 DÉCRÉMENT DE STOCK — déclencheur PRINCIPAL : le magasin envoie la
+        // liste au coordinateur. Une seule fois par cycle (marqueur atomique).
+        await this.commitStockDecrementOnce(_id);
       }
     }
 
@@ -4474,6 +4711,34 @@ export class DiService {
           },
         ],
       );
+    }
+  }
+
+  /**
+   * Décrémente le stock des composants d'une DI **exactement une fois par cycle**.
+   * Réservation atomique single-winner sur `stockDecrementedAt` (le match `null`
+   * couvre null ET absent) : seule la 1re requête qui bascule null→date décrémente ;
+   * tout appel ultérieur (renvoi, autre chemin) ne matche rien → no-op. Appelé au
+   * PREMIER des deux événements de commit — envoi de la liste au coordinateur OU
+   * entrée en réparation (PENDING3) — pour que le stock soit réel quel que soit le
+   * chemin. Ré-armé à chaque nouveau diagnostic (cf. `tech_startDiagnostic`).
+   * Best-effort : un échec de décrément ne casse jamais la transition appelante.
+   * Ne concerne QUE le cycle normal (`ignoreCount === 0`) ; les cycles Retour
+   * gardent leur décrément par ligne de log dans `componentConfirmedFromCoordinator`.
+   */
+  private async commitStockDecrementOnce(diId: string): Promise<void> {
+    try {
+      const claimed = await this.diModel.findOneAndUpdate(
+        { _id: diId, stockDecrementedAt: null },
+        { $set: { stockDecrementedAt: new Date() } },
+        { new: false }, // doc PRÉ-update → porte encore array_composants + marqueur null
+      );
+      if (!claimed) return; // déjà décrémenté ce cycle → idempotent
+      await this.decrementStockForComposants(claimed.array_composants);
+    } catch (err) {
+      await this.captureDiscordFailure?.('commitStockDecrementOnce', err, {
+        diId,
+      });
     }
   }
 
@@ -4550,15 +4815,10 @@ export class DiService {
       );
       if (flipped) {
         updated = flipped;
-        try {
-          await this.decrementStockForComposants(di.array_composants);
-        } catch (err) {
-          await this.captureDiscordFailure?.(
-            'decrementStockForComposants',
-            err,
-            { diId: _id },
-          );
-        }
+        // Décrément via le marqueur idempotent : normalement DÉJÀ fait à l'envoi
+        // de la liste (no-op ici) ; sinon (envoi court-circuité) c'est ce point
+        // qui décrémente. Cycle normal uniquement (le Retour garde sa branche).
+        await this.commitStockDecrementOnce(_id);
         // Stat.status en lock-step avec Di.status — BEST-EFFORT : une DI sans
         // ligne Stat ne doit pas faire échouer la confirmation (le statut Di est
         // déjà avancé, et le stock déjà décrémenté au-dessus).

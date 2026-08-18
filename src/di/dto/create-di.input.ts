@@ -47,6 +47,12 @@ export class CreateDiInput {
   price: number;
   @Field({ nullable: true })
   finalPrice: number;
+  // Diagnostic payant (défaut true = payant, comportement actuel) + estimation
+  // du prix de diagnostic saisie à la création (pré-remplit la tarification).
+  @Field({ defaultValue: true })
+  diagnosticPayant: boolean;
+  @Field({ nullable: true })
+  diagnosticEstimate: number;
   @Field({ nullable: true })
   discount_percentage: number;
   @Field({ nullable: true })

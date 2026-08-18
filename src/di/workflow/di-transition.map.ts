@@ -65,6 +65,34 @@ export const DI_TRANSITIONS = {
     strictRole: false,
   },
   /**
+   * Nouvelle mutation : magasinTech_Pending3 (raccourci RETOUR sans PDR, erreur
+   * Fixtronix). Le diagnostic conclut « aucune pièce » sur un retour dont la
+   * faute est Fixtronix → on saute magasin ET tarification et on file en PENDING3
+   * (non facturé ; la coordinatrice joindra le devis à l'envoi en réparation).
+   *
+   * `strictFrom: true` — REFUSE DUREMENT toute source hors diagnostic
+   * (INDIAGNOSTIC / DIAGNOSTIC_Pause) directement dans le moteur, SANS ajouter
+   * INDIAGNOSTIC à `ALLOWED_TRANSITIONS[PENDING3]` : on n'ouvre donc AUCUN chemin
+   * générique diagnostic→PENDING3 pour les autres mutations (changeStatusPending3
+   * garde sa whitelist intacte). Même parade que TECH_ABANDON_TO_PENDING1.
+   * La condition métier (retour + sans PDR + erreur Fixtronix) est vérifiée en
+   * amont dans `changeStatusMagasinEstimation`. `updateStatStatus: true` garde
+   * `Stat.status` synchro (vue tech).
+   */
+  MAGASIN_TECH_TO_PENDING3: {
+    key: 'MAGASIN_TECH_TO_PENDING3',
+    from: [
+      STATUS_DI.InDiagnostic.status,
+      STATUS_DI.DiagnosticInPause.status,
+    ],
+    to: STATUS_DI.Pending3.status,
+    currentRoles: STATUS_DI.Pending3.role,
+    allowedActorRoles: [Role.TECH],
+    updateStatStatus: true,
+    strictFrom: true,
+    strictRole: false,
+  },
+  /**
    * Existing mutation: managerAdminManager_Pending3
    * Existing behavior: update status + current_roles.
    *

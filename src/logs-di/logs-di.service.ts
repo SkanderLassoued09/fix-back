@@ -86,7 +86,8 @@ export class LogsDiService {
             can_be_repaired: diag.can_be_repaired,
             contain_pdr: diag.contain_pdr,
             remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
-            isErrorFromFixtronix: diag.isErrorFromFixtronix ?? null,
+            // `isErrorFromFixtronix` retiré du write TECH — tranché par la
+            // coordinatrice (setErrorFromFixtronix). Valeur tech ignorée.
             array_composants: diag.array_composants,
             di_category_id: diag.di_category_id,
           },
@@ -112,6 +113,17 @@ export class LogsDiService {
       throw error;
     }
   }
+
+  /** Écrit le verdict « erreur Fixtronix » sur le snapshot du cycle retour
+   *  `idIgnore` (décision COORDINATRICE). No-op si la ligne n'existe pas encore. */
+  async setErrorFromFixtronix(_idDi: string, idIgnore: number, value: boolean) {
+    return this.logsDiModel.findOneAndUpdate(
+      { _idDi, idIgnore },
+      { $set: { isErrorFromFixtronix: !!value } },
+      { new: true },
+    );
+  }
+
   async savePricing(
     _idDi: string,
     idIgnore: number,
