@@ -98,6 +98,21 @@ export class DiResolver {
     });
   }
 
+  /** RÉACTIVATION d'une DI annulée → statut précédent (lu dans statusHistory).
+   *  Gouvernance : coordinatrice + admins (rôle TECH EXCLU), garde de rôle BACK
+   *  réelle (pas un bouton masqué). Auteur tracé (Audit) via `@CurrentUser`.
+   *  Refus back : non annulée / sans statut précédent / origine post-document
+   *  (BL·facture émis) / déjà réactivée une fois. */
+  @Mutation(() => Di)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.COORDIANTOR, Role.ADMIN_MANAGER, Role.ADMIN_TECH)
+  async reactiverDi(
+    @Args('diId') diId: string,
+    @CurrentUser() profile: Profile,
+  ) {
+    return this.diService.reactiverDi(diId, { username: profile?.username });
+  }
+
   /**
    * ABANDON du diagnostic par un technicien. AUTHENTIFIÉE (`@CurrentUser`) — on
    * sait ainsi QUI abandonne (`abandonedBy`). La DI retourne en PENDING1 pour
@@ -505,21 +520,16 @@ export class DiResolver {
     return this.diService.setDiagnosticPayant(diId, payant);
   }
 
-  /** Verdict « erreur Fixtronix » (phase retour) — décision COORDINATRICE (le
-   *  tech ne juge pas sa propre erreur). Rôle TECH refusé (API directe comprise). */
-  @Mutation(() => Boolean)
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.COORDIANTOR, Role.ADMIN_MANAGER, Role.ADMIN_TECH)
-  async setErrorFromFixtronix(
-    @Args('diId') diId: string,
-    @Args('value') value: boolean,
-  ) {
-    return this.diService.setErrorFromFixtronix(diId, value);
-  }
-
   @Mutation(() => Boolean)
   async changeStatusNegociate1(@Args('_id') _id: string) {
     await this.diService.changeStatusNegociate1(_id);
+    return true;
+  }
+  // Cas PAYANT irréparable : « Valider le prix » clôture en IRREPARABLE au lieu
+  // d'entrer dans l'Approval (voir DiService.changeStatusIrreparableFromPricing).
+  @Mutation(() => Boolean)
+  async changeStatusIrreparableFromPricing(@Args('_id') _id: string) {
+    await this.diService.changeStatusIrreparableFromPricing(_id);
     return true;
   }
   @Mutation(() => Boolean)

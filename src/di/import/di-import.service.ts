@@ -48,6 +48,10 @@ export interface ImportCrees {
   clients: number;
   locations: number;
   ignorees: number;
+  /** DI dont la référence appartenait à une DI SUPPRIMÉE (soft-delete) : le
+   *  vestige a été purgé et la DI recréée lors du ré-import. Sous-ensemble de
+   *  `dis` (comptées aussi dans `dis`). */
+  reactivees?: number;
 }
 export type LigneStatut = 'valide' | 'avertissement' | 'erreur';
 /** One processed data row, for the colored preview table on the front. */
@@ -161,6 +165,7 @@ export class DiImportService {
     const crees = await this.persist(parsed.rows, report, {
       ...resCtx,
       createdBy: opts.createdBy,
+      deletedRefs: existing.deletedRefs,
     });
     report.crees = crees;
     return report;
@@ -216,6 +221,7 @@ export class DiImportService {
       ...resCtx,
       createdBy: opts.createdBy,
       decisions,
+      deletedRefs: existing.deletedRefs,
     }).catch((err) =>
       this.logger.error(
         `processJob ${job.jobId} a rejeté hors gestion: ${(err as Error)?.message ?? err}`,
@@ -248,6 +254,10 @@ export class DiImportService {
       aliasMap?: Map<string, any>;
       createdBy?: string;
       decisions?: Map<number, 'client' | 'company'>;
+      /** Références portées par des DI SUPPRIMÉES (soft-delete) → à purger avant
+       *  recréation pour libérer l'index unique `_idnum` (ré-import après
+       *  suppression). Voir `loadExistingRefs`. */
+      deletedRefs?: Set<string>;
     },
     report?: ImportReport,
   ): Promise<void> {
@@ -259,6 +269,8 @@ export class DiImportService {
     let clientsCreated = 0;
     let locationsCreated = 0;
     let ignorees = 0;
+    let reactivees = 0;
+    let processed = 0; // lignes traitées (suivi ligne par ligne, affichage live)
 
     try {
       await this.jobService.markRunning(jobId);
@@ -271,6 +283,17 @@ export class DiImportService {
 
         for (const row of batch) {
           lastRef = row.nDi;
+          // Suivi ligne par ligne — étape « rattachement du client ».
+          this.emitProgress(
+            jobId,
+            processed,
+            total,
+            row.nDi,
+            'RUNNING',
+            `Ligne ${row.ligne} · ${row.nDi} — rattachement du client${
+              row.clientName ? ` « ${row.clientName} »` : ''
+            }…`,
+          );
           try {
             const tier = this.resolveTier(row.clientName, ctx);
             let clientId: string | undefined;
@@ -330,6 +353,28 @@ export class DiImportService {
               if (loc.created) locationsCreated++;
             }
 
+            // Ré-import après suppression : si la référence appartient à une DI
+            // SUPPRIMÉE (soft-delete), on purge le vestige AVANT de recréer, pour
+            // libérer l'index unique `_idnum`. Sans ça, `createDi` lèverait E11000
+            // → la ligne serait « ignorée » et la DI ne réapparaîtrait jamais
+            // (c'est le bug « existe déjà » malgré la suppression). Une DI ACTIVE
+            // reste protégée (le filtre `isDeleted:true` de `freeDeletedRef`).
+            const revived = ctx.deletedRefs?.has(row.nDi)
+              ? await this.freeDeletedRef(row.nDi)
+              : false;
+
+            // Suivi ligne par ligne — étape « création de la DI ».
+            this.emitProgress(
+              jobId,
+              processed,
+              total,
+              row.nDi,
+              'RUNNING',
+              `Ligne ${row.ligne} · ${row.nDi} — ${
+                revived ? 'réactivation' : 'création'
+              } de la DI « ${row.designation} »…`,
+            );
+
             await this.diService.createDi(
               {
                 title: row.designation,
@@ -345,6 +390,7 @@ export class DiImportService {
               { forcedRef: row.nDi, skipNotify: true },
             );
             dis++;
+            if (revived) reactivees++;
           } catch (err) {
             if (this.isDuplicateKeyError(err)) {
               // Idempotence : la référence existe déjà → IGNORÉE (ni recréation,
@@ -360,6 +406,7 @@ export class DiImportService {
               });
             }
           }
+          processed++;
         }
 
         const updated = await this.jobService.incrementProgress(
@@ -382,6 +429,7 @@ export class DiImportService {
         clients: clientsCreated,
         locations: locationsCreated,
         ignorees,
+        reactivees,
       };
       await this.jobService.complete(jobId, rep);
       this.emitProgress(jobId, total, total, null, 'COMPLETED');
@@ -393,6 +441,7 @@ export class DiImportService {
         clients: clientsCreated,
         locations: locationsCreated,
         ignorees,
+        reactivees,
       };
       await this.jobService.fail(
         jobId,
@@ -411,6 +460,7 @@ export class DiImportService {
     total: number,
     currentRef: string | null,
     phase: string,
+    detail?: string,
   ): void {
     try {
       this.notificationGateway.diImportProgress({
@@ -419,6 +469,7 @@ export class DiImportService {
         total,
         currentRef: currentRef ?? null,
         phase,
+        detail,
       });
     } catch (err) {
       this.logger.warn(
@@ -750,6 +801,8 @@ export class DiImportService {
       companyIds?: Set<string>;
       aliasMap?: Map<string, any>;
       createdBy?: string;
+      /** Références de DI SUPPRIMÉES (soft-delete) à purger avant recréation. */
+      deletedRefs?: Set<string>;
     },
   ): Promise<ImportCrees> {
     // Rows that errored during validation are excluded from the import set.
@@ -761,6 +814,7 @@ export class DiImportService {
     let dis = 0;
     let clientsCreated = 0;
     let locationsCreated = 0;
+    let reactivees = 0;
 
     for (const row of toImport) {
       try {
@@ -786,6 +840,13 @@ export class DiImportService {
           if (loc.created) locationsCreated++;
         }
 
+        // Ré-import après suppression : purge le vestige SOFT-DELETED portant
+        // cette référence pour libérer l'index unique `_idnum` avant recréation
+        // (sinon E11000). Une DI ACTIVE n'est jamais touchée.
+        const revived = ctx.deletedRefs?.has(row.nDi)
+          ? await this.freeDeletedRef(row.nDi)
+          : false;
+
         const input: any = {
           title: row.designation,
           nSerie: row.nSerie,
@@ -802,6 +863,7 @@ export class DiImportService {
           skipNotify: true,
         });
         dis++;
+        if (revived) reactivees++;
       } catch (err) {
         // A runtime failure on an otherwise-valid row: report it, keep going.
         this.logger.error(
@@ -821,6 +883,7 @@ export class DiImportService {
       clients: clientsCreated,
       locations: locationsCreated,
       ignorees: rows.length - dis,
+      reactivees,
     };
   }
 
@@ -830,21 +893,45 @@ export class DiImportService {
 
   private async loadExistingRefs(): Promise<{
     refs: Set<string>;
+    deletedRefs: Set<string>;
     nextAuto: number;
   }> {
-    const docs = await this.diModel.find({}, { _idnum: 1 }).lean();
+    // On lit AUSSI `isDeleted` : une DI SUPPRIMÉE (soft-delete) conserve son
+    // `_idnum` (ligne + index unique). Elle ne doit PAS bloquer le ré-import de
+    // cette référence — `refs` (rejet précheck) ne contient donc QUE les DI
+    // ACTIVES ; les références supprimées vont dans `deletedRefs` (réactivables
+    // au persist). Le compteur `max` reste calculé sur TOUTES les références
+    // (actives + supprimées) pour éviter qu'une réf auto-générée entre en
+    // collision avec l'index d'une DI supprimée.
+    const docs = await this.diModel
+      .find({}, { _idnum: 1, isDeleted: 1 })
+      .lean();
     const refs = new Set<string>();
+    const deletedRefs = new Set<string>();
     let max = 0;
     for (const d of docs) {
       const ref = this.str((d as any)?._idnum);
-      if (ref) refs.add(ref);
+      if (ref) {
+        if ((d as any)?.isDeleted === true) deletedRefs.add(ref);
+        else refs.add(ref);
+      }
       const m = ref.match(/^(?:DI|T)(\d+)$/);
       if (m) {
         const n = parseInt(m[1], 10);
         if (Number.isFinite(n) && n > max) max = n;
       }
     }
-    return { refs, nextAuto: max + 1 };
+    return { refs, deletedRefs, nextAuto: max + 1 };
+  }
+
+  /** Purge la DI SOFT-DELETED portant `ref` (si elle existe) pour libérer
+   *  l'index unique `_idnum` avant un ré-import. Le filtre `isDeleted: true`
+   *  garantit qu'une DI ACTIVE n'est JAMAIS touchée (idempotence préservée :
+   *  une référence active reste bloquée). Retourne true si une purge a eu lieu. */
+  private async freeDeletedRef(ref: string): Promise<boolean> {
+    if (!ref) return false;
+    const res = await this.diModel.deleteOne({ _idnum: ref, isDeleted: true });
+    return (res?.deletedCount ?? 0) > 0;
   }
 
   private async buildClientCache(): Promise<Map<string, string>> {

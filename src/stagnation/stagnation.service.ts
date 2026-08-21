@@ -40,6 +40,7 @@ export class StagnationService {
   /** Statuses that are terminal — never flagged as "stagnant". */
   private static readonly TERMINAL_STATUSES = [
     STATUS_DI.Finished.status,
+    STATUS_DI.Irreparable.status,
     STATUS_DI.Annuler.status,
   ];
 

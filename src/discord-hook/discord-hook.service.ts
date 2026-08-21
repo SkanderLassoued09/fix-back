@@ -60,6 +60,7 @@ const STATUS_LABELS: Record<string, string> = {
   CLOSING: '📄 CLOSING',
   ATTENTE_BL_FACTURE: '📄 CLOSING',
   FINISHED: '✅ Terminée',
+  IRREPARABLE: '⛔ Irréparable',
   RETOUR1: '🔁 Retour 1',
   RETOUR2: '🔁 Retour 2',
   RETOUR3: '⚠️ Retour 3',
@@ -613,6 +614,30 @@ export class DiscordHookService {
             {
               name: '💵 Prix final',
               value: di?.price ? `${di.price} TND` : 'N/A',
+              inline: true,
+            },
+          ]),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  async sendDiIrreparable(di: any) {
+    // Clôture d'une DI NON RÉPARABLE (statut terminal IRREPARABLE) — l'équipement
+    // ne peut pas être réparé. Miroir de `sendDiFinished` (canal général).
+    const ctx = await this.buildContext(di);
+    await this.postEmbed('GENERAL_ATELIER', {
+      embeds: [
+        {
+          title: '⛔ DI irréparable',
+          description: 'Équipement jugé non réparable — dossier clôturé.',
+          color: 15158332,
+          fields: this.buildBaseFields(ctx, undefined, [
+            {
+              name: '💵 Diagnostic',
+              value: di?.price ? `${di.price} TND` : 'Non facturé',
               inline: true,
             },
           ]),

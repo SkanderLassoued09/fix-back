@@ -20,11 +20,15 @@ import {
  * in multiple places.
  *
  * "In progress" mirrors the existing DashboardKpiService convention: every
- * status that is not terminal (FINISHED/ANNULER/RETOUR*) and not pre-flight
- * (CREATED) counts as a DI currently being worked on.
+ * status that is not terminal (FINISHED/IRREPARABLE/ANNULER/RETOUR*) and not
+ * pre-flight (CREATED) counts as a DI currently being worked on.
  */
 export const FINISHED_STATUSES = [STATUS_DI.Finished.status]; // ['FINISHED']
 export const CANCELLED_STATUSES = [STATUS_DI.Annuler.status]; // ['ANNULER']
+// Terminal « non réparable » — DI clôturée mais qui n'est PAS une réussite de
+// réparation : exclue de l'« en cours », mais volontairement HORS
+// `FINISHED_STATUSES` pour ne gonfler aucun compteur de DI terminées/réussies.
+export const IRREPARABLE_STATUSES = [STATUS_DI.Irreparable.status]; // ['IRREPARABLE']
 export const RETOUR_STATUSES = [
   STATUS_DI.Retour1.status,
   STATUS_DI.Retour2.status,
@@ -34,6 +38,7 @@ export const IN_PROGRESS_EXCLUDED = [
   STATUS_DI.Created.status,
   ...FINISHED_STATUSES,
   ...CANCELLED_STATUSES,
+  ...IRREPARABLE_STATUSES,
   ...RETOUR_STATUSES,
 ];
 

@@ -193,6 +193,21 @@ export const STATUS_DI = {
     role: ['Manager', 'Admin_Tech', 'Admin_Manager'],
     future_status: ['Retour1'],
   },
+  // Statut TERMINAL « équipement irréparable » — clôture d'une DI non réparable.
+  // Remplace FINISHED pour les fins NON RÉPARABLES. Deux chemins d'entrée :
+  //   - non payant OU retour  → directement depuis le diagnostic (aucun fichier) ;
+  //   - payant (flux original) → passe d'abord par PENDING2 → PRICING_DIAG pour
+  //     FACTURER le diagnostic, puis clôture en IRREPARABLE à « Valider le prix ».
+  // Terminal (`future_status: null`, aucun retour). Mêmes rôles de visibilité que
+  // FINISHED (Manager/Admin_Tech/Admin_Manager → hors listes Tech/Magasin/Coord).
+  // NB : la VALEUR 'IRREPARABLE' coexiste avec un motif d'ANNULATION homonyme
+  // (champ distinct) — aucune collision fonctionnelle.
+  Irreparable: {
+    status: 'IRREPARABLE',
+    description: 'Équipement irréparable — clôturé',
+    role: ['Manager', 'Admin_Tech', 'Admin_Manager'],
+    future_status: null,
+  },
   Annuler: {
     status: 'ANNULER',
     description: 'Cancelled by manager',

@@ -224,6 +224,28 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = 
     STATUS_DI.InDiagnostic.status,
     STATUS_DI.DiagnosticInPause.status,
   ],
+  // Statut TERMINAL « irréparable » — clôture d'une DI non réparable. Sources
+  // autorisées :
+  //   - les trois états de diagnostic (verdict non réparable : non-payant en
+  //     direct, ou retour) — miroir de la clôture FINISHED non réparable ;
+  //   - PRICING_DIAG : cas PAYANT (flux original) — après facturation du
+  //     diagnostic, « Valider le prix » clôture en IRREPARABLE ;
+  //   - la phase Approval (WAITING_DEVIS/WAITING_BC/NEGOTIATION2 + legacy) : une
+  //     DI jugée non réparable pendant la négociation ferme aussi en IRREPARABLE
+  //     (miroir de la branche non-réparable de « Confirmer » / exitWaitingBcOnBc).
+  // IRREPARABLE n'est source d'AUCUNE transition (terminal) et n'est pas dans
+  // REENTRY_SOURCES.
+  [STATUS_DI.Irreparable.status]: [
+    STATUS_DI.Diagnostic.status,
+    STATUS_DI.InDiagnostic.status,
+    STATUS_DI.DiagnosticInPause.status,
+    STATUS_DI.Pricing.status,
+    STATUS_DI.WaitingDevis.status,
+    STATUS_DI.WaitingBc.status,
+    STATUS_DI.Negotiation2.status,
+    LEGACY_ATTENTE_BC_DEVIS,
+    LEGACY_NEGOTIATION1,
+  ],
 };
 
 /**

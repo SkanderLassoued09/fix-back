@@ -38,6 +38,15 @@ export class AuthService {
         HttpStatus.UNAUTHORIZED,
       );
     }
+    // Un compte SUPPRIMÉ (soft-delete `isDeleted: true`) ne peut PAS se
+    // connecter, même avec le bon mot de passe. Refus AVANT la vérification du
+    // mot de passe (aucun signal utile pour un compte désactivé).
+    if ((user as any).isDeleted === true) {
+      throw new HttpException(
+        'Ce compte a été désactivé — connexion refusée.',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
     const matchPassword = await bcrypt.compare(password, user.password);
     if (!matchPassword) {
       throw new HttpException(
@@ -56,6 +65,15 @@ export class AuthService {
 
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
+    }
+
+    // Défense en profondeur : un compte SUPPRIMÉ (soft-delete) ne peut pas se
+    // connecter. `validateUser` (garde locale) le bloque déjà en amont ; cette
+    // garde couvre tout appel direct à `login`.
+    if ((user as any).isDeleted === true) {
+      throw new UnauthorizedException(
+        'Ce compte a été désactivé — connexion refusée.',
+      );
     }
 
     // ── Single-session enforcement, minimal version ────────────────────

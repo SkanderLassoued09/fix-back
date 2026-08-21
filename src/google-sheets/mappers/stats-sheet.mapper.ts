@@ -56,7 +56,15 @@ export class StatsSheetMapper
         this.diModel.countDocuments({
           ...base,
           status: {
-            $nin: ['CREATED', 'FINISHED', 'ANNULER', 'RETOUR1', 'RETOUR2', 'RETOUR3'],
+            $nin: [
+              'CREATED',
+              'FINISHED',
+              'IRREPARABLE',
+              'ANNULER',
+              'RETOUR1',
+              'RETOUR2',
+              'RETOUR3',
+            ],
           },
         }),
         this.diModel.countDocuments({

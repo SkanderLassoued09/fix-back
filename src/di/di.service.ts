@@ -1916,12 +1916,12 @@ export class DiService {
             can_be_repaired: diag.can_be_repaired,
             contain_pdr: diag.contain_pdr,
             remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
+            // Verdict « erreur Fixtronix » (phase retour) saisi par le TECH dans
+            // le modal de diagnostic. C'est ce flag qui déclenche le raccourci
+            // « retour sans pièces → PENDING3 non facturé » (décision assumée).
+            isErrorFromFixtronix: diag.isErrorFromFixtronix ?? false,
             array_composants: diag.array_composants,
             di_category_id: diag.di_category_id,
-            // `isErrorFromFixtronix` N'EST PLUS écrit ici : le verdict « erreur
-            // Fixtronix » (phase retour) est désormais tranché par la
-            // COORDINATRICE via `setErrorFromFixtronix` (le tech ne juge pas sa
-            // propre erreur). Une valeur envoyée par le tech est ignorée.
             // Ré-arme le décrément de stock pour CETTE liste (le tech vient de
             // (re)saisir array_composants) : le prochain commit décrémentera.
             stockDecrementedAt: null,
@@ -2155,29 +2155,6 @@ export class DiService {
     return true;
   }
 
-  /** Écrit le verdict « erreur Fixtronix » (phase retour) — décision
-   *  COORDINATRICE (le tech ne juge pas sa propre erreur). Écrit le Di live ET,
-   *  en retour (`ignoreCount>0`), le snapshot du cycle courant. Guard de rôle
-   *  posée au resolver (refuse le rôle tech, appel direct compris). */
-  async setErrorFromFixtronix(_id: string, value: boolean): Promise<boolean> {
-    const di = await this.diModel.findOne({ _id });
-    if (!di) throw new GraphQLError('DI introuvable', {
-      extensions: { code: 'NOT_FOUND', diId: _id },
-    });
-    await this.diModel.updateOne(
-      { _id },
-      { $set: { isErrorFromFixtronix: !!value } },
-    );
-    if (di.ignoreCount && di.ignoreCount > 0) {
-      await this.logsDiService.setErrorFromFixtronix(
-        _id,
-        di.ignoreCount,
-        !!value,
-      );
-    }
-    return true;
-  }
-
   /** A DriveDocRef is a real uploaded doc (object with a driveFileId), not a
    *  legacy filename string or an empty value. */
   private isDriveDocRef(doc: any): boolean {
@@ -2310,9 +2287,64 @@ export class DiService {
     );
   }
 
+  /** Effets de bord communs d'une clôture IRREPARABLE (équipement non réparable)
+   *  — MIROIR de `finalizeFinished` : stat + Discord dédié + socket + handoff
+   *  `DI_IRREPARABLE`. Ne fait AUCUNE transition (l'appelant a déjà positionné le
+   *  statut) et NE ferme PAS le leg diagnostic (géré par l'appelant `fromDiagnostic`
+   *  uniquement, pour ne pas doubler la fermeture depuis l'Approval/pricing). */
+  private async finalizeIrreparable(di: any): Promise<void> {
+    if (di?.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        di._id,
+        STATUS_DI.Irreparable.status,
+        di.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(di._id, STATUS_DI.Irreparable.status);
+    }
+    try {
+      await this.discordHookService.sendDiIrreparable(di);
+    } catch (err) {
+      await this.captureDiscordFailure('discord-notification', err);
+    }
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { result: di, states: di },
+      target: {},
+    });
+    // CLÔTURE (équipement irréparable) : suivi/facturation, comme DI_FINISHED —
+    // tous les rôles de suivi sauf le Tech (son intervention est terminée).
+    await this.emitDiHandoff(
+      di?._id,
+      di,
+      'DI_IRREPARABLE',
+      `Équipement irréparable (${(di as any)?._idnum ?? di?._id})`,
+      ['Manager', 'Admin_Manager', 'Admin_Tech', 'Coordinator', 'Magasin'],
+    );
+  }
+
+  /** Clôture une DI en IRREPARABLE (transition gardée + effets de bord). Point
+   *  d'entrée UNIQUE réutilisé par les trois chemins non réparables (sortie de
+   *  diagnostic non-payant/retour, non-réparable pendant l'Approval, et clôture
+   *  PAYANT après facturation en PRICING_DIAG). La garde `assertTransitionAllowed`
+   *  refuse toute source non autorisée (server-authoritative). */
+  private async closeIrreparable(_id: string): Promise<any> {
+    await this.assertTransitionAllowed(_id, STATUS_DI.Irreparable.status);
+    const moved = await this.diModel.findOneAndUpdate(
+      { _id },
+      { $set: { status: STATUS_DI.Irreparable.status } },
+      { new: true },
+    );
+    if (!moved) {
+      throw new Error('Issue moving to IRREPARABLE');
+    }
+    await this.finalizeIrreparable(moved);
+    return moved;
+  }
+
   /**
    * Sortie de WAITING_BC à l'upload du BC = MÊME routage que le bouton
-   * « Confirmer » du modal : non réparable → FINISHED ; réparable SANS composants
+   * « Confirmer » du modal : non réparable → IRREPARABLE ; réparable SANS composants
    * → PENDING3 ; réparable AVEC composants → PROCESSING (magasin). Atomique
    * (claim filtré sur WAITING_BC → un seul gagnant). N'écrit PAS le prix (déjà
    * persisté depuis PRICING / le modal) ; réutilise les notifications de chaque
@@ -2322,8 +2354,10 @@ export class DiService {
   private async exitWaitingBcOnBc(_id: string, di: any): Promise<void> {
     const notRepairable = di?.can_be_repaired === false;
     const hasComponents = this.diHasComponents(di);
+    // Non réparable détecté au dépôt du BC → clôture IRREPARABLE (et NON FINISHED)
+    // — miroir de la branche non-réparable du bouton « Confirmer ».
     const target = notRepairable
-      ? STATUS_DI.Finished.status
+      ? STATUS_DI.Irreparable.status
       : hasComponents
         ? STATUS_DI.InMagasin.status
         : STATUS_DI.Pending3.status;
@@ -2335,8 +2369,8 @@ export class DiService {
     );
     if (!moved) return; // upload concurrent → un seul gagnant
 
-    if (target === STATUS_DI.Finished.status) {
-      await this.finalizeFinished(moved);
+    if (target === STATUS_DI.Irreparable.status) {
+      await this.finalizeIrreparable(moved);
       return;
     }
 
@@ -2362,12 +2396,14 @@ export class DiService {
   }
 
   async changeStatusTofinsh(_id: string) {
-    // Non-repairable routing. A non-repairable DI still needs its diagnostic
-    // billed when it's in the ORIGINAL flow → route to PENDING2 ("facturer le
-    // diagnostic") instead of closing. In a RETOUR cycle (ignoreCount > 0) it
-    // closes directly (FINISHED), unchanged. Guard: only redirect when we're
-    // actually leaving the DIAGNOSTIC phase — a reparation-finish also lands
-    // here and must keep going to FINISHED.
+    // Routage NON RÉPARABLE. Une DI non réparable ferme désormais en IRREPARABLE
+    // (statut terminal dédié), plus en FINISHED. SEULE exception : le flux
+    // ORIGINAL + diagnostic PAYANT doit d'abord FACTURER le diagnostic → PENDING2
+    // (→ PRICING_DIAG), la clôture IRREPARABLE se faisant à « Valider le prix ».
+    //   - diagnostic + (non payant OU retour) → IRREPARABLE direct ;
+    //   - diagnostic + payant + flux original  → PENDING2 (facturation) ;
+    //   - fin de RÉPARATION → WAITING_BL (inchangé, cette DI est réparée) ;
+    //   - non réparable depuis l'Approval / autre → IRREPARABLE.
     const di: any = await this.diModel.findOne({ _id }).lean();
     const fromDiagnostic = [
       STATUS_DI.Diagnostic.status,
@@ -2375,9 +2411,21 @@ export class DiService {
       STATUS_DI.DiagnosticInPause.status,
     ].includes(di?.status);
     const isOriginalFlow = !(di?.ignoreCount > 0);
-    if (fromDiagnostic && isOriginalFlow) {
-      // Original-flow, non-repairable → bill the diagnostic (PENDING2).
-      return this.magasinTech_Pending2(_id) as any;
+    // Défaut `true` (champ absent = payant, comportement historique).
+    const diagnosticPayant = di?.diagnosticPayant !== false;
+    if (fromDiagnostic) {
+      if (isOriginalFlow && diagnosticPayant) {
+        // Flux original + PAYANT → facturer le diagnostic (PENDING2). La clôture
+        // IRREPARABLE sera posée à « Valider le prix » en PRICING_DIAG.
+        return this.magasinTech_Pending2(_id) as any;
+      }
+      // Non payant (flux original) OU retour → clôture directe IRREPARABLE
+      // (aucune facturation, aucun fichier).
+      const closed = await this.closeIrreparable(_id);
+      // Sortie de diagnostic → fermeture du leg diagnostic (cumul serveur),
+      // comme l'ancienne clôture non réparable depuis le diagnostic.
+      await this.statsService.closeDiagLeg(_id, closed.ignoreCount ?? 0);
+      return closed;
     }
 
     // REPAIRED DI: the tech's "Fin réparation" no longer closes directly. The DI
@@ -2433,56 +2481,12 @@ export class DiService {
       return waiting;
     }
 
-    // Retour non-repairable (from diagnostic) → FINISHED directly (unchanged).
-    await this.assertTransitionAllowed(_id, STATUS_DI.Finished.status);
-    const result = await this.diModel.findOneAndUpdate(
-      { _id },
-      { $set: { status: STATUS_DI.Finished.status } },
-      { new: true },
-    );
-
-    if (!result) {
-      throw new Error('Issue in changing state changeStatusTofinsh');
-    }
-
-    // Retour non-réparable : la sortie de diagnostic ferme le segment de
-    // travail courant (cumul serveur). No-op pour une fin de réparation
-    // (l'ancre diagnostic est déjà nulle).
-    if (fromDiagnostic) {
-      await this.statsService.closeDiagLeg(_id, result.ignoreCount ?? 0);
-    }
-
-    // ✅ Fix: call statsService only once
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.Finished.status,
-        result.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
-    }
-
-    // 🔔 Discord notification (Finished)
-    try {
-      await this.discordHookService.sendDiFinished(result);
-    } catch (err) {
-      await this.captureDiscordFailure('discord-notification', err);
-    }
-
-    // CLÔTURE : ce chemin (retour non réparable → FINISHED direct) ne passe PAS
-    // par `finalizeFinished`, donc il faut émettre `DI_FINISHED` ICI aussi —
-    // sinon une DI clôturée par ce chemin ne notifie PERSONNE. Mêmes rôles que
-    // finalizeFinished (tous les rôles de suivi sauf le Tech).
-    await this.emitDiHandoff(
-      result?._id,
-      result,
-      'DI_FINISHED',
-      `Intervention terminée (${(result as any)?._idnum ?? result?._id})`,
-      ['Manager', 'Admin_Manager', 'Admin_Tech', 'Coordinator', 'Magasin'],
-    );
-
-    return result;
+    // Non réparable depuis la phase Approval (WAITING_DEVIS/WAITING_BC/
+    // NEGOTIATION2 — DI jugée non réparable pendant la négociation) ou toute
+    // autre source non-diagnostic / non-réparation → clôture IRREPARABLE
+    // (remplace l'ancienne clôture FINISHED). Le leg diagnostic est déjà fermé
+    // en amont (sortie de diagnostic), on ne le referme pas ici.
+    return this.closeIrreparable(_id);
   }
 
   /**
@@ -2664,6 +2668,157 @@ export class DiService {
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
+
+    return updated;
+  }
+
+  /**
+   * RÉACTIVATION d'une DI annulée → la ramène au statut qu'elle avait JUSTE avant
+   * l'annulation, lu dans `statusHistory` (l'annulation n'ayant RIEN détruit :
+   * documents, montants et composants sont intacts). Gouvernance : coordinatrice
+   * + admins (garde de rôle au resolver ; le TECH est exclu). Auteur tracé dans
+   * une entrée `Audit` (le module n'a pas de champ auteur → dans le message).
+   *
+   * Refus (server-authoritative) : DI non annulée ; statut précédent introuvable
+   * dans l'historique ; origine POST-DOCUMENT (BL/facture émis → prudence
+   * comptable) ; DI déjà réactivée une fois (1 max, anti-boucle).
+   */
+  async reactiverDi(_idDI: string, actor: { username?: string | null }) {
+    const di: any = await this.diModel
+      .findOne({ _id: _idDI })
+      .select('status statusHistory')
+      .lean();
+    if (!di) {
+      throw new GraphQLError(`DI '${_idDI}' introuvable.`, {
+        extensions: { code: 'NOT_FOUND' },
+      });
+    }
+    if (di.status !== STATUS_DI.Annuler.status) {
+      throw new GraphQLError("Cette DI n'est pas annulée.", {
+        extensions: { code: 'BAD_REQUEST' },
+      });
+    }
+
+    const history: Array<{ status: string; at: Date }> = Array.isArray(
+      di.statusHistory,
+    )
+      ? di.statusHistory
+      : [];
+
+    // Statut précédent = l'entrée juste AVANT la DERNIÈRE entrée ANNULER de
+    // l'historique (le « dernier » gère les cycles annulé→réactivé→ré-annulé).
+    let lastAnnul = -1;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i]?.status === STATUS_DI.Annuler.status) {
+        lastAnnul = i;
+        break;
+      }
+    }
+    const previousStatus = lastAnnul > 0 ? history[lastAnnul - 1]?.status : null;
+    if (!previousStatus) {
+      throw new GraphQLError(
+        'Statut précédent introuvable dans l’historique — réactivation impossible.',
+        { extensions: { code: 'NO_PREVIOUS_STATUS', diId: _idDI } },
+      );
+    }
+
+    // Garde ARGENT/DOCUMENTS : interdit de rouvrir une DI dont le BL ou la
+    // facture ont déjà été émis (phase clôture, legacy inclus) ou déjà terminée.
+    const POST_DOCUMENT = new Set<string>([
+      ...CLOSING_STATUS_VALUES, // WAITING_BL, WAITING_FACTURE, CLOSING, ATTENTE_BL_FACTURE
+      STATUS_DI.Finished.status,
+    ]);
+    if (POST_DOCUMENT.has(previousStatus)) {
+      throw new GraphQLError(
+        `Réactivation interdite : la DI était en « ${previousStatus} » (BL/facture déjà émis).`,
+        {
+          extensions: {
+            code: 'REACTIVATION_FORBIDDEN_ORIGIN',
+            diId: _idDI,
+            previousStatus,
+          },
+        },
+      );
+    }
+
+    // Garde ANTI-BOUCLE (1 réactivation max) : une réactivation passée a laissé
+    // dans l'historique une entrée ANNULER SUIVIE d'un autre statut. La DERNIÈRE
+    // entrée ANNULER (l'annulation courante) est en fin de tableau, donc non
+    // suivie → non comptée. Une entrée ANNULER suivie d'autre chose = réactivation.
+    const alreadyReactivated = history.some(
+      (h, i) =>
+        h?.status === STATUS_DI.Annuler.status &&
+        i < history.length - 1 &&
+        history[i + 1]?.status !== STATUS_DI.Annuler.status,
+    );
+    if (alreadyReactivated) {
+      throw new GraphQLError(
+        'Cette DI a déjà été réactivée une fois — réactivation supplémentaire refusée.',
+        { extensions: { code: 'REACTIVATION_LIMIT', diId: _idDI } },
+      );
+    }
+
+    // `current_roles` re-dérivé du statut cible (comme une transition normale).
+    // Valeur legacy non trouvée → repli sur la coordination (jamais invisible).
+    const targetDef = Object.values(STATUS_DI).find(
+      (s) => s.status === previousStatus,
+    );
+    const restoredRoles = targetDef?.role ?? ['Coordinator'];
+
+    const updated = await this.diModel.findOneAndUpdate(
+      { _id: _idDI, status: STATUS_DI.Annuler.status },
+      {
+        $set: {
+          status: previousStatus,
+          current_roles: restoredRoles,
+          // Efface les métadonnées d'annulation (sinon bandeau « annulée par… »
+          // périmé sur une DI redevenue active).
+          annulePar: null,
+          annuleLe: null,
+          annulationMotif: null,
+          annulationCommentaire: null,
+          annulationParClient: null,
+        },
+      },
+      { new: true },
+    );
+    if (!updated) {
+      // Course : la DI a bougé entre la lecture et l'écriture.
+      throw new GraphQLError(
+        'La DI a changé d’état entre-temps — réactivation annulée.',
+        { extensions: { code: 'CONFLICT', diId: _idDI } },
+      );
+    }
+
+    // Traçabilité : entrée Audit (auteur dans le message, faute de champ dédié).
+    try {
+      const auditInput: AuditInput = {
+        _idDoc: _idDI,
+        type: 'DI_REACTIVATED',
+        message: `Réactivée par ${
+          actor?.username ?? 'inconnu'
+        } : ANNULER → ${previousStatus}`,
+        isSeen: false,
+      };
+      await this.auditService.create(auditInput);
+    } catch (err) {
+      // Audit best-effort : ne fait jamais échouer la réactivation.
+      await this.operationalErrorService.capture({
+        module: 'di',
+        submodule: 'diService',
+        method: 'REACTIVER_DI_AUDIT',
+        severity: 'LOW',
+        error: 'Audit de réactivation non enregistré',
+        message: (err as Error)?.message ?? String(err),
+        payload: { diId: _idDI, previousStatus },
+      });
+    }
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { result: updated, states: updated },
+      target: {},
+    });
 
     return updated;
   }
@@ -3287,6 +3442,17 @@ export class DiService {
       );
     }
 
+    // 🔒 GARDE SERVEUR-AUTORITAIRE (miroir du front après retrait des bornes) :
+    // une DI PAYANTE doit porter un prix de diagnostic STRICTEMENT POSITIF —
+    // refus des valeurs nulles/négatives, même en appel API direct. Aucune
+    // borne 150–500 n'est imposée ici (décision commerciale, front-only).
+    if (pricing?.diagnosticPayant !== false && !(Number(price) > 0)) {
+      throw new GraphQLError(
+        'Prix du diagnostic invalide : un montant strictement positif est requis.',
+        { extensions: { code: 'BAD_REQUEST', diId: _id } },
+      );
+    }
+
     let updatedDi;
 
     if (pricing && pricing.ignoreCount && pricing.ignoreCount > 0) {
@@ -3737,6 +3903,27 @@ export class DiService {
   }
 
   // Entrée dans la phase Approval documentaire = 1er gate WAITING_DEVIS.
+  /**
+   * Cas PAYANT irréparable : après FACTURATION du diagnostic en PRICING_DIAG,
+   * « Valider le prix » clôture la DI en IRREPARABLE (au lieu d'entrer dans le
+   * flux Approval réparation via `changeStatusNegociate1`). Le prix a déjà été
+   * persisté par l'étape précédente de la cascade front (`affectinitialPrice`).
+   * Garde métier server-authoritative : REFUSE si la DI n'est pas non-réparable
+   * (`can_be_repaired !== false`) — un appel API direct ne peut pas clôturer une
+   * DI réparable en irréparable. La garde de transition (`assertTransitionAllowed`
+   * dans `closeIrreparable`) refuse en plus toute source hors PRICING_DIAG.
+   */
+  async changeStatusIrreparableFromPricing(_id: string): Promise<any> {
+    const di: any = await this.diModel.findOne({ _id }).lean();
+    if (di?.can_be_repaired !== false) {
+      throw new GraphQLError(
+        'Clôture irréparable refusée : la DI est réparable.',
+        { extensions: { code: 'BAD_REQUEST', diId: _id } },
+      );
+    }
+    return this.closeIrreparable(_id);
+  }
+
   async changeStatusNegociate1(_id: string) {
     await this.assertTransitionAllowed(_id, STATUS_DI.WaitingDevis.status);
     const result = await this.diModel.findOneAndUpdate(

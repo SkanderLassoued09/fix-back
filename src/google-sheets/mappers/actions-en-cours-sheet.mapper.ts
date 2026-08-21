@@ -39,10 +39,11 @@ export class ActionsEnCoursSheetMapper implements IGoogleSheetMapper<DiDocument>
 
   /**
    * Statuses that mean the DI has left the workshop → excluded from the list.
-   * FINISHED = delivered/done, ANNULER = cancelled. Everything else (including
-   * RETOUR1/2/3, which are returned items being reworked) is still "in the shop".
+   * FINISHED = delivered/done, IRREPARABLE = closed (non-repairable), ANNULER =
+   * cancelled. Everything else (including RETOUR1/2/3, which are returned items
+   * being reworked) is still "in the shop".
    */
-  private static readonly CLOSED = ['FINISHED', 'ANNULER'];
+  private static readonly CLOSED = ['FINISHED', 'IRREPARABLE', 'ANNULER'];
 
   constructor(@InjectModel('Di') private readonly diModel: Model<DiDocument>) {}
 

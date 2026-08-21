@@ -128,6 +128,9 @@ export class NotificationsGateway
     total: number;
     currentRef: string | null;
     phase: string;
+    /** Libellé d'étape en cours (facultatif) : « rattachement du client… »,
+     *  « création de la DI… », « réactivation… » — pour un suivi ligne par ligne. */
+    detail?: string;
   }) {
     this.server.emit('di-import.progress', payload);
   }

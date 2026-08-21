@@ -150,11 +150,12 @@ function makeFinishSvc(di: any) {
   };
   svc.discordHookService = {
     sendDiFinished: jest.fn().mockResolvedValue(undefined),
+    sendDiIrreparable: jest.fn().mockResolvedValue(undefined),
     sendDiagnosticFinished: jest.fn().mockResolvedValue(undefined),
   };
   svc.notificationGateway = { updateTicket: jest.fn() };
-  // Notif ERP de clôture : ce chemin (retour → FINISHED direct) ne passe pas par
-  // finalizeFinished → il doit émettre DI_FINISHED lui-même.
+  // Notif ERP de clôture : la clôture IRREPARABLE (via finalizeIrreparable)
+  // émet DI_IRREPARABLE vers les rôles de suivi.
   svc.notificationService = { emit: jest.fn().mockResolvedValue({}) };
   svc.statsService.findUserLinkedToConcernedDi = jest
     .fn()
@@ -164,11 +165,12 @@ function makeFinishSvc(di: any) {
 }
 
 describe('DiService.changeStatusTofinsh — non-repairable routing', () => {
-  it('ORIGINAL flow, non-repairable from diagnostic → PENDING2 (bill diagnostic), not FINISHED', async () => {
+  it('ORIGINAL flow + PAYANT, non-repairable from diagnostic → PENDING2 (bill diagnostic), not closed', async () => {
     const svc = makeFinishSvc({
       _id: 'DI1',
       status: STATUS_DI.InDiagnostic.status,
       ignoreCount: 0,
+      diagnosticPayant: true,
     });
 
     await svc.changeStatusTofinsh('DI1');
@@ -176,26 +178,66 @@ describe('DiService.changeStatusTofinsh — non-repairable routing', () => {
     expect(svc.diWorkflowService.transition).toHaveBeenCalledWith(
       expect.objectContaining({ transitionKey: 'MAGASIN_TECH_TO_PENDING2' }),
     );
-    expect(svc.diModel.findOneAndUpdate).not.toHaveBeenCalled(); // never FINISHED
+    expect(svc.diModel.findOneAndUpdate).not.toHaveBeenCalled(); // never closed here
+    expect(svc.discordHookService.sendDiIrreparable).not.toHaveBeenCalled();
   });
 
-  it('RETOUR cycle, non-repairable from diagnostic → FINISHED directly (unchanged)', async () => {
+  it('ORIGINAL flow + NON PAYANT, non-repairable from diagnostic → IRREPARABLE directly (no billing)', async () => {
     const svc = makeFinishSvc({
       _id: 'DI1',
       status: STATUS_DI.InDiagnostic.status,
-      ignoreCount: 1, // retour phase
+      ignoreCount: 0,
+      diagnosticPayant: false, // non facturé → pas de PENDING2
     });
 
     await svc.changeStatusTofinsh('DI1');
 
-    expect(svc.diModel.findOneAndUpdate).toHaveBeenCalledTimes(1); // → FINISHED
+    // Clôture directe IRREPARABLE : une écriture de statut, aucune facturation
+    // (pas de transition PENDING2).
+    expect(svc.diModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
     expect(svc.diWorkflowService.transition).not.toHaveBeenCalled();
-    expect(svc.discordHookService.sendDiFinished).toHaveBeenCalledTimes(1);
-    // Clôture par ce chemin direct → DI_FINISHED émis aussi (sinon PERSONNE
-    // n'est notifié). Rôles de suivi = tous sauf Tech.
+    expect(svc.assertTransitionAllowed).toHaveBeenCalledWith(
+      'DI1',
+      STATUS_DI.Irreparable.status,
+    );
+    expect(svc.discordHookService.sendDiIrreparable).toHaveBeenCalledTimes(1);
+    expect(svc.discordHookService.sendDiFinished).not.toHaveBeenCalled();
+    // Sortie de diagnostic → fermeture du leg diagnostic (cumul serveur).
+    expect(svc.statsService.closeDiagLeg).toHaveBeenCalledWith('DI1', 0);
     expect(svc.notificationService.emit).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: 'DI_FINISHED',
+        type: 'DI_IRREPARABLE',
+        notify: {
+          roles: [
+            'Manager',
+            'Admin_Manager',
+            'Admin_Tech',
+            'Coordinator',
+            'Magasin',
+          ],
+        },
+      }),
+    );
+  });
+
+  it('RETOUR cycle, non-repairable from diagnostic → IRREPARABLE directly (no billing in retour)', async () => {
+    const svc = makeFinishSvc({
+      _id: 'DI1',
+      status: STATUS_DI.InDiagnostic.status,
+      ignoreCount: 1, // retour phase
+      diagnosticPayant: true, // même payant : en retour on ne re-facture pas
+    });
+
+    await svc.changeStatusTofinsh('DI1');
+
+    expect(svc.diModel.findOneAndUpdate).toHaveBeenCalledTimes(1); // → IRREPARABLE
+    expect(svc.diWorkflowService.transition).not.toHaveBeenCalled();
+    expect(svc.discordHookService.sendDiIrreparable).toHaveBeenCalledTimes(1);
+    expect(svc.discordHookService.sendDiFinished).not.toHaveBeenCalled();
+    // Clôture IRREPARABLE → DI_IRREPARABLE émis vers les rôles de suivi (sauf Tech).
+    expect(svc.notificationService.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'DI_IRREPARABLE',
         notify: {
           roles: [
             'Manager',

@@ -106,12 +106,18 @@ describe('processJob — batches, progression, COMPLETED', () => {
     expect(final.status).toBe('COMPLETED');
     expect(final.report.crees.dis).toBe(60);
     expect(svc.diService.createDi).toHaveBeenCalledTimes(60); // 3 lots (25+25+10)
-    // events : initial(0) + 3 lots(25,50,60) + COMPLETED(60)
-    expect(progress.map((p) => p.done)).toEqual([0, 25, 50, 60, 60]);
-    expect(progress.map((p) => p.phase)).toEqual([
+    // Bornes de lot + cycle de vie = les évènements SANS `detail` (les évènements
+    // `detail` sont le suivi ligne par ligne, additif). La progression cumulative
+    // se lit sur ces bornes : initial(0) + 3 lots(25,50,60) + COMPLETED(60).
+    const boundary = progress.filter((p) => !p.detail);
+    expect(boundary.map((p) => p.done)).toEqual([0, 25, 50, 60, 60]);
+    expect(boundary.map((p) => p.phase)).toEqual([
       'RUNNING', 'RUNNING', 'RUNNING', 'RUNNING', 'COMPLETED',
     ]);
-    expect(progress.map((p) => p.currentRef)).toEqual([null, 'T25', 'T50', 'T60', null]);
+    expect(boundary.map((p) => p.currentRef)).toEqual([null, 'T25', 'T50', 'T60', null]);
+    // Suivi ligne par ligne : des évènements `detail` sont bien émis.
+    expect(progress.some((p) => !!p.detail)).toBe(true);
+    // jobId + total présents dans CHAQUE évènement (bornes ET détails).
     expect(progress.every((p) => p.jobId === job.jobId)).toBe(true);
     expect(progress.every((p) => p.total === 60)).toBe(true);
   });
