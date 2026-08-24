@@ -1,4 +1,4 @@
-import { ObjectType, Field } from '@nestjs/graphql';
+import { ObjectType, Field, Float } from '@nestjs/graphql';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 import { Client } from 'src/clients/entities/client.entity';
@@ -762,4 +762,18 @@ export class LogsDiData {
   logsDi?: LogsDi[];
   @Field()
   di: Di;
+}
+
+/** Détail du prix de réparation (cas diagnostic NON PAYANT).
+ *  final_price = repairPrice + diagLabour + componentsCost. */
+@ObjectType()
+export class RepairPriceBreakdown {
+  @Field(() => Float)
+  repairPrice: number;
+  @Field(() => Float)
+  diagLabour: number;
+  @Field(() => Float)
+  componentsCost: number;
+  @Field(() => Float)
+  final_price: number;
 }

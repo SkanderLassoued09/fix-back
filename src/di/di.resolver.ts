@@ -12,6 +12,7 @@ import {
   DiTable,
   DiTableData,
   LogsDiData,
+  RepairPriceBreakdown,
   StatusCount,
   UpdateNego,
 } from './entities/di.entity';
@@ -506,6 +507,18 @@ export class DiResolver {
   ) {
     await this.diService.setRepairEstimate(_id, estimate);
     return true;
+  }
+
+  /** Cas diagnostic NON PAYANT : l'admin saisit UNIQUEMENT le prix de réparation ;
+   *  le serveur calcule + persiste le prix final
+   *  (final = prix_réparation + main-d'œuvre diagnostic + pièces) et renvoie le
+   *  détail. Server-authoritative : main-d'œuvre et pièces ne viennent pas du front. */
+  @Mutation(() => RepairPriceBreakdown)
+  async setRepairFinalPrice(
+    @Args('_id') _id: string,
+    @Args('repairPrice', { type: () => Float }) repairPrice: number,
+  ) {
+    return this.diService.setRepairFinalPrice(_id, repairPrice);
   }
 
   /** Gouvernance COORDINATRICE — bascule « Diagnostic payant » (verrouillé une

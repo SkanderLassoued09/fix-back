@@ -37,6 +37,7 @@ import {
   RemarqueDocument,
 } from 'src/remarque/entities/remarque.entity';
 import { StatService } from 'src/stat/stat.service';
+import { TarifService } from 'src/tarif/tarif.service';
 import { isInvalidGrant } from 'src/google-auth/google-oauth.errors';
 import { NotFoundError } from 'rxjs';
 import { NotificationsGateway } from 'src/notification.gateway';
@@ -94,6 +95,7 @@ export class DiService {
     private readonly notificationService: NotificationService,
     private readonly operationalErrorService: OperationalErrorService,
     private readonly googleDriveService: GoogleDriveService,
+    private readonly tarifService: TarifService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────────────
@@ -1512,6 +1514,110 @@ export class DiService {
     }
   }
 
+  /** "HH:MM:SS" → heures décimales (0 si absent/invalide). */
+  private hhmmssToHours(time: string | null | undefined): number {
+    const s = (time ?? '').trim();
+    if (!/^\d{2,}:\d{2}:\d{2}$/.test(s)) return 0;
+    const [h, m, sec] = s.split(':').map(Number);
+    return (h * 3600 + m * 60 + sec) / 3600;
+  }
+
+  /** Arrondi monétaire à 3 décimales (TND), cohérent avec le front. */
+  private static round3(x: number): number {
+    return Math.round((Number(x) || 0) * 1000) / 1000;
+  }
+
+  /**
+   * Détail du PRIX DE RÉPARATION (cas diagnostic NON PAYANT) — CALCUL
+   * SERVEUR-AUTORITAIRE :
+   *   final = prix_réparation + diagLabour + composantsCost
+   *   diagLabour     = heures_diag × tarif_horaire   (Stat.diag_time × Tarif)
+   *   composantsCost = Σ(prix_vente × quantité)      (calculateTicketComposantPrice)
+   * Le montant facturé ne dépend PAS de ce que le front envoie, hormis le prix
+   * de réparation saisi par l'admin. Gère le cycle retour (Stat + logsDi keyés).
+   */
+  async computeRepairBreakdown(
+    diId: string,
+    repairPrice: number,
+  ): Promise<{
+    repairPrice: number;
+    diagLabour: number;
+    componentsCost: number;
+    final_price: number;
+  }> {
+    const di = await this.diModel.findOne({ _id: diId }).lean();
+    if (!di) {
+      throw new GraphQLError(`DI '${diId}' introuvable.`, {
+        extensions: { code: 'NOT_FOUND' },
+      });
+    }
+    // Temps de diagnostic cumulé (serveur) → heures × tarif horaire.
+    const statQuery: any = { _idDi: diId };
+    if ((di as any).ignoreCount && (di as any).ignoreCount > 0) {
+      statQuery.ignoreCount = (di as any).ignoreCount;
+    }
+    const stat = await this.statModel.findOne(statQuery).lean();
+    const hours = this.hhmmssToHours((stat as any)?.diag_time);
+    const tarifDoc = await this.tarifService.getTarif();
+    const tarif = Number((tarifDoc as any)?.tarif) || 0;
+    const diagLabour = DiService.round3(hours * tarif);
+
+    // Coût des pièces (Σ prix_vente × quantité) — gère aussi le retour (logsDi).
+    const componentsCost = DiService.round3(
+      await this.calculateTicketComposantPrice(diId),
+    );
+
+    const rp = DiService.round3(repairPrice);
+    const final_price = DiService.round3(rp + diagLabour + componentsCost);
+    return { repairPrice: rp, diagLabour, componentsCost, final_price };
+  }
+
+  /**
+   * Cas NON PAYANT : l'admin ne saisit QUE le prix de réparation ; le serveur
+   * calcule et PERSISTE le prix final (réparation + main-d'œuvre diag + pièces).
+   * `price` reste à 0 (diagnostic non facturé séparément) ; `final_price` porte
+   * le total. Écrit sur la DI (flux original) ou sur le cycle logsDi (retour).
+   */
+  async setRepairFinalPrice(
+    diId: string,
+    repairPrice: number,
+  ): Promise<{
+    repairPrice: number;
+    diagLabour: number;
+    componentsCost: number;
+    final_price: number;
+  }> {
+    if (!(Number(repairPrice) >= 0)) {
+      throw new GraphQLError(
+        'Prix de réparation invalide (montant ≥ 0 requis).',
+        { extensions: { code: 'BAD_REQUEST', diId } },
+      );
+    }
+    const breakdown = await this.computeRepairBreakdown(diId, repairPrice);
+    const di = await this.diModel.findOne({ _id: diId }).lean();
+    if ((di as any)?.ignoreCount && (di as any).ignoreCount > 0) {
+      await this.logsDiService.savePricing(
+        diId,
+        (di as any).ignoreCount,
+        0,
+        breakdown.final_price,
+      );
+    } else {
+      await this.diModel.findOneAndUpdate(
+        { _id: diId },
+        {
+          $set: {
+            price: 0,
+            final_price: breakdown.final_price,
+            repairEstimate: breakdown.repairPrice,
+          },
+        },
+        { new: true },
+      );
+    }
+    return breakdown;
+  }
+
   /**
    * M1 guard — load the DI, fail with a clean NOT_FOUND if it's missing, then
    * reject an illegal status transition (BAD_REQUEST) BEFORE any write. Call at
@@ -2419,11 +2525,26 @@ export class DiService {
         // IRREPARABLE sera posée à « Valider le prix » en PRICING_DIAG.
         return this.magasinTech_Pending2(_id) as any;
       }
-      // Non payant (flux original) OU retour → clôture directe IRREPARABLE
-      // (aucune facturation, aucun fichier).
+      // RETOUR : « erreur Fixtronix » (notre faute) + SANS PDR (aucune pièce
+      // consommée) → envoi en réparation SANS facturation (PENDING3) ; le devis
+      // est attaché ensuite par la coordination. Le verdict est lu sur le
+      // snapshot du CYCLE (logsDi), jamais sur la DI vive.
+      if (!isOriginalFlow) {
+        const cycle = di?.ignoreCount ?? 0;
+        const log: any = await this.logsDiService.getLogsById(cycle, _id);
+        const cyclePdr = log?.contain_pdr === true;
+        const cycleComposants =
+          Array.isArray(log?.array_composants) &&
+          log.array_composants.length > 0;
+        const cycleFixtronix = log?.isErrorFromFixtronix === true;
+        if (cycleFixtronix && !cyclePdr && !cycleComposants) {
+          return this.magasinTech_Pending3(_id) as any;
+        }
+      }
+      // Non payant (flux original) OU retour (hors raccourci Fixtronix ci-dessus)
+      // → clôture directe IRREPARABLE (aucune facturation, aucun fichier).
       const closed = await this.closeIrreparable(_id);
-      // Sortie de diagnostic → fermeture du leg diagnostic (cumul serveur),
-      // comme l'ancienne clôture non réparable depuis le diagnostic.
+      // Sortie de diagnostic → fermeture du leg diagnostic (cumul serveur).
       await this.statsService.closeDiagLeg(_id, closed.ignoreCount ?? 0);
       return closed;
     }

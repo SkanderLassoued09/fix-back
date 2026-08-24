@@ -34,6 +34,7 @@ import { GoogleDriveModule } from 'src/google-drive/google-drive.module';
 import { ClientsModule } from 'src/clients/clients.module';
 import { LocationModule } from 'src/location/location.module';
 import { NotificationModule } from 'src/notifications/notification.module';
+import { TarifModule } from 'src/tarif/tarif.module';
 import { DiImportController } from './import/di-import.controller';
 import { DiImportService } from './import/di-import.service';
 import { DiImageController } from './di-image.controller';
@@ -66,6 +67,7 @@ import { TierAliasSchema } from './import/entities/tier-alias.entity';
     ClientsModule,
     LocationModule,
     NotificationModule,
+    TarifModule,
     MongooseModule.forFeature([
       {
         name: Di.name,
