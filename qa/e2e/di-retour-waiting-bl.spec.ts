@@ -18,6 +18,8 @@ import { gqlPost } from '../utils/graphql';
 const IDS = {
   fromBl: 'di-retour-wbl-e2e-frombl',
   fromBlSecond: 'di-retour-wbl-e2e-frombl2',
+  fromFacture: 'di-retour-wbl-e2e-fromfacture',
+  fromClosingLegacy: 'di-retour-wbl-e2e-fromclosing',
 };
 const ALL_IDS = Object.values(IDS);
 
@@ -111,6 +113,42 @@ test('WAITING_BL : le retour n’exige PAS que la DI soit FINISHED (aucune garde
   const trans = await gqlPost(
     request,
     `mutation { changeStatusRetour1(_id: "${_id}", reason: "retour depuis attente BL") }`,
+  );
+  expect(trans.errors, trans.errorText).toBeNull();
+  expect((await diRow(_id))?.status).toBe('RETOUR1');
+});
+
+// ─── Le retour est ouvert sur TOUTE la phase de clôture, pas seulement WAITING_BL
+// Le bouton était grisé en WAITING_FACTURE alors que le back l'accepte : la
+// règle front était une liste de deux valeurs codée en dur dans le template.
+test('WAITING_FACTURE → countIgnore + changeStatusRetour1 → RETOUR1', async ({
+  request,
+}) => {
+  const _id = IDS.fromFacture;
+  await seedDi({ _id, status: 'WAITING_FACTURE', ignoreCount: 0 });
+
+  const bump = await gqlPost(
+    request,
+    `mutation { countIgnore(_idDI: "${_id}") { ignoreCount } }`,
+  );
+  expect(bump.errors, bump.errorText).toBeNull();
+  expect(bump.data?.countIgnore?.ignoreCount).toBe(1);
+
+  const trans = await gqlPost(
+    request,
+    `mutation { changeStatusRetour1(_id: "${_id}", reason: "facture à refaire") }`,
+  );
+  expect(trans.errors, trans.errorText).toBeNull();
+  expect((await diRow(_id))?.status).toBe('RETOUR1');
+});
+
+test('CLOSING (valeur legacy) accepte aussi le retour', async ({ request }) => {
+  const _id = IDS.fromClosingLegacy;
+  await seedDi({ _id, status: 'CLOSING', ignoreCount: 0 });
+
+  const trans = await gqlPost(
+    request,
+    `mutation { changeStatusRetour1(_id: "${_id}", reason: "legacy") }`,
   );
   expect(trans.errors, trans.errorText).toBeNull();
   expect((await diRow(_id))?.status).toBe('RETOUR1');

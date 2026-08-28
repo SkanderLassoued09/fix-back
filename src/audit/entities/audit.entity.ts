@@ -38,4 +38,9 @@ export class Audit {
   isSeen: boolean;
   @Field()
   createAt: string;
+  /** Horodatage RÉEL du document (`timestamps: true`). `createAt` ci-dessus est
+   *  une coquille historique jamais persistée : elle reste déclarée pour ne
+   *  casser aucun appelant, mais toute nouvelle requête doit lire `createdAt`. */
+  @Field({ nullable: true })
+  createdAt?: Date;
 }

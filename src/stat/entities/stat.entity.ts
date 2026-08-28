@@ -152,6 +152,44 @@ export class PauseLog {
   pauseEnd?: string;
 }
 
+/**
+ * Un segment de TRAVAIL (diagnostic ou réparation), fermé côté serveur :
+ * `startedAt` = l'ancre posée à l'ouverture du leg, `stoppedAt` = l'instant de
+ * fermeture. C'est la PIÈCE JUSTIFICATIVE du temps facturé — `diag_time` /
+ * `rep_time` ne sont que le cumul de ces segments. Lecture seule.
+ */
+@ObjectType()
+export class WorkSegment {
+  @Field({ nullable: true })
+  startedAt?: Date;
+  @Field({ nullable: true })
+  stoppedAt?: Date;
+}
+
+/**
+ * Une affectation diagnostic telle que STOCKÉE sur le `Stat` (à distinguer de
+ * `DiagAssignment` côté DI, dont le `tech` est déjà résolu en NOM). Expose en
+ * plus `diagTimeStart` — le cumul de `diag_time` au moment de l'affectation —
+ * qui rend la contribution de chaque technicien vérifiable.
+ */
+@ObjectType()
+export class StatDiagAssignment {
+  @Field({ nullable: true })
+  tech?: string;
+  @Field({ nullable: true })
+  assignedAt?: Date;
+  @Field({ nullable: true })
+  abandonedAt?: Date;
+  @Field({ nullable: true })
+  motif?: string;
+  @Field({ nullable: true })
+  abandonedBy?: string;
+  @Field({ nullable: true })
+  diagTimeStart?: string;
+  @Field({ nullable: true })
+  diagTime?: string;
+}
+
 @ObjectType()
 export class ClientType {
   @Field()
@@ -228,6 +266,16 @@ export class Stat {
   techDiag?: string;
   @Field({ nullable: true })
   techRep?: string;
+  // ── Journal de travail (dossier détaillé) ────────────────────────────────
+  // Ces trois tableaux existaient sur le SCHÉMA depuis toujours mais n'avaient
+  // aucune projection GraphQL : le détail du temps facturé était donc
+  // invisible de tout le front. Exposition en LECTURE SEULE.
+  @Field(() => [WorkSegment], { nullable: true })
+  diagSegments?: WorkSegment[];
+  @Field(() => [WorkSegment], { nullable: true })
+  repSegments?: WorkSegment[];
+  @Field(() => [StatDiagAssignment], { nullable: true })
+  diagAssignments?: StatDiagAssignment[];
 }
 
 @ObjectType()

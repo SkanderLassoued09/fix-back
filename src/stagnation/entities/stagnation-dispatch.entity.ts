@@ -1,3 +1,4 @@
+import { Field, ObjectType } from '@nestjs/graphql';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 
@@ -38,3 +39,22 @@ StagnationDispatchSchema.index(
   { date: 1, idNum: 1, status: 1 },
   { unique: true },
 );
+
+/**
+ * Projection GraphQL — lecture seule. Le dossier détaillé d'une DI affiche la
+ * liste des rappels de stagnation déjà envoyés (jour, statut concerné,
+ * ancienneté au moment de la détection).
+ */
+@ObjectType()
+export class StagnationDispatchType {
+  @Field()
+  date: string;
+  @Field()
+  idNum: string;
+  @Field()
+  status: string;
+  @Field({ nullable: true })
+  ageHours?: number;
+  @Field({ nullable: true })
+  sentAt?: Date;
+}

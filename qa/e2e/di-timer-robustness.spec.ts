@@ -327,3 +327,40 @@ test('API — rep_time malformé REFUSÉ au point d’écriture', async ({ reque
     );
     expect(after?.rep_time).toBe(before?.rep_time);
 });
+
+// ───────────── ANCRE PÉRIMÉE : LE CAS DES 25 LIGNES TROUVÉES EN BASE ─────────
+/**
+ * Reproduction exacte de ce qu'on a trouvé en production : une ancre de chrono
+ * restée OUVERTE alors que la DI n'est PLUS dans sa phase de travail. Le front
+ * calculait `cumulé + (maintenant − ancre)` et affichait des centaines d'heures.
+ * Un segment ne peut courir que pendant sa phase : hors phase, l'ancre est
+ * ignorée et seul le cumul est affiché.
+ */
+test('répa — ancre ouverte alors que la DI n’est PLUS en réparation → cumul figé', async ({ page }) => {
+    const s = await seed('outofphase', 'REPARATION_Pause', {
+        rep_time: '00:03:00',
+        // 40 jours : l'ordre de grandeur exact des lignes trouvées en base.
+        repRunStartedAt: new Date(Date.now() - 40 * 24 * 3600 * 1000),
+    });
+    await page.goto(TECH_LIST);
+    await openModal(page, s.idnum, 'repair');
+
+    const t = await timerText(page);
+    expect(t, `chrono malformé : « ${t} »`).toMatch(HMS);
+    expect(t, 'une ancre hors phase ne doit RIEN ajouter au cumul').toBe('00:03:00');
+});
+
+test('diag — ancre ouverte de plusieurs jours en phase → segment ignoré (session abandonnée)', async ({ page }) => {
+    // Ici le statut EST cohérent (INDIAGNOSTIC) : c'est l'onglet fermé sans
+    // pause. Le garde de plausibilité (12 h) doit neutraliser le segment.
+    const s = await seed('abandoned', 'INDIAGNOSTIC', {
+        diag_time: '00:07:00',
+        diagRunStartedAt: new Date(Date.now() - 5 * 24 * 3600 * 1000),
+    });
+    await page.goto(TECH_LIST);
+    await openModal(page, s.idnum, 'diag');
+
+    const sec = await timerSec(page);
+    expect(sec, `le chrono affiche ${await timerText(page)} — segment abandonné non neutralisé`)
+        .toBeLessThan(3600);
+});

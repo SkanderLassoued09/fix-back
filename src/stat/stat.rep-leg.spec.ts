@@ -23,7 +23,11 @@ import { OperationalErrorService } from 'src/operational-error/operational-error
  *  - format canonique HH:MM:SS avec HH pouvant dépasser 99 ;
  *  - `lapTimeForReaparation` REFUSE une valeur malformée (rempart d'écriture).
  */
-type StatModelMock = { updateOne: jest.Mock; findOne: jest.Mock };
+type StatModelMock = {
+  updateOne: jest.Mock;
+  findOne: jest.Mock;
+  findOneAndUpdate?: jest.Mock;
+};
 
 describe('StatService — repair work legs (server-side accumulation)', () => {
   let service: StatService;
@@ -33,6 +37,7 @@ describe('StatService — repair work legs (server-side accumulation)', () => {
     statModel = {
       updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
       findOne: jest.fn(),
+      findOneAndUpdate: jest.fn().mockResolvedValue({ _id: 'STAT-1' }),
     };
     const anyModel = { findOne: jest.fn(), updateOne: jest.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
@@ -153,6 +158,89 @@ describe('StatService — repair work legs (server-side accumulation)', () => {
         { _id: 'STAT-1' },
         { $set: { rep_time: '100:00:30' } },
       );
+    });
+  });
+
+  describe('Segment ABANDONNÉ — jamais facturé', () => {
+    it('closeRepLeg : segment > 12 h → ancre vidée, rep_time INCHANGÉ', async () => {
+      const startedAt = new Date('2026-08-01T08:00:00.000Z');
+      jest.useFakeTimers().setSystemTime(new Date('2026-08-05T08:00:00.000Z')); // 96 h
+      statModel.findOne.mockResolvedValue({
+        _id: 'STAT-1',
+        rep_time: '00:10:00',
+        repRunStartedAt: startedAt,
+      });
+
+      const out = await service.closeRepLeg('DI-1');
+
+      // Le cumul ne bouge pas : on ne facture pas un temps qu'on sait faux.
+      expect(out).toBe('00:10:00');
+      const [, update] = statModel.updateOne.mock.calls[0];
+      expect(update.$set.rep_time).toBe('00:10:00');
+      expect(update.$set.repRunStartedAt).toBeNull(); // mais l'ancre est purgée
+    });
+
+    it('closeDiagLeg : segment > 12 h → ancre vidée, diag_time INCHANGÉ', async () => {
+      const startedAt = new Date('2026-07-01T08:00:00.000Z');
+      jest.useFakeTimers().setSystemTime(new Date('2026-08-28T08:00:00.000Z')); // ~1400 h
+      statModel.findOne.mockResolvedValue({
+        _id: 'STAT-1',
+        diag_time: '00:00:17',
+        diagRunStartedAt: startedAt,
+      });
+
+      const out = await service.closeDiagLeg('DI-1');
+
+      expect(out).toBe('00:00:17');
+      const [, update] = statModel.updateOne.mock.calls[0];
+      expect(update.$set.diag_time).toBe('00:00:17');
+      expect(update.$set.diagRunStartedAt).toBeNull();
+    });
+
+    it('un segment PLAUSIBLE (< 12 h) est toujours cumulé normalement', async () => {
+      const startedAt = new Date('2026-08-28T08:00:00.000Z');
+      jest.useFakeTimers().setSystemTime(new Date('2026-08-28T10:00:00.000Z')); // 2 h
+      statModel.findOne.mockResolvedValue({
+        _id: 'STAT-1',
+        rep_time: '00:00:00',
+        repRunStartedAt: startedAt,
+      });
+
+      expect(await service.closeRepLeg('DI-1')).toBe('02:00:00');
+    });
+  });
+
+  describe('updateStatus — ferme le segment à chaque SORTIE de phase', () => {
+    beforeEach(() => {
+      // Aucune ancre ouverte : les fermetures sont des no-op, on observe seulement
+      // QUELLES fermetures sont tentées selon le statut cible.
+      statModel.findOne.mockResolvedValue(null);
+      statModel.findOneAndUpdate = jest
+        .fn()
+        .mockResolvedValue({ _id: 'STAT-1', status: 'X' });
+    });
+
+    const closeAttempts = () =>
+      statModel.findOne.mock.calls.length; // 1 appel par tentative de fermeture
+
+    it('vers un statut HORS des deux phases → tente de fermer les DEUX segments', async () => {
+      await service.updateStatus('DI-1', 'PENDING2');
+      expect(closeAttempts()).toBe(2);
+    });
+
+    it('vers INDIAGNOSTIC → ne ferme PAS le diagnostic (phase en cours)', async () => {
+      await service.updateStatus('DI-1', 'INDIAGNOSTIC');
+      expect(closeAttempts()).toBe(1); // seule la réparation est fermée
+    });
+
+    it('vers INREPARATION → ne ferme PAS la réparation', async () => {
+      await service.updateStatus('DI-1', 'INREPARATION');
+      expect(closeAttempts()).toBe(1); // seul le diagnostic est fermé
+    });
+
+    it('vers DIAGNOSTIC_Pause → ferme le diagnostic (le chrono doit geler)', async () => {
+      await service.updateStatus('DI-1', 'DIAGNOSTIC_Pause');
+      expect(closeAttempts()).toBe(2);
     });
   });
 });

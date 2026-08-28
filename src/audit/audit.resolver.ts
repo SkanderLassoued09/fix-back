@@ -17,6 +17,15 @@ export class AuditResolver {
     return this.auditService.getAllNotification();
   }
 
+  /** Traces d'audit d'une DI — alimente l'onglet « Liens » du dossier détaillé. */
+  @Query(() => [Audit])
+  getAuditByDi(
+    @Args('diId') diId: string,
+    @Args('limit', { type: () => Int, nullable: true }) limit?: number,
+  ) {
+    return this.auditService.getAuditByDi(diId, limit ?? 200);
+  }
+
   @Query(() => Audit, { name: 'audit' })
   findOne(@Args('id', { type: () => Int }) id: number) {
     return this.auditService.findOne(id);

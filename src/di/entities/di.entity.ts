@@ -329,6 +329,34 @@ export class DriveDoc {
 }
 
 /**
+ * Contacts du tiers (client OU société) rattaché à la DI — projection PLATE et
+ * volontairement minimale, remplie UNIQUEMENT par `getDiDetailById` (le dossier
+ * détaillé). Les requêtes de LISTE ne peuplent pas ces champs : elles gardent la
+ * projection légère `first_name`/`name`, donc aucune régression de performance.
+ */
+@ObjectType()
+export class DiContact {
+  /** `CLIENT` ou `COMPANY` — quelle entité porte la DI. */
+  @Field({ nullable: true })
+  kind?: string;
+  @Field({ nullable: true })
+  name?: string;
+  @Field({ nullable: true })
+  email?: string;
+  @Field({ nullable: true })
+  phone?: string;
+  @Field({ nullable: true })
+  fax?: string;
+  @Field({ nullable: true })
+  address?: string;
+  @Field({ nullable: true })
+  region?: string;
+  /** Matricule fiscal (sociétés uniquement). */
+  @Field({ nullable: true })
+  mf?: string;
+}
+
+/**
  * Une affectation diagnostic (pour l'historique « X → abandon → Y »). `tech` /
  * `abandonedBy` sont RÉSOLUS en NOMS par le mapper (pas des ids bruts). Source :
  * `Stat.diagAssignments`.
@@ -738,6 +766,42 @@ export class DiTable {
   // Transition history — single source of truth for the flow timeline dates.
   @Field(() => [StatusHistoryEntry], { nullable: true })
   statusHistory?: StatusHistoryEntry[];
+
+  // ---- Dossier complet (modal détail) -------------------------------------
+  // Champs DÉJÀ persistés sur `DiDocument` mais qui n'avaient aucune projection
+  // GraphQL : sans eux le dossier ne peut pas montrer toute la vie de la DI.
+
+  /** Date de réception physique du matériel (renseignée par l'import .xlsx). */
+  @Field({ nullable: true })
+  dateReception?: Date;
+
+  /** Volet commercial — remise et qualification du dossier. */
+  @Field({ nullable: true })
+  discount?: number;
+  @Field({ nullable: true })
+  discount_value?: number;
+  @Field({ nullable: true })
+  type_client?: string;
+  @Field({ nullable: true })
+  service_quality?: string;
+
+  /** Poignée de main magasin ↔ coordination (`CONFIRM` / `REPLY`). */
+  @Field({ nullable: true })
+  confirmationComposant?: string;
+  @Field({ nullable: true })
+  gotComposantFromMagasin?: boolean;
+
+  /** Techniciens actuellement détenteurs de la DI. */
+  @Field(() => [String], { nullable: true })
+  current_workers_ids?: string[];
+
+  /** PV de réunion rattachés (lien inverse maintenu par `ReunionPvService`). */
+  @Field(() => [String], { nullable: true })
+  pvReunions?: string[];
+
+  /** Contacts du tiers — rempli uniquement par `getDiDetail`. */
+  @Field(() => DiContact, { nullable: true })
+  contact?: DiContact;
 }
 @ObjectType()
 export class DiTableData {

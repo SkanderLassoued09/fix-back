@@ -891,6 +891,16 @@ export class StatService {
     return (h * 3600 + m * 60 + sec) * 1000;
   }
 
+  /**
+   * Durée maximale plausible pour UN segment de travail continu (12 h).
+   *
+   * Au-delà, ce n'est pas du temps travaillé mais une session abandonnée : onglet
+   * fermé sans pause, ou transition qui n'a pas fermé le segment. On a retrouvé
+   * 25 ancres ouvertes en base, jusqu'à 1400 h. Un tel segment n'est PAS cumulé
+   * — on ne facture jamais un temps qu'on sait faux — mais l'ancre est vidée.
+   */
+  private static readonly MAX_PLAUSIBLE_LEG_MS = 12 * 60 * 60 * 1000;
+
   /** millisecondes → "HH:MM:SS" (HH peut dépasser 99). */
   private static msToHhmmss(ms: number): string {
     const total = Math.max(0, Math.floor(ms / 1000));
@@ -939,7 +949,16 @@ export class StatService {
     }
     const startedAt = new Date(stat.repRunStartedAt);
     const stoppedAt = new Date();
-    const legMs = Math.max(0, stoppedAt.getTime() - startedAt.getTime());
+    const rawLegMs = Math.max(0, stoppedAt.getTime() - startedAt.getTime());
+    const abandoned = rawLegMs > StatService.MAX_PLAUSIBLE_LEG_MS;
+    if (abandoned) {
+      this.logger.warn(
+        `closeRepLeg: segment ABANDONNÉ non facturé — stat ${stat._id} (${Math.round(
+          rawLegMs / 3600000,
+        )} h, ouvert le ${startedAt.toISOString()}). Ancre vidée, rep_time inchangé.`,
+      );
+    }
+    const legMs = abandoned ? 0 : rawLegMs;
     const newRepTime = StatService.msToHhmmss(
       StatService.hhmmssToMs(stat.rep_time) + legMs,
     );
@@ -971,7 +990,16 @@ export class StatService {
     }
     const startedAt = new Date(stat.diagRunStartedAt);
     const stoppedAt = new Date();
-    const legMs = Math.max(0, stoppedAt.getTime() - startedAt.getTime());
+    const rawLegMs = Math.max(0, stoppedAt.getTime() - startedAt.getTime());
+    const abandoned = rawLegMs > StatService.MAX_PLAUSIBLE_LEG_MS;
+    if (abandoned) {
+      this.logger.warn(
+        `closeDiagLeg: segment ABANDONNÉ non facturé — stat ${stat._id} (${Math.round(
+          rawLegMs / 3600000,
+        )} h, ouvert le ${startedAt.toISOString()}). Ancre vidée, diag_time inchangé.`,
+      );
+    }
+    const legMs = abandoned ? 0 : rawLegMs;
     const newDiagTime = StatService.msToHhmmss(
       StatService.hhmmssToMs(stat.diag_time) + legMs,
     );
@@ -1186,8 +1214,27 @@ export class StatService {
   }
 
   // update status
+  /** Statuts pendant lesquels un segment de travail a le droit de courir. */
+  private static readonly DIAG_RUNNING_STATUSES = ['DIAGNOSTIC', 'INDIAGNOSTIC'];
+  private static readonly REP_RUNNING_STATUSES = ['REPARATION', 'INREPARATION'];
+
   async updateStatus(_idDi: string, status: string, ignoreCount?: number) {
     try {
+      // POINT DE PASSAGE UNIQUE de tout changement de statut : on y ferme le
+      // segment de travail dès que la DI QUITTE sa phase. Les correctifs ciblés
+      // (pause, fin de diagnostic, fin de réparation) ne suffisaient pas — 25
+      // ancres étaient restées ouvertes en base, jusqu'à 1400 h, sur des DI en
+      // FINISHED/PRICING/PENDING2. Fermer ici couvre TOUTES les transitions,
+      // y compris celles qu'on n'a pas listées. `closeDiagLeg`/`closeRepLeg`
+      // sont idempotents (no-op sans ancre) et ne facturent pas un segment
+      // abandonné (cf. MAX_PLAUSIBLE_LEG_MS).
+      if (!StatService.DIAG_RUNNING_STATUSES.includes(status)) {
+        await this.closeDiagLeg(_idDi, ignoreCount ?? 0);
+      }
+      if (!StatService.REP_RUNNING_STATUSES.includes(status)) {
+        await this.closeRepLeg(_idDi, ignoreCount ?? 0);
+      }
+
       // Dynamically construct the query object
       const query: Record<string, any> = { _idDi };
 

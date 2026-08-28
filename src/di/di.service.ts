@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  AdminTechUpdateDiInput,
   CreateDiInput,
   DiagUpdate,
   FilterConfigDi,
@@ -1089,6 +1090,64 @@ export class DiService {
     return update;
   }
 
+  /**
+   * Édition administrative d'une DI (rôle `ADMIN_TECH`, garde posée sur la
+   * mutation). Réutilise `updateDi` — donc la même normalisation `undefined`,
+   * la même resynchro d'emplacement et le même broadcast `updateTicket`.
+   *
+   * La valeur ajoutée ici est la TRAÇABILITÉ : on relit la DI AVANT écriture,
+   * on ne retient que les champs RÉELLEMENT modifiés, et on journalise un
+   * `SystemEvent` `DI_EDITED` porteur de l'acteur et du diff. Sans ça, une
+   * correction manuelle serait le seul événement de la vie d'une DI à ne
+   * laisser aucune trace — exactement ce que le dossier détaillé doit éviter.
+   */
+  async adminTechUpdateDi(
+    input: AdminTechUpdateDiInput,
+    actor?: { id?: string | null; role?: string | null },
+  ) {
+    const { _id } = input;
+    const before: any = await this.diModel.findOne({ _id }).lean();
+    if (!before) {
+      throw new GraphQLError(`DI '${_id}' introuvable.`, {
+        extensions: { code: 'BAD_REQUEST' },
+      });
+    }
+
+    const updated = await this.updateDi(input as any);
+
+    // Diff APRÈS écriture, sur les seules clés soumises. `JSON.stringify` suffit
+    // pour comparer les scalaires ET `array_composants` (petit tableau plat).
+    const changes: Record<string, { from: any; to: any }> = {};
+    for (const [key, value] of Object.entries(input)) {
+      if (key === '_id' || value === undefined) continue;
+      const from = (before as any)[key] ?? null;
+      const to = (updated as any)?.[key] ?? null;
+      if (JSON.stringify(from) !== JSON.stringify(to)) {
+        changes[key] = { from, to };
+      }
+    }
+
+    // Rien n'a bougé (ré-enregistrement à l'identique) → pas de ligne de bruit
+    // dans le journal.
+    if (Object.keys(changes).length) {
+      try {
+        await this.notificationService.emit({
+          type: 'DI_EDITED',
+          diId: _id,
+          actorId: actor?.id ?? null,
+          actorRole: actor?.role ?? null,
+          message: `Dossier modifié (${Object.keys(changes).join(', ')})`,
+          payload: { status: updated?.status ?? null, changes },
+        });
+      } catch (err) {
+        // Le journal ne doit JAMAIS faire échouer l'édition elle-même.
+        await this.captureDiscordFailure('erp-notification', err);
+      }
+    }
+
+    return updated;
+  }
+
   private async syncEmplacementStats(emplacementId?: string): Promise<void> {
     if (!emplacementId) {
       return;
@@ -1268,6 +1327,8 @@ export class DiService {
         const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
 
         return {
+          // Même socle « dossier » que `getAllDi` / la projection coordination.
+          ...(await this.buildDossierFields(di)),
           _id: di._id,
           _idnum: di._idnum,
           title: di.title,
@@ -1397,6 +1458,9 @@ export class DiService {
         const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
 
         return {
+          // Même socle « dossier » que la projection coordination : le modal
+          // détail doit être IDENTIQUE quel que soit l'écran qui l'ouvre.
+          ...(await this.buildDossierFields(di)),
           _id: di._id,
           _idnum: di._idnum,
           remarque_tech_diagnostic: di.remarque_tech_diagnostic,
@@ -3342,16 +3406,54 @@ export class DiService {
    * page. Renvoie `null` si la DI est introuvable.
    */
   async getDiDetailById(_id: string) {
+    // Le tier est peuplé ENTIÈREMENT ici (et NULLE PART ailleurs) : le dossier
+    // détaillé affiche ses contacts, alors que les listes gardent la projection
+    // légère `first_name`/`name`. Une seule DI → le coût est négligeable.
     const di = await this.diModel
       .findOne({ _id })
-      .populate('client_id', 'first_name last_name')
-      .populate('company_id', 'name')
+      .populate('client_id')
+      .populate('company_id')
       .populate('createdBy', 'firstName lastName')
       .populate('location_id', 'location_name')
       .populate('di_category_id', '_id category')
       .exec();
     if (!di) return null;
-    return this.mapCoordinatorDiRow(di);
+    return this.mapCoordinatorDiRow(di, { withContacts: true });
+  }
+
+  /**
+   * Contacts du tiers porteur de la DI, à plat. `null` quand la référence n'a
+   * pas été peuplée (toutes les requêtes de liste) — le front affiche alors
+   * simplement la section « Contacts » vide plutôt que des champs faux.
+   */
+  private buildContact(di: any): any {
+    const company: any = di?.company_id;
+    if (company && typeof company === 'object' && company.name) {
+      return {
+        kind: 'COMPANY',
+        name: company.name,
+        email: company.email ?? null,
+        phone: company.phone ?? null,
+        fax: company.fax ?? null,
+        address: company.address ?? null,
+        region: company.region ?? null,
+        mf: company.mf ?? null,
+      };
+    }
+    const client: any = di?.client_id;
+    if (client && typeof client === 'object' && (client.first_name || client.last_name)) {
+      return {
+        kind: 'CLIENT',
+        name: `${client.first_name ?? ''} ${client.last_name ?? ''}`.trim(),
+        email: client.email ?? null,
+        phone: client.phone ?? null,
+        fax: null,
+        address: client.address ?? null,
+        region: client.region ?? null,
+        mf: null,
+      };
+    }
+    return null;
   }
 
   /**
@@ -3363,6 +3465,91 @@ export class DiService {
    * `statusHistory` → timeline cassée). Ce mapper garantit la parité à jamais.
    * Attend une DI déjà peuplée (client_id/company_id/createdBy/location_id).
    */
+  /**
+   * SOCLE COMMUN de la projection « dossier » d'une DI, partagé par les TROIS
+   * mappers de liste/détail (`getAllDi`, `searchDi`, `mapCoordinatorDiRow`).
+   *
+   * Raison d'être : le modal détail est le MÊME composant quel que soit l'écran
+   * qui l'ouvre, mais chaque mapper avait sa propre sélection — d'où un dossier
+   * amputé (pas de `statusHistory` ⇒ timeline masquée, pas de `nSerie`, cycles
+   * vides…) selon la provenance. Ce socle garantit la parité.
+   *
+   * Il est SPREAD EN PREMIER dans chaque mapper : les clés que le mapper pose
+   * ensuite (ex. `location_id` porteur du libellé côté coordination, `image`
+   * avec son repli `'-'`) continuent de gagner. Aucune régression d'affichage.
+   */
+  private async buildDossierFields(di: any): Promise<Record<string, any>> {
+    // Les acteurs sont résolus en NOMS : le dossier ne doit jamais afficher un
+    // ObjectId brut (`getTech` renvoie 'Unknown' si le profil a disparu).
+    const [pricingBy, componentsBy] = await Promise.all([
+      di.pricingRequestSentBy
+        ? this.profileService.getTech(di.pricingRequestSentBy).catch(() => null)
+        : null,
+      di.componentsConfirmedBy
+        ? this.profileService.getTech(di.componentsConfirmedBy).catch(() => null)
+        : null,
+    ]);
+
+    return {
+      // Identification
+      nSerie: di.nSerie ?? null,
+      dateReception: di.dateReception ?? null,
+      comment: di.comment ?? null,
+      location_name: di.location_id?.location_name ?? null,
+      di_category_name: di.di_category_id?.category ?? null,
+      // Verdict / drapeaux
+      isErrorFromFixtronix: di.isErrorFromFixtronix ?? false,
+      needsDevisBeforeRepair: di.needsDevisBeforeRepair ?? false,
+      confirmationComposant: di.confirmationComposant ?? null,
+      gotComposantFromMagasin: di.gotComposantFromMagasin ?? false,
+      isSentToCoordinator: di.isSentToCoordinator ?? false,
+      isConfirmedComponentFromCoordinator:
+        di.isConfirmedComponentFromCoordinator ?? false,
+      handleSendingNotificationBetweenCoordinatorAndMagasin:
+        di.handleSendingNotificationBetweenCoordinatorAndMagasin ?? null,
+      current_workers_ids: di.current_workers_ids ?? [],
+      pvReunions: di.pvReunions ?? [],
+      // Documents (liens scalaires ; `documents[]` reste posé par le mapper)
+      devis: di.devis ?? null,
+      facture: di.facture ?? null,
+      image: di.image ?? null,
+      // Finances
+      price: di.price ?? null,
+      final_price: di.final_price ?? null,
+      repairEstimate: di.repairEstimate ?? null,
+      diagnosticPayant: di.diagnosticPayant ?? true,
+      diagnosticEstimate: di.diagnosticEstimate ?? null,
+      discount: di.discount ?? null,
+      discount_value: di.discount_value ?? null,
+      type_client: di.type_client ?? null,
+      service_quality: di.service_quality ?? null,
+      // Les 7 remarques — le dossier les affiche toutes
+      remarque_manager: di.remarque_manager ?? null,
+      remarque_admin_manager: di.remarque_admin_manager ?? null,
+      remarque_admin_tech: di.remarque_admin_tech ?? null,
+      remarque_tech_diagnostic: di.remarque_tech_diagnostic ?? null,
+      remarque_tech_repair: di.remarque_tech_repair ?? null,
+      remarque_magasin: di.remarque_magasin ?? null,
+      remarque_coordinator: di.remarque_coordinator ?? null,
+      // Chronologie + jalons datés
+      statusHistory: di.statusHistory ?? [],
+      statusUpdatedAt: di.statusUpdatedAt ?? null,
+      updatedAt: di.updatedAt ?? null,
+      retourReason: di.retourReason ?? null,
+      retourDate: di.retourDate ?? null,
+      pricingRequestSentAt: di.pricingRequestSentAt ?? null,
+      pricingRequestSentBy: pricingBy,
+      componentsConfirmedAt: di.componentsConfirmedAt ?? null,
+      componentsConfirmedBy: componentsBy,
+      // Annulation
+      annulationParClient: di.annulationParClient ?? null,
+      annulationMotif: di.annulationMotif ?? null,
+      annulationCommentaire: di.annulationCommentaire ?? null,
+      annulePar: di.annulePar ?? null,
+      annuleLe: di.annuleLe ?? null,
+    };
+  }
+
   /**
    * Historique d'affectation diagnostic prêt pour l'affichage : chaque entrée
    * `Stat.diagAssignments` avec le `tech` RÉSOLU en NOM (id → « Prénom Nom »).
@@ -3395,12 +3582,18 @@ export class DiService {
     return out;
   }
 
-  private async mapCoordinatorDiRow(di: any) {
+  private async mapCoordinatorDiRow(
+    di: any,
+    opts: { withContacts?: boolean } = {},
+  ) {
     // Fetch the stat document based on the DI's _id
     const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
     // Fetch logs related to this DI
     const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
     return {
+      // Socle partagé EN PREMIER : les clés posées plus bas gagnent (elles
+      // portent la sémantique historique de cette projection).
+      ...(await this.buildDossierFields(di)),
       //nezih
       _id: di._id,
       _idnum: di._idnum,
@@ -3481,6 +3674,7 @@ export class DiService {
       createdBy: `${di.createdBy?.firstName ?? 'Unknown'} ${
         di.createdBy?.lastName ?? ''
       }`,
+      contact: opts.withContacts ? this.buildContact(di) : null,
     };
   }
 

@@ -32,6 +32,19 @@ export class AuditService {
     return await this.auditModel.find({ isSeen: false }).sort({ createdAt: -1 });
   }
 
+  /**
+   * Toutes les traces d'audit d'UNE DI (`_idDoc`), vues ET non vues, du plus
+   * récent au plus ancien. `getAllNotification` ne renvoie que les non-vues et
+   * sans filtre de DI : les traces d'une DI (dont `DI_REACTIVATED`, seul
+   * enregistrement de qui a réactivé le dossier) étaient donc inatteignables.
+   */
+  async getAuditByDi(diId: string, limit = 200) {
+    return this.auditModel
+      .find({ _idDoc: diId })
+      .sort({ createdAt: -1 })
+      .limit(Math.min(Math.max(limit, 1), 500));
+  }
+
   async updateConfirm(_id: string, confirmationComposant: string) {
     return await this.auditModel.findOneAndUpdate(
       { _id },

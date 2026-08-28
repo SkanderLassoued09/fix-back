@@ -17,6 +17,7 @@ import {
   UpdateNego,
 } from './entities/di.entity';
 import {
+  AdminTechUpdateDiInput,
   CreateDiInput,
   DiagUpdate,
   FilterConfigDi,
@@ -289,6 +290,27 @@ export class DiResolver {
     @CurrentUser() profile: Profile,
   ) {
     return await this.diService.updateDi(updateDi);
+  }
+
+  /**
+   * Édition administrative du dossier — RÉSERVÉE à `ADMIN_TECH`.
+   *
+   * Mutation DISTINCTE de `updateDi` à dessein : `updateDi` est appelée par
+   * l'assistant de réparation du technicien (`saveRepairParts`), donc y ajouter
+   * une garde de rôle serait une régression. Ici la garde est stricte, et
+   * l'édition est journalisée (`SystemEvent DI_EDITED`) avec son acteur.
+   */
+  @Mutation(() => Di)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN_TECH)
+  async adminTechUpdateDi(
+    @Args('input') input: AdminTechUpdateDiInput,
+    @CurrentUser() profile: Profile,
+  ) {
+    return await this.diService.adminTechUpdateDi(input, {
+      id: (profile as any)?._id ?? null,
+      role: (profile as any)?.role ?? null,
+    });
   }
 
   @Query(() => Di)

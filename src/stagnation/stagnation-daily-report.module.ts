@@ -5,6 +5,7 @@ import { NotificationModule } from 'src/notifications/notification.module';
 import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
 import { StagnationModule } from './stagnation.module';
 import { StagnationDailyReportService } from './stagnation-daily-report.service';
+import { StagnationDispatchResolver } from './stagnation-dispatch.resolver';
 import {
   StagnationDispatch,
   StagnationDispatchSchema,
@@ -27,7 +28,7 @@ import {
       { name: StagnationDispatch.name, schema: StagnationDispatchSchema },
     ]),
   ],
-  providers: [StagnationDailyReportService],
+  providers: [StagnationDailyReportService, StagnationDispatchResolver],
   exports: [StagnationDailyReportService],
 })
 export class StagnationDailyReportModule {}
