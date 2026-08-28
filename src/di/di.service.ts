@@ -61,6 +61,7 @@ import {
 import { DiscordHook } from 'src/discord-hook/entities/discord-hook.entity';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { DiWorkflowService } from './workflow/di-workflow.service';
+import { NotificationService } from 'src/notifications/notification.service';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
 import {
   GoogleDriveService,
@@ -90,6 +91,7 @@ export class DiService {
     private readonly logsDiService: LogsDiService,
     private readonly discordHookService: DiscordHookService,
     private readonly diWorkflowService: DiWorkflowService,
+    private readonly notificationService: NotificationService,
     private readonly operationalErrorService: OperationalErrorService,
     private readonly googleDriveService: GoogleDriveService,
   ) {}
@@ -455,6 +457,19 @@ export class DiService {
     AUTRE: 'Autre',
   };
 
+  /**
+   * Liste blanche des motifs d'ABANDON de diagnostic (le tech ne parvient pas à
+   * diagnostiquer). Le front envoie le CODE ; on persiste le libellé. « AUTRE »
+   * ⇒ texte libre obligatoire. Autorité serveur, jamais le front.
+   */
+  private static readonly ABANDON_MOTIFS: Record<string, string> = {
+    PANNE_NON_IDENTIFIABLE: 'Panne non identifiable',
+    COMPETENCE_INADAPTEE: 'Compétence / spécialité inadaptée',
+    OUTILLAGE_MANQUANT: 'Équipement / outillage manquant',
+    DOC_INDISPONIBLE: 'Documentation indisponible',
+    AUTRE: 'Autre',
+  };
+
   /** Max courant de `_idnum` (scan `^(DI|T)\d+$`) — sert au seed + garde-fou. */
   private async currentMaxDiRefNumber(): Promise<number> {
     const rows = await this.diModel
@@ -589,6 +604,23 @@ export class DiService {
       // Discord webhook per imported row.
       if (!opts?.skipNotify && di.status === 'PENDING1') {
         this.discordHookService.sendDiPendingNotification(di);
+        // Notif ERP : une DI créée DIRECTEMENT en PENDING1 (case cochée à la
+        // création) doit prévenir la coordination — sinon la cloche ne reçoit
+        // rien (seul Discord partait). Best-effort.
+        await this.emitDiHandoff(
+          di._id as any,
+          di,
+          'DI_PENDING1',
+          `Nouvelle DI à affecter (${(di as any)?._idnum ?? di._id})`,
+          ['Coordinator'],
+        );
+        // TEMPS RÉEL des LISTES : diffuse l'état pour que la liste coordinatrice
+        // APPENDE la nouvelle DI sans refresh manuel.
+        this.notificationGateway.updateTicket({
+          action: 'updateState',
+          content: { result: di, states: di },
+          target: {},
+        });
       }
 
       return di;
@@ -730,6 +762,24 @@ export class DiService {
         await this.captureDiscordFailure('addDevisPDF', err, { diId: _id });
       }
 
+      // Notification ERP : document attendu ARRIVÉ → coordination (fait avancer).
+      try {
+        await this.notificationService.emit({
+          type: 'DI_DOC_DEVIS',
+          diId: _id,
+          actorId: null,
+          message: `DI ${
+            (di as any)?._idnum ?? _id
+          } — devis ajouté (à vérifier), en attente de BC`,
+          payload: { doc: 'Devis' },
+          notify: {
+            roles: ['Manager', 'Coordinator', 'Admin_Tech', 'Admin_Manager'],
+          },
+        });
+      } catch (err) {
+        await this.captureDiscordFailure('erp-notification', err);
+      }
+
       // Gate documentaire : en WAITING_DEVIS, l'upload du devis fait avancer à
       // WAITING_BC (atomique/idempotent ; cascade si le BC est déjà présent).
       await this.maybeAdvanceDocGate(_id);
@@ -779,6 +829,8 @@ export class DiService {
           await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
         }
 
+        await this.emitBlUploadedNotification(_id, di);
+
         // Return the fresh DI (mutation is typed `() => Di`); addbllogspdf is
         // a LogsDi, not a Di.
         return await this.diModel.findOne({ _id });
@@ -820,6 +872,8 @@ export class DiService {
           await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
         }
 
+        await this.emitBlUploadedNotification(_id, updatedDi);
+
         // If this completes the BL + Facture pair while the DI waits in
         // ATTENTE_BL_FACTURE, close it automatically (atomic + idempotent).
         await this.maybeAdvanceDocGate(_id);
@@ -858,6 +912,14 @@ export class DiService {
         // Completes the BL + Facture pair? Auto-close if waiting (atomic).
         await this.maybeAdvanceDocGate(_id);
       }
+
+      // NB : PAS de notification ERP « facture ajoutée » ici. La facture est le
+      // document de CLÔTURE : dans le chemin normal, `maybeAdvanceDocGate`
+      // ci-dessus fait passer la DI à FINISHED, qui émet déjà `DI_FINISHED`
+      // (tous les rôles sauf Tech). Un `DI_DOC_FACTURE` en plus ferait doublon
+      // pour le même moment métier. La matrice n'a d'ailleurs pas de ligne
+      // « facture uploadée ».
+
       // Return the fresh DI (mutation is typed `() => Di`).
       return await this.diModel.findOne({ _id });
     } catch (error) {
@@ -870,6 +932,29 @@ export class DiService {
     try {
       const di = await this.diModel.findOne({ _id });
       if (!di) throw new Error(`DI '${_id}' not found`);
+
+      // GARDE P3 — pas de BC tant que le devis n'est pas présent. C'est LA vraie
+      // garde (le grisage front n'est que du confort) : elle couvre aussi les
+      // appels API directs. On échoue AVANT l'upload Drive (fail-fast, pas de
+      // fichier orphelin).
+      //
+      // « Devis présent » = ref structurée `driveDocs.Devis` (DI récentes) OU
+      // l'ancien champ `devis` (DI legacy pré-split). Conséquence pour les 42 DI
+      // legacy en ATTENTE_BC_DEVIS/NEGOTIATION1 : celles qui ONT déjà un devis
+      // (champ `devis` renseigné) passent ; celles SANS devis sont bloquées —
+      // c'est exactement le comportement voulu (migration 008 = « devis présent »
+      // → WAITING_BC, « devis absent » → WAITING_DEVIS), pas un blocage absurde.
+      // Retour (ignoreCount>0) : le devis du cycle initial reste sur la DI, donc
+      // la garde passe naturellement (les docs de retour vont en logsDi).
+      const hasDevis =
+        this.isDriveDocRef((di as any)?.driveDocs?.Devis) ||
+        !!(di as any)?.devis;
+      if (!hasDevis) {
+        throw new GraphQLError(
+          'Bon de commande refusé : le devis doit être uploadé avant le BC.',
+          { extensions: { code: 'BC_REQUIRES_DEVIS' } },
+        );
+      }
 
       const { webViewLink, driveFileId, fileName } =
         await this.uploadDiDocToDrive(di, pdf, 'BC');
@@ -902,6 +987,22 @@ export class DiService {
         });
       } catch (err) {
         await this.captureDiscordFailure('addBCPDF', err, { diId: _id });
+      }
+
+      // Notification ERP : bon de commande attendu ARRIVÉ → coordination.
+      try {
+        await this.notificationService.emit({
+          type: 'DI_DOC_BC',
+          diId: _id,
+          actorId: null,
+          message: `DI ${
+            (di as any)?._idnum ?? _id
+          } — bon de commande ajouté (à vérifier)`,
+          payload: { doc: 'BC' },
+          notify: { roles: ['Admin_Manager'] },
+        });
+      } catch (err) {
+        await this.captureDiscordFailure('erp-notification', err);
       }
 
       // Gate documentaire : en WAITING_BC, l'upload du BC déclenche le routage de
@@ -1179,11 +1280,18 @@ export class DiService {
           componentsConfirmedBy: di.componentsConfirmedBy,
           price: di.price ?? null,
           final_price: di.final_price ?? null,
+          // Diagnostic payant + estimation prix diagnostic — nécessaires au
+          // PRÉ-REMPLISSAGE du modal de tarification (ouvert depuis la ligne).
+          // `?? true` aligne le défaut « payant » pour les DI legacy.
+          diagnosticPayant: di.diagnosticPayant ?? true,
+          diagnosticEstimate: di.diagnosticEstimate ?? null,
+          needsDevisBeforeRepair: di.needsDevisBeforeRepair ?? false,
           annulationParClient: di.annulationParClient,
           annulationMotif: di.annulationMotif,
           annulationCommentaire: di.annulationCommentaire,
           annulePar: di.annulePar,
           annuleLe: di.annuleLe,
+          diagAssignments: await this.resolveDiagAssignments(stat),
           createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
           image: di?.image?.length > 0 ? di.image : '-',
           client_id: di.client_id?.first_name ?? '-',
@@ -1299,11 +1407,18 @@ export class DiService {
           componentsConfirmedBy: di.componentsConfirmedBy,
           price: di.price ?? null,
           final_price: di.final_price ?? null,
+          // Diagnostic payant + estimation prix diagnostic — nécessaires au
+          // PRÉ-REMPLISSAGE du modal de tarification (ouvert depuis la ligne).
+          // `?? true` aligne le défaut « payant » pour les DI legacy.
+          diagnosticPayant: di.diagnosticPayant ?? true,
+          diagnosticEstimate: di.diagnosticEstimate ?? null,
+          needsDevisBeforeRepair: di.needsDevisBeforeRepair ?? false,
           annulationParClient: di.annulationParClient,
           annulationMotif: di.annulationMotif,
           annulationCommentaire: di.annulationCommentaire,
           annulePar: di.annulePar,
           annuleLe: di.annuleLe,
+          diagAssignments: await this.resolveDiagAssignments(stat),
           createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
           image: di?.image?.length > 0 ? di.image : '-',
           client_id: di.client_id?.first_name ?? '-',
@@ -1427,6 +1542,23 @@ export class DiService {
       skipRoleValidation: true,
     });
 
+    // Relance manager → la COORDINATION peut (ré)affecter un technicien.
+    await this.emitDiHandoff(
+      _idDI,
+      result.di,
+      'DI_PENDING1',
+      `DI à affecter au diagnostic (${(result.di as any)?._idnum ?? _idDI})`,
+      ['Coordinator'],
+    );
+
+    // TEMPS RÉEL des LISTES : le workflow ne diffuse pas `updateTicket` → sans
+    // ça la liste coordinatrice n'appende pas la DI passée en PENDING1.
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { result: result.di, states: result.di },
+      target: {},
+    });
+
     return result.di;
   }
 
@@ -1466,6 +1598,87 @@ export class DiService {
       await this.captureDiscordFailure('discord-notification', err);
     }
 
+    // Diagnostic terminé → DI en PENDING2 : la COORDINATION doit router la suite.
+    await this.emitDiHandoff(
+      _idDI,
+      result.di,
+      'DI_PENDING2',
+      `DI en attente de suite après diagnostic (${
+        (result.di as any)?._idnum ?? _idDI
+      })`,
+      ['Coordinator'],
+    );
+
+    return result.di;
+  }
+
+  /**
+   * Raccourci RETOUR sans PDR (erreur Fixtronix) : INDIAGNOSTIC/_Pause → PENDING3.
+   * Le diagnostic d'un retour dont la faute est Fixtronix conclut « aucune pièce »
+   * → magasin ET tarification sont sautés (non facturé) et la DI file directement
+   * en PENDING3, où la COORDINATRICE l'enverra en réparation en y joignant le
+   * devis (traçabilité). Miroir de `magasinTech_Pending2`, cible PENDING3.
+   *
+   * PAS de `assertTransitionAllowed(PENDING3)` ici : la whitelist générique
+   * n'autorise VOLONTAIREMENT pas INDIAGNOSTIC → PENDING3 (sinon on ouvrirait ce
+   * saut à toute autre mutation). La source est validée DUREMENT par le moteur
+   * via `MAGASIN_TECH_TO_PENDING3` (`strictFrom: true`). La condition métier
+   * (retour + sans PDR + erreur Fixtronix) est vérifiée par l'appelant
+   * `changeStatusMagasinEstimation`, seul point d'entrée de ce chemin.
+   */
+  async magasinTech_Pending3(_idDI: string): Promise<Di> {
+    // Fin de la phase diagnostic → ferme le segment de travail courant (cumul
+    // serveur). No-op si déjà fermé par une pause.
+    {
+      const di: any = await this.diModel.findOne({ _id: _idDI }).lean();
+      await this.statsService.closeDiagLeg(_idDI, di?.ignoreCount ?? 0);
+    }
+    const result = await this.diWorkflowService.transition({
+      diId: _idDI,
+      transitionKey: 'MAGASIN_TECH_TO_PENDING3',
+      // NE PAS sauter la validation de source : `strictFrom` doit REFUSER toute
+      // source hors diagnostic. Le rôle est déjà gardé au resolver.
+      skipRoleValidation: true,
+    });
+
+    // Marque la DI comme « en attente du devis coordinatrice » : la carte
+    // Réparation du modal coordinateur bascule alors en mode « joindre le devis »
+    // et bloque l'envoi tant qu'aucun devis n'est attaché.
+    await this.diModel.updateOne(
+      { _id: _idDI },
+      { $set: { needsDevisBeforeRepair: true } },
+    );
+
+    // « Diagnostic Completed » : la DI quitte la phase diagnostic. Ce chemin est
+    // par construction sans PDR et erreur Fixtronix → on renseigne l'embed en
+    // conséquence (les champs du cycle retour vivent sur LogsDi, pas la DI live).
+    try {
+      await this.discordHookService.sendDiagnosticFinished({
+        di: result.di,
+        diag: {
+          can_be_repaired: (result.di as any)?.can_be_repaired,
+          contain_pdr: false,
+          isErrorFromFixtronix: true,
+          remarque_tech_diagnostic: (result.di as any)
+            ?.remarque_tech_diagnostic,
+        },
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('discord-notification', err);
+    }
+
+    // DI en PENDING3 (sans passer par le magasin ni la tarification) → la
+    // COORDINATION doit l'envoyer en réparation (avec devis).
+    await this.emitDiHandoff(
+      _idDI,
+      result.di,
+      'DI_PENDING3',
+      `DI prête pour envoi en réparation — retour sans pièces (${
+        (result.di as any)?._idnum ?? _idDI
+      })`,
+      ['Coordinator'],
+    );
+
     return result.di;
   }
   //TODO check if we need to delet this one
@@ -1479,6 +1692,9 @@ export class DiService {
       skipFromValidation: true,
       skipRoleValidation: true,
     });
+    // 📦 Filet décrément stock (voir commitStockDecrementOnce) — chemin
+    // manager/admin → PENDING3. No-op si déjà fait ou sans composants.
+    await this.commitStockDecrementOnce(_idDI);
 
     return result.di;
   }
@@ -1546,21 +1762,43 @@ export class DiService {
       await this.statsService.updateStatus(_idDI, STATUS_DI.Diagnostic.status);
     }
 
+    // Resolve the assigned diagnostic technician (stored on the Stat created
+    // just before by `createStat`) — sert au Discord ET à la notif ERP ciblée.
+    let techId: string | null = null;
     try {
-      // Resolve the assigned diagnostic technician (stored on the Stat created
-      // just before by `createStat`) so the SINGLE Discord embed is complete.
-      let techId: string | null = null;
-      try {
-        const stat: any = await this.statsService.findUserLinkedToConcernedDi(
-          _idDI,
-        );
-        techId = stat?.id_tech_diag ?? null;
-      } catch {
-        /* tech is best-effort context — never block the notification */
-      }
+      const stat: any = await this.statsService.findUserLinkedToConcernedDi(
+        _idDI,
+      );
+      techId = stat?.id_tech_diag ?? null;
+    } catch {
+      /* tech is best-effort context — never block the notification */
+    }
+
+    try {
       await this.discordHookService.sendDiagnosticAssigned(diagnostic, techId);
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
+    }
+
+    // Notification ERP CIBLÉE sur le technicien affecté (ciblage PAR USER : lui
+    // seul la reçoit, cloche + socket). Acteur = null : `coordinator_ToDiag`
+    // n'est pas authentifié → on affiche honnêtement « acteur inconnu » plutôt
+    // que de deviner (passe auth v1.1). Best-effort : n'échoue jamais la transition.
+    if (techId) {
+      try {
+        await this.notificationService.emit({
+          type: 'DI_ASSIGNED_DIAG',
+          diId: _idDI,
+          actorId: null,
+          message: `Nouvelle DI affectée en diagnostic (${
+            (diagnostic as any)?._idnum ?? _idDI
+          })`,
+          payload: { status: STATUS_DI.Diagnostic.status },
+          notify: { userIds: [techId] },
+        });
+      } catch (err) {
+        await this.captureDiscordFailure('erp-notification', err);
+      }
     }
 
     return diagnostic;
@@ -1625,6 +1863,24 @@ export class DiService {
       });
     }
 
+    // Notification ERP CIBLÉE sur le technicien de réparation affecté (par-user).
+    if (tech_id) {
+      try {
+        await this.notificationService.emit({
+          type: 'DI_ASSIGNED_REP',
+          diId: _idDI,
+          actorId: null, // non authentifié → acteur inconnu (honnête)
+          message: `Nouvelle DI affectée en réparation (${
+            (reparation as any)?._idnum ?? _idDI
+          })`,
+          payload: { status: STATUS_DI.Reparation.status },
+          notify: { userIds: [tech_id] },
+        });
+      } catch (err) {
+        await this.captureDiscordFailure('erp-notification', err);
+      }
+    }
+
     return reparation;
   }
 
@@ -1660,9 +1916,15 @@ export class DiService {
             can_be_repaired: diag.can_be_repaired,
             contain_pdr: diag.contain_pdr,
             remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
+            // Verdict « erreur Fixtronix » (phase retour) saisi par le TECH dans
+            // le modal de diagnostic. C'est ce flag qui déclenche le raccourci
+            // « retour sans pièces → PENDING3 non facturé » (décision assumée).
+            isErrorFromFixtronix: diag.isErrorFromFixtronix ?? false,
             array_composants: diag.array_composants,
             di_category_id: diag.di_category_id,
-            isErrorFromFixtronix: diag.isErrorFromFixtronix ?? false,
+            // Ré-arme le décrément de stock pour CETTE liste (le tech vient de
+            // (re)saisir array_composants) : le prochain commit décrémentera.
+            stockDecrementedAt: null,
           },
         },
         { new: true },
@@ -1872,6 +2134,27 @@ export class DiService {
     );
   }
 
+  /** Bascule le flag « Diagnostic payant » (gouvernance COORDINATRICE). VERROUILLÉ
+   *  une fois la tarification faite (prix diagnostic fixé) : on ne re-facture pas
+   *  après coup. Guard de rôle posée au resolver. */
+  async setDiagnosticPayant(_id: string, payant: boolean): Promise<boolean> {
+    const di = await this.diModel.findOne({ _id });
+    if (!di) throw new GraphQLError('DI introuvable', {
+      extensions: { code: 'NOT_FOUND', diId: _id },
+    });
+    if (Number(di.price) > 0) {
+      throw new GraphQLError(
+        'Tarification déjà effectuée : le flag « Diagnostic payant » est verrouillé.',
+        { extensions: { code: 'BAD_REQUEST', diId: _id } },
+      );
+    }
+    await this.diModel.updateOne(
+      { _id },
+      { $set: { diagnosticPayant: !!payant } },
+    );
+    return true;
+  }
+
   /** A DriveDocRef is a real uploaded doc (object with a driveFileId), not a
    *  legacy filename string or an empty value. */
   private isDriveDocRef(doc: any): boolean {
@@ -1989,11 +2272,79 @@ export class DiService {
       content: { result: finished, states: finished },
       target: {},
     });
+
+    // FIN D'AFFAIRE : ce n'est pas de l'action mais de la CLÔTURE (facturation,
+    // suivi client, KPI). Matrice : TOUS les rôles de suivi sauf le Tech
+    // (le technicien a fini son intervention, plus rien à faire de son côté).
+    // Point UNIQUE = un seul emit par FINISHED réel, quel que soit le chemin
+    // d'entrée. Acteur inconnu (contexte interne).
+    await this.emitDiHandoff(
+      finished?._id,
+      finished,
+      'DI_FINISHED',
+      `Intervention terminée (${finished?._idnum ?? finished?._id})`,
+      ['Manager', 'Admin_Manager', 'Admin_Tech', 'Coordinator', 'Magasin'],
+    );
+  }
+
+  /** Effets de bord communs d'une clôture IRREPARABLE (équipement non réparable)
+   *  — MIROIR de `finalizeFinished` : stat + Discord dédié + socket + handoff
+   *  `DI_IRREPARABLE`. Ne fait AUCUNE transition (l'appelant a déjà positionné le
+   *  statut) et NE ferme PAS le leg diagnostic (géré par l'appelant `fromDiagnostic`
+   *  uniquement, pour ne pas doubler la fermeture depuis l'Approval/pricing). */
+  private async finalizeIrreparable(di: any): Promise<void> {
+    if (di?.ignoreCount > 0) {
+      await this.statsService.updateStatus(
+        di._id,
+        STATUS_DI.Irreparable.status,
+        di.ignoreCount,
+      );
+    } else {
+      await this.statsService.updateStatus(di._id, STATUS_DI.Irreparable.status);
+    }
+    try {
+      await this.discordHookService.sendDiIrreparable(di);
+    } catch (err) {
+      await this.captureDiscordFailure('discord-notification', err);
+    }
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { result: di, states: di },
+      target: {},
+    });
+    // CLÔTURE (équipement irréparable) : suivi/facturation, comme DI_FINISHED —
+    // tous les rôles de suivi sauf le Tech (son intervention est terminée).
+    await this.emitDiHandoff(
+      di?._id,
+      di,
+      'DI_IRREPARABLE',
+      `Équipement irréparable (${(di as any)?._idnum ?? di?._id})`,
+      ['Manager', 'Admin_Manager', 'Admin_Tech', 'Coordinator', 'Magasin'],
+    );
+  }
+
+  /** Clôture une DI en IRREPARABLE (transition gardée + effets de bord). Point
+   *  d'entrée UNIQUE réutilisé par les trois chemins non réparables (sortie de
+   *  diagnostic non-payant/retour, non-réparable pendant l'Approval, et clôture
+   *  PAYANT après facturation en PRICING_DIAG). La garde `assertTransitionAllowed`
+   *  refuse toute source non autorisée (server-authoritative). */
+  private async closeIrreparable(_id: string): Promise<any> {
+    await this.assertTransitionAllowed(_id, STATUS_DI.Irreparable.status);
+    const moved = await this.diModel.findOneAndUpdate(
+      { _id },
+      { $set: { status: STATUS_DI.Irreparable.status } },
+      { new: true },
+    );
+    if (!moved) {
+      throw new Error('Issue moving to IRREPARABLE');
+    }
+    await this.finalizeIrreparable(moved);
+    return moved;
   }
 
   /**
    * Sortie de WAITING_BC à l'upload du BC = MÊME routage que le bouton
-   * « Confirmer » du modal : non réparable → FINISHED ; réparable SANS composants
+   * « Confirmer » du modal : non réparable → IRREPARABLE ; réparable SANS composants
    * → PENDING3 ; réparable AVEC composants → PROCESSING (magasin). Atomique
    * (claim filtré sur WAITING_BC → un seul gagnant). N'écrit PAS le prix (déjà
    * persisté depuis PRICING / le modal) ; réutilise les notifications de chaque
@@ -2003,8 +2354,10 @@ export class DiService {
   private async exitWaitingBcOnBc(_id: string, di: any): Promise<void> {
     const notRepairable = di?.can_be_repaired === false;
     const hasComponents = this.diHasComponents(di);
+    // Non réparable détecté au dépôt du BC → clôture IRREPARABLE (et NON FINISHED)
+    // — miroir de la branche non-réparable du bouton « Confirmer ».
     const target = notRepairable
-      ? STATUS_DI.Finished.status
+      ? STATUS_DI.Irreparable.status
       : hasComponents
         ? STATUS_DI.InMagasin.status
         : STATUS_DI.Pending3.status;
@@ -2016,8 +2369,8 @@ export class DiService {
     );
     if (!moved) return; // upload concurrent → un seul gagnant
 
-    if (target === STATUS_DI.Finished.status) {
-      await this.finalizeFinished(moved);
+    if (target === STATUS_DI.Irreparable.status) {
+      await this.finalizeIrreparable(moved);
       return;
     }
 
@@ -2043,12 +2396,14 @@ export class DiService {
   }
 
   async changeStatusTofinsh(_id: string) {
-    // Non-repairable routing. A non-repairable DI still needs its diagnostic
-    // billed when it's in the ORIGINAL flow → route to PENDING2 ("facturer le
-    // diagnostic") instead of closing. In a RETOUR cycle (ignoreCount > 0) it
-    // closes directly (FINISHED), unchanged. Guard: only redirect when we're
-    // actually leaving the DIAGNOSTIC phase — a reparation-finish also lands
-    // here and must keep going to FINISHED.
+    // Routage NON RÉPARABLE. Une DI non réparable ferme désormais en IRREPARABLE
+    // (statut terminal dédié), plus en FINISHED. SEULE exception : le flux
+    // ORIGINAL + diagnostic PAYANT doit d'abord FACTURER le diagnostic → PENDING2
+    // (→ PRICING_DIAG), la clôture IRREPARABLE se faisant à « Valider le prix ».
+    //   - diagnostic + (non payant OU retour) → IRREPARABLE direct ;
+    //   - diagnostic + payant + flux original  → PENDING2 (facturation) ;
+    //   - fin de RÉPARATION → WAITING_BL (inchangé, cette DI est réparée) ;
+    //   - non réparable depuis l'Approval / autre → IRREPARABLE.
     const di: any = await this.diModel.findOne({ _id }).lean();
     const fromDiagnostic = [
       STATUS_DI.Diagnostic.status,
@@ -2056,9 +2411,21 @@ export class DiService {
       STATUS_DI.DiagnosticInPause.status,
     ].includes(di?.status);
     const isOriginalFlow = !(di?.ignoreCount > 0);
-    if (fromDiagnostic && isOriginalFlow) {
-      // Original-flow, non-repairable → bill the diagnostic (PENDING2).
-      return this.magasinTech_Pending2(_id) as any;
+    // Défaut `true` (champ absent = payant, comportement historique).
+    const diagnosticPayant = di?.diagnosticPayant !== false;
+    if (fromDiagnostic) {
+      if (isOriginalFlow && diagnosticPayant) {
+        // Flux original + PAYANT → facturer le diagnostic (PENDING2). La clôture
+        // IRREPARABLE sera posée à « Valider le prix » en PRICING_DIAG.
+        return this.magasinTech_Pending2(_id) as any;
+      }
+      // Non payant (flux original) OU retour → clôture directe IRREPARABLE
+      // (aucune facturation, aucun fichier).
+      const closed = await this.closeIrreparable(_id);
+      // Sortie de diagnostic → fermeture du leg diagnostic (cumul serveur),
+      // comme l'ancienne clôture non réparable depuis le diagnostic.
+      await this.statsService.closeDiagLeg(_id, closed.ignoreCount ?? 0);
+      return closed;
     }
 
     // REPAIRED DI: the tech's "Fin réparation" no longer closes directly. The DI
@@ -2095,6 +2462,18 @@ export class DiService {
         content: { result: waiting, states: waiting },
         target: {},
       });
+      // Réparation TERMINÉE → la DI attend son BL. On notifie la coordination et
+      // les rôles de suivi (le Tech a fini, il est exclu). Émis AVANT la cascade
+      // documentaire ci-dessous pour refléter le moment réel de fin de répa.
+      await this.emitDiHandoff(
+        _id,
+        waiting,
+        'DI_REP_FINISHED',
+        `DI ${
+          (waiting as any)?._idnum ?? _id
+        } — réparation terminée, en attente de BL`,
+        ['Coordinator', 'Manager', 'Admin_Tech', 'Admin_Manager'],
+      );
       // Si des documents étaient déjà présents (ex. ré-upload en retour avant la
       // fin), la chaîne cascade immédiatement (WAITING_BL → WAITING_FACTURE →
       // FINISHED) — idempotent/no-op sinon.
@@ -2102,44 +2481,12 @@ export class DiService {
       return waiting;
     }
 
-    // Retour non-repairable (from diagnostic) → FINISHED directly (unchanged).
-    await this.assertTransitionAllowed(_id, STATUS_DI.Finished.status);
-    const result = await this.diModel.findOneAndUpdate(
-      { _id },
-      { $set: { status: STATUS_DI.Finished.status } },
-      { new: true },
-    );
-
-    if (!result) {
-      throw new Error('Issue in changing state changeStatusTofinsh');
-    }
-
-    // Retour non-réparable : la sortie de diagnostic ferme le segment de
-    // travail courant (cumul serveur). No-op pour une fin de réparation
-    // (l'ancre diagnostic est déjà nulle).
-    if (fromDiagnostic) {
-      await this.statsService.closeDiagLeg(_id, result.ignoreCount ?? 0);
-    }
-
-    // ✅ Fix: call statsService only once
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.Finished.status,
-        result.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
-    }
-
-    // 🔔 Discord notification (Finished)
-    try {
-      await this.discordHookService.sendDiFinished(result);
-    } catch (err) {
-      await this.captureDiscordFailure('discord-notification', err);
-    }
-
-    return result;
+    // Non réparable depuis la phase Approval (WAITING_DEVIS/WAITING_BC/
+    // NEGOTIATION2 — DI jugée non réparable pendant la négociation) ou toute
+    // autre source non-diagnostic / non-réparation → clôture IRREPARABLE
+    // (remplace l'ancienne clôture FINISHED). Le leg diagnostic est déjà fermé
+    // en amont (sortie de diagnostic), on ne le referme pas ici.
+    return this.closeIrreparable(_id);
   }
 
   /**
@@ -2183,6 +2530,17 @@ export class DiService {
     } else {
       await this.statsService.updateStatus(_id, STATUS_DI.Pending1.status);
     }
+    // Notif ERP : « Renvoyer au diagnostic » (PRICING → PENDING1) renvoie la DI
+    // à la coordination pour ré-affecter un tech → elle doit être notifiée.
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_PENDING1',
+      `DI renvoyée au diagnostic — à réaffecter (${
+        (result as any)?._idnum ?? _id
+      })`,
+      ['Coordinator'],
+    );
     return result;
   }
 
@@ -2313,6 +2671,266 @@ export class DiService {
 
     return updated;
   }
+
+  /**
+   * RÉACTIVATION d'une DI annulée → la ramène au statut qu'elle avait JUSTE avant
+   * l'annulation, lu dans `statusHistory` (l'annulation n'ayant RIEN détruit :
+   * documents, montants et composants sont intacts). Gouvernance : coordinatrice
+   * + admins (garde de rôle au resolver ; le TECH est exclu). Auteur tracé dans
+   * une entrée `Audit` (le module n'a pas de champ auteur → dans le message).
+   *
+   * Refus (server-authoritative) : DI non annulée ; statut précédent introuvable
+   * dans l'historique ; origine POST-DOCUMENT (BL/facture émis → prudence
+   * comptable) ; DI déjà réactivée une fois (1 max, anti-boucle).
+   */
+  async reactiverDi(_idDI: string, actor: { username?: string | null }) {
+    const di: any = await this.diModel
+      .findOne({ _id: _idDI })
+      .select('status statusHistory')
+      .lean();
+    if (!di) {
+      throw new GraphQLError(`DI '${_idDI}' introuvable.`, {
+        extensions: { code: 'NOT_FOUND' },
+      });
+    }
+    if (di.status !== STATUS_DI.Annuler.status) {
+      throw new GraphQLError("Cette DI n'est pas annulée.", {
+        extensions: { code: 'BAD_REQUEST' },
+      });
+    }
+
+    const history: Array<{ status: string; at: Date }> = Array.isArray(
+      di.statusHistory,
+    )
+      ? di.statusHistory
+      : [];
+
+    // Statut précédent = l'entrée juste AVANT la DERNIÈRE entrée ANNULER de
+    // l'historique (le « dernier » gère les cycles annulé→réactivé→ré-annulé).
+    let lastAnnul = -1;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i]?.status === STATUS_DI.Annuler.status) {
+        lastAnnul = i;
+        break;
+      }
+    }
+    const previousStatus = lastAnnul > 0 ? history[lastAnnul - 1]?.status : null;
+    if (!previousStatus) {
+      throw new GraphQLError(
+        'Statut précédent introuvable dans l’historique — réactivation impossible.',
+        { extensions: { code: 'NO_PREVIOUS_STATUS', diId: _idDI } },
+      );
+    }
+
+    // Garde ARGENT/DOCUMENTS : interdit de rouvrir une DI dont le BL ou la
+    // facture ont déjà été émis (phase clôture, legacy inclus) ou déjà terminée.
+    const POST_DOCUMENT = new Set<string>([
+      ...CLOSING_STATUS_VALUES, // WAITING_BL, WAITING_FACTURE, CLOSING, ATTENTE_BL_FACTURE
+      STATUS_DI.Finished.status,
+    ]);
+    if (POST_DOCUMENT.has(previousStatus)) {
+      throw new GraphQLError(
+        `Réactivation interdite : la DI était en « ${previousStatus} » (BL/facture déjà émis).`,
+        {
+          extensions: {
+            code: 'REACTIVATION_FORBIDDEN_ORIGIN',
+            diId: _idDI,
+            previousStatus,
+          },
+        },
+      );
+    }
+
+    // Garde ANTI-BOUCLE (1 réactivation max) : une réactivation passée a laissé
+    // dans l'historique une entrée ANNULER SUIVIE d'un autre statut. La DERNIÈRE
+    // entrée ANNULER (l'annulation courante) est en fin de tableau, donc non
+    // suivie → non comptée. Une entrée ANNULER suivie d'autre chose = réactivation.
+    const alreadyReactivated = history.some(
+      (h, i) =>
+        h?.status === STATUS_DI.Annuler.status &&
+        i < history.length - 1 &&
+        history[i + 1]?.status !== STATUS_DI.Annuler.status,
+    );
+    if (alreadyReactivated) {
+      throw new GraphQLError(
+        'Cette DI a déjà été réactivée une fois — réactivation supplémentaire refusée.',
+        { extensions: { code: 'REACTIVATION_LIMIT', diId: _idDI } },
+      );
+    }
+
+    // `current_roles` re-dérivé du statut cible (comme une transition normale).
+    // Valeur legacy non trouvée → repli sur la coordination (jamais invisible).
+    const targetDef = Object.values(STATUS_DI).find(
+      (s) => s.status === previousStatus,
+    );
+    const restoredRoles = targetDef?.role ?? ['Coordinator'];
+
+    const updated = await this.diModel.findOneAndUpdate(
+      { _id: _idDI, status: STATUS_DI.Annuler.status },
+      {
+        $set: {
+          status: previousStatus,
+          current_roles: restoredRoles,
+          // Efface les métadonnées d'annulation (sinon bandeau « annulée par… »
+          // périmé sur une DI redevenue active).
+          annulePar: null,
+          annuleLe: null,
+          annulationMotif: null,
+          annulationCommentaire: null,
+          annulationParClient: null,
+        },
+      },
+      { new: true },
+    );
+    if (!updated) {
+      // Course : la DI a bougé entre la lecture et l'écriture.
+      throw new GraphQLError(
+        'La DI a changé d’état entre-temps — réactivation annulée.',
+        { extensions: { code: 'CONFLICT', diId: _idDI } },
+      );
+    }
+
+    // Traçabilité : entrée Audit (auteur dans le message, faute de champ dédié).
+    try {
+      const auditInput: AuditInput = {
+        _idDoc: _idDI,
+        type: 'DI_REACTIVATED',
+        message: `Réactivée par ${
+          actor?.username ?? 'inconnu'
+        } : ANNULER → ${previousStatus}`,
+        isSeen: false,
+      };
+      await this.auditService.create(auditInput);
+    } catch (err) {
+      // Audit best-effort : ne fait jamais échouer la réactivation.
+      await this.operationalErrorService.capture({
+        module: 'di',
+        submodule: 'diService',
+        method: 'REACTIVER_DI_AUDIT',
+        severity: 'LOW',
+        error: 'Audit de réactivation non enregistré',
+        message: (err as Error)?.message ?? String(err),
+        payload: { diId: _idDI, previousStatus },
+      });
+    }
+
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { result: updated, states: updated },
+      target: {},
+    });
+
+    return updated;
+  }
+
+  /**
+   * ABANDON du diagnostic par un technicien : la DI retourne en PENDING1
+   * (coordination) pour réaffectation à un AUTRE tech. Trace l'abandon dans
+   * `Stat.diagAssignments` (motif/qui/quand + contribution de temps), fige le
+   * temps de diagnostic (CUMULATIF — choix produit A+B, jamais réinitialisé) et
+   * notifie la coordination. `abandonedBy` = utilisateur authentifié (resolver).
+   */
+  async abandonDi(
+    _idDI: string,
+    data: { motif: string; motifAutre?: string; abandonedBy: string },
+  ) {
+    // Motif OBLIGATOIRE (liste blanche serveur ; « AUTRE » ⇒ texte libre requis).
+    const label = DiService.ABANDON_MOTIFS[data.motif];
+    if (!label) {
+      throw new GraphQLError(`Motif d'abandon invalide: « ${data.motif} ».`, {
+        extensions: { code: 'BAD_REQUEST' },
+      });
+    }
+    let motifFinal = label;
+    if (data.motif === 'AUTRE') {
+      const texte = (data.motifAutre ?? '').trim();
+      if (!texte) {
+        throw new GraphQLError(
+          'Motif « Autre » : le texte libre est obligatoire.',
+          { extensions: { code: 'BAD_REQUEST' } },
+        );
+      }
+      motifFinal = texte;
+    }
+
+    const di = await this.diModel
+      .findOne({ _id: _idDI })
+      .select('status ignoreCount')
+      .lean();
+    if (!di) {
+      throw new GraphQLError(`DI '${_idDI}' introuvable.`, {
+        extensions: { code: 'NOT_FOUND' },
+      });
+    }
+    // Garde DURE du statut source : abandon possible UNIQUEMENT en diagnostic.
+    // Neutralise le court-circuit REENTRY du garde de transition (un RETOUR ne
+    // peut pas être détourné vers PENDING1 via l'abandon).
+    const ABANDONABLE: string[] = [
+      STATUS_DI.Diagnostic.status,
+      STATUS_DI.InDiagnostic.status,
+      STATUS_DI.DiagnosticInPause.status,
+    ];
+    if (!ABANDONABLE.includes((di as any).status)) {
+      throw new GraphQLError(
+        "Abandon impossible : la DI n'est pas en cours de diagnostic.",
+        {
+          extensions: {
+            code: 'BAD_REQUEST',
+            currentStatus: (di as any).status ?? null,
+          },
+        },
+      );
+    }
+
+    // 1) Trace l'abandon + fige le temps (cumulatif) sur le cycle courant.
+    await this.statsService.recordDiagAbandon(
+      _idDI,
+      (di as any).ignoreCount ?? 0,
+      motifFinal,
+      data.abandonedBy,
+    );
+
+    // 2) DI → PENDING1 (current_roles coordination + statusHistory + Stat.status)
+    //    via le workflow — `strictFrom: true` re-garde le statut source.
+    const result = await this.diWorkflowService.transition({
+      diId: _idDI,
+      transitionKey: 'TECH_ABANDON_TO_PENDING1',
+    });
+
+    // 2.5) TEMPS RÉEL : le workflow ne diffuse PAS `updateTicket`. Sans ça, les
+    //      autres profils (coordination…) ne voient le passage en PENDING1
+    //      qu'après un refresh manuel. On diffuse donc l'état ici.
+    this.notificationGateway.updateTicket({
+      action: 'updateState',
+      content: { result: result.di, states: result.di },
+      target: {},
+    });
+
+    // 3) Notification coordination (best-effort — n'échoue jamais l'abandon).
+    try {
+      await this.discordHookService.sendDiAbandoned(result.di, motifFinal);
+    } catch (err) {
+      await this.captureDiscordFailure('discord-notification', err);
+    }
+
+    // 4) Notification ERP : le technicien a ANNULÉ/ABANDONNÉ la DI (retour
+    //    PENDING1). Le message NOMME le technicien (qui a fait l'action) → la
+    //    coordination sait qui réaffecter, les Admin_Manager/Admin_Tech
+    //    (propriétaires) sont alertés. Best-effort.
+    const who = data.abandonedBy || 'un technicien';
+    await this.emitDiHandoff(
+      _idDI,
+      result.di,
+      'DI_ABANDONED',
+      `${who} a annulé la DI ${
+        (result.di as any)?._idnum ?? _idDI
+      } — à réaffecter${motifFinal ? ' (' + motifFinal + ')' : ''}`,
+      ['Coordinator', 'Admin_Manager', 'Admin_Tech'],
+    );
+
+    return result.di;
+  }
+
   //if DI confirmer we sent to coordiantor
   // Negotiation1  => Pending3
   async manager_Negotation_Pendin3(
@@ -2335,6 +2953,9 @@ export class DiService {
     if (!result) {
       throw new Error('Issue in manager_Negotation_Pendin3 ');
     }
+    // 📦 Filet décrément stock (voir commitStockDecrementOnce) — chemin
+    // négociation → PENDING3. No-op si déjà fait ou sans composants.
+    await this.commitStockDecrementOnce(_idDI);
   }
   //if DI NOT confirmer we sent to Admin Manager
   // Negotiation1  => Negotiation2
@@ -2517,6 +3138,26 @@ export class DiService {
   }
 
   /**
+   * Détail d'UNE DI dans la MÊME projection que la liste coordinatrice
+   * (`mapCoordinatorDiRow` : noms client/société/lieu résolus, techDiag/techRep,
+   * documents, historique d'annulation…). Alimente le modal détail PARTAGÉ
+   * ouvert par un clic sur une notification (deep-link), depuis n'importe quelle
+   * page. Renvoie `null` si la DI est introuvable.
+   */
+  async getDiDetailById(_id: string) {
+    const di = await this.diModel
+      .findOne({ _id })
+      .populate('client_id', 'first_name last_name')
+      .populate('company_id', 'name')
+      .populate('createdBy', 'firstName lastName')
+      .populate('location_id', 'location_name')
+      .populate('di_category_id', '_id category')
+      .exec();
+    if (!di) return null;
+    return this.mapCoordinatorDiRow(di);
+  }
+
+  /**
    * SOURCE UNIQUE de la projection d'une DI pour les vues coordinatrice
    * (liste paginée ET recherche). `get_coordinatorDI` et `searchCoordinatorDI`
    * DOIVENT renvoyer EXACTEMENT les mêmes champs : sinon une DI atteinte par
@@ -2525,6 +3166,38 @@ export class DiService {
    * `statusHistory` → timeline cassée). Ce mapper garantit la parité à jamais.
    * Attend une DI déjà peuplée (client_id/company_id/createdBy/location_id).
    */
+  /**
+   * Historique d'affectation diagnostic prêt pour l'affichage : chaque entrée
+   * `Stat.diagAssignments` avec le `tech` RÉSOLU en NOM (id → « Prénom Nom »).
+   * `abandonedBy` est déjà un username lisible. Cache local anti-doublon.
+   */
+  private async resolveDiagAssignments(stat: any): Promise<any[]> {
+    const list: any[] = stat?.diagAssignments ?? [];
+    if (!list.length) return [];
+    const cache = new Map<string, string>();
+    const nameOf = async (id: string): Promise<string> => {
+      if (!id) return null;
+      if (cache.has(id)) return cache.get(id);
+      const name = await this.profileService.getTech(id).catch(() => id);
+      const val = typeof name === 'string' ? name : id;
+      cache.set(id, val);
+      return val;
+    };
+    const out: any[] = [];
+    for (const a of list) {
+      out.push({
+        tech: await nameOf(a.tech),
+        techId: a.tech ?? null,
+        assignedAt: a.assignedAt ?? null,
+        abandonedAt: a.abandonedAt ?? null,
+        motif: a.motif ?? null,
+        abandonedBy: a.abandonedBy ?? null,
+        diagTime: a.diagTime ?? null,
+      });
+    }
+    return out;
+  }
+
   private async mapCoordinatorDiRow(di: any) {
     // Fetch the stat document based on the DI's _id
     const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
@@ -2547,7 +3220,21 @@ export class DiService {
       array_composants: di.array_composants,
       documents: this.buildDocuments((di as any).driveDocs),
       di_category_id: di.di_category_id?.category,
-      remarque_admin_manager: null,
+      // Numéro de série + estimation réparation (manquaient au chemin DiTable →
+      // sections « — » dans le dossier). Passthrough honnête (repairEstimate est
+      // une ESTIMATION, pas un facturé).
+      nSerie: di.nSerie,
+      repairEstimate: di.repairEstimate,
+      // Diagnostic payant + estimation prix diagnostic (tarification + « Non facturé »).
+      // `?? true` : legacy sans le champ = payant (aligne le défaut schéma).
+      diagnosticPayant: di.diagnosticPayant ?? true,
+      diagnosticEstimate: di.diagnosticEstimate,
+      // Marqueur raccourci « retour sans pièces » : pilote la carte Réparation
+      // (mode « joindre le devis » + blocage de l'envoi tant qu'il manque).
+      needsDevisBeforeRepair: di.needsDevisBeforeRepair ?? false,
+      // Correctif : ne plus forcer `null` — surface la vraie remarque admin
+      // (la valeur est déjà requêtée et déclarée sur DiTable).
+      remarque_admin_manager: di.remarque_admin_manager,
       remarque_admin_tech: di.remarque_admin_tech,
       remarque_coordinator: di.remarque_coordinator,
       remarque_magasin: di.remarque_magasin,
@@ -2571,6 +3258,7 @@ export class DiService {
       annulationCommentaire: di.annulationCommentaire,
       annulePar: di.annulePar,
       annuleLe: di.annuleLe,
+      diagAssignments: await this.resolveDiagAssignments(stat),
       pricingRequestSentAt: di.pricingRequestSentAt,
       // Resolve the actor profile ids to NAMES — the flow timeline must never
       // render a raw ObjectId (getTech returns 'Unknown' for a missing/deleted
@@ -2743,6 +3431,28 @@ export class DiService {
   async affectinitialPrice(_id: string, price: number) {
     const pricing = await this.diModel.findOne({ _id });
 
+    // 🔒 GARDE SERVEUR-AUTORITAIRE : un diagnostic marqué NON PAYANT ne peut pas
+    // être facturé, même en appel API direct. Le plancher 150 est front-only ;
+    // ici on REFUSE tout prix diagnostic positif pour une DI non-payante (un
+    // prix nul/absent est un no-op toléré). Le temps de diagnostic reste mesuré.
+    if (pricing?.diagnosticPayant === false && Number(price) > 0) {
+      throw new GraphQLError(
+        'Diagnostic non payant : aucun prix de diagnostic ne peut être facturé.',
+        { extensions: { code: 'BAD_REQUEST', diId: _id } },
+      );
+    }
+
+    // 🔒 GARDE SERVEUR-AUTORITAIRE (miroir du front après retrait des bornes) :
+    // une DI PAYANTE doit porter un prix de diagnostic STRICTEMENT POSITIF —
+    // refus des valeurs nulles/négatives, même en appel API direct. Aucune
+    // borne 150–500 n'est imposée ici (décision commerciale, front-only).
+    if (pricing?.diagnosticPayant !== false && !(Number(price) > 0)) {
+      throw new GraphQLError(
+        'Prix du diagnostic invalide : un montant strictement positif est requis.',
+        { extensions: { code: 'BAD_REQUEST', diId: _id } },
+      );
+    }
+
     let updatedDi;
 
     if (pricing && pricing.ignoreCount && pricing.ignoreCount > 0) {
@@ -2845,6 +3555,14 @@ export class DiService {
       target: {},
     });
 
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_PENDING1',
+      `DI à affecter au diagnostic (${(result as any)?._idnum ?? _id})`,
+      ['Coordinator'],
+    );
+
     return result;
   }
 
@@ -2920,6 +3638,14 @@ export class DiService {
       await this.captureDiscordFailure('discord-notification', err);
     }
 
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_IN_MAGASIN',
+      `DI arrivée au magasin (${(result as any)?._idnum ?? _id})`,
+      ['Magasin'],
+    );
+
     this.notificationGateway.updateTicket({
       action: 'updateState',
       content: { result, states: result },
@@ -2937,6 +3663,29 @@ export class DiService {
     // it applies whether the DI is repairable or not. The transition guard
     // already permits INDIAGNOSTIC → PENDING2, so no guard change is needed.
     const di: any = await this.diModel.findOne({ _id }).lean();
+
+    // ─── Raccourci RETOUR sans PDR (erreur Fixtronix) → PENDING3 ──────────────
+    // ADDITIF et volontairement ISOLÉ : ne s'active QUE pour le cas métier
+    // (retour + AUCUNE pièce + erreur Fixtronix) ; toute autre combinaison
+    // retombe sur le routage existant ci-dessous, INCHANGÉ.
+    // En RETOUR (ignoreCount>0) le diagnostic du cycle courant est écrit sur la
+    // ligne LogsDi (idIgnore=ignoreCount), PAS sur la DI live → on lit le
+    // SNAPSHOT DU CYCLE pour statuer (contain_pdr / composants / erreur
+    // Fixtronix). Magasin ET tarification sont sautés (non facturé) : la
+    // coordinatrice enverra la DI en réparation en y joignant le devis.
+    const cycle = di?.ignoreCount ?? 0;
+    if (cycle > 0) {
+      const log: any = await this.logsDiService.getLogsById(cycle, _id);
+      const cycleContainPdr = log?.contain_pdr === true;
+      const cycleHasComposants =
+        Array.isArray(log?.array_composants) && log.array_composants.length > 0;
+      const cycleFixtronixError = log?.isErrorFromFixtronix === true;
+      if (!cycleContainPdr && !cycleHasComposants && cycleFixtronixError) {
+        return this.magasinTech_Pending3(_id);
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     const declaredPdr = di?.contain_pdr === true;
     const hasComposants =
       Array.isArray(di?.array_composants) && di.array_composants.length > 0;
@@ -2995,6 +3744,22 @@ export class DiService {
       );
     }
 
+    // C'EST ICI que la DI arrive au Magasin après un diagnostic AVEC PDR : le
+    // magasin doit estimer les composants. C'est le PREMIER contact du magasin
+    // avec la DI → on le notifie (auparavant : aucune notification à ce moment).
+    // Distinct de `DI_IN_MAGASIN` (phase préparation/sourcing APRÈS le BC, non
+    // consécutive : MagasinEstimation → PENDING2 → … → BC → CONFIRMATION), donc
+    // AUCUN doublon.
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_MAGASIN_ESTIMATION',
+      `DI ${
+        (result as any)?._idnum ?? _id
+      } — diagnostic terminé, composants à estimer`,
+      ['Magasin'],
+    );
+
     this.notificationGateway.updateTicket({
       action: 'updateState',
       content: { result, states: result },
@@ -3040,6 +3805,14 @@ export class DiService {
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
+
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_PENDING2',
+      `DI en attente de suite (${(result as any)?._idnum ?? _id})`,
+      ['Coordinator'],
+    );
 
     // existing socket notification
     this.notificationGateway.updateTicket({
@@ -3087,6 +3860,17 @@ export class DiService {
       await this.captureDiscordFailure('discord-notification', err);
     }
 
+    // Le demandeur (`pricingRequestSentBy`) est l'ACTEUR → exclu de ses propres
+    // notifications ; l'admin qui doit fixer le prix est prévenu.
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_PRICING',
+      `Prix à fixer (${(result as any)?._idnum ?? _id})`,
+      ['Admin_Manager', 'Admin_Tech'],
+      { id: pricingRequestSentBy ?? null },
+    );
+
     // existing notifications
     this.notificationGateway.sendNotifcationToAdmins(
       'Veuillez affecter le prix de ce DI',
@@ -3119,6 +3903,27 @@ export class DiService {
   }
 
   // Entrée dans la phase Approval documentaire = 1er gate WAITING_DEVIS.
+  /**
+   * Cas PAYANT irréparable : après FACTURATION du diagnostic en PRICING_DIAG,
+   * « Valider le prix » clôture la DI en IRREPARABLE (au lieu d'entrer dans le
+   * flux Approval réparation via `changeStatusNegociate1`). Le prix a déjà été
+   * persisté par l'étape précédente de la cascade front (`affectinitialPrice`).
+   * Garde métier server-authoritative : REFUSE si la DI n'est pas non-réparable
+   * (`can_be_repaired !== false`) — un appel API direct ne peut pas clôturer une
+   * DI réparable en irréparable. La garde de transition (`assertTransitionAllowed`
+   * dans `closeIrreparable`) refuse en plus toute source hors PRICING_DIAG.
+   */
+  async changeStatusIrreparableFromPricing(_id: string): Promise<any> {
+    const di: any = await this.diModel.findOne({ _id }).lean();
+    if (di?.can_be_repaired !== false) {
+      throw new GraphQLError(
+        'Clôture irréparable refusée : la DI est réparable.',
+        { extensions: { code: 'BAD_REQUEST', diId: _id } },
+      );
+    }
+    return this.closeIrreparable(_id);
+  }
+
   async changeStatusNegociate1(_id: string) {
     await this.assertTransitionAllowed(_id, STATUS_DI.WaitingDevis.status);
     const result = await this.diModel.findOneAndUpdate(
@@ -3150,6 +3955,14 @@ export class DiService {
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
+
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_NEGOTIATION1',
+      `DI ${(result as any)?._idnum ?? _id} en attente de devis`,
+      ['Manager', 'Coordinator', 'Admin_Tech', 'Admin_Manager'],
+    );
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
@@ -3190,6 +4003,14 @@ export class DiService {
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
+
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_NEGOTIATION2',
+      `DI en négociation admin (${(result as any)?._idnum ?? _id})`,
+      ['Admin_Manager'],
+    );
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
@@ -3257,6 +4078,12 @@ export class DiService {
       throw new Error('Issue in changeStatusPending3');
     }
 
+    // 📦 DÉCRÉMENT DE STOCK — FILET : entrée en réparation. Couvre les chemins
+    // magasin qui court-circuitent l'envoi au coordinateur (INMAGASIN/
+    // CONFIRMATION_COMPOSANTS → PENDING3 direct). No-op si déjà décrémenté à
+    // l'envoi (marqueur), et si la DI n'a pas de composants (liste vide).
+    await this.commitStockDecrementOnce(_id);
+
     if (result.ignoreCount > 0) {
       await this.statsService.updateStatus(
         _id,
@@ -3273,6 +4100,14 @@ export class DiService {
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
+
+    await this.emitDiHandoff(
+      _id,
+      result,
+      'DI_PENDING3',
+      `DI à affecter en réparation (${(result as any)?._idnum ?? _id})`,
+      ['Coordinator'],
+    );
 
     // existing socket notification
     this.notificationGateway.updateTicket({
@@ -3317,6 +4152,36 @@ export class DiService {
       await this.captureDiscordFailure('discord-notification', err);
     }
 
+    // Notification ERP CIBLÉE sur le technicien affecté à la RÉPARATION — MIROIR
+    // exact de l'affectation diagnostic (`coordinator_ToDiag` → DI_ASSIGNED_DIAG).
+    // Auparavant : le tech réparateur n'était JAMAIS notifié (l'émetteur
+    // `coordinator_ToRep` était du code mort ; le vrai chemin `affectForRep` ne
+    // faisait qu'un `updateTicket`). Le tech est porté par la Stat (`id_tech_rep`,
+    // posé par `affectForRep` juste avant ce passage en réparation). Best-effort.
+    let repTechId: string | null = null;
+    try {
+      const stat: any = await this.statsService.findUserLinkedToConcernedDi(_id);
+      repTechId = stat?.id_tech_rep ?? null;
+    } catch {
+      /* tech = contexte best-effort — n'échoue jamais la transition */
+    }
+    if (repTechId) {
+      try {
+        await this.notificationService.emit({
+          type: 'DI_ASSIGNED_REP',
+          diId: _id,
+          actorId: null,
+          message: `Nouvelle DI affectée en réparation (${
+            (result as any)?._idnum ?? _id
+          })`,
+          payload: { status: STATUS_DI.Reparation.status },
+          notify: { userIds: [repTechId] },
+        });
+      } catch (err) {
+        await this.captureDiscordFailure('erp-notification', err);
+      }
+    }
+
     this.notificationGateway.updateTicket({
       action: 'updateState',
       content: { result, states: result },
@@ -3324,6 +4189,48 @@ export class DiService {
     });
 
     return result;
+  }
+
+  /**
+   * Envoi en réparation par la COORDINATRICE, devis OBLIGATOIRE — « un seul
+   * geste ». Sert le cas « retour sans pièces » (PENDING3 via le raccourci
+   * Fixtronix) où ni le magasin ni la tarification n'ont produit de devis : la
+   * coordinatrice joint le devis (traçabilité, non facturé) en envoyant la DI
+   * au réparateur.
+   *
+   * Ordre : (1) devis — `addDevisPDF` route SEUL sur le bon cycle (logsdis en
+   * retour via ignoreCount) ; (2) `affectForRep` écrit le tech réparateur sur la
+   * Stat du cycle courant ; (3) on retire le marqueur `needsDevisBeforeRepair` ;
+   * (4) `changeStatusRepaire` (PENDING3 → REPARATION) lit ce tech pour le
+   * notifier. Devis + tech BLOQUANTS. Garde de rôle COORDINATRICE au resolver.
+   */
+  async coordinatorSendToRepairWithDevis(
+    _idDi: string,
+    repTechId: string,
+    devisPdf: string,
+  ): Promise<Di> {
+    if (!devisPdf) {
+      throw new GraphQLError('Devis obligatoire pour envoyer en réparation.', {
+        extensions: { code: 'BAD_REQUEST' },
+      });
+    }
+    if (!repTechId) {
+      throw new GraphQLError(
+        'Technicien réparateur obligatoire pour envoyer en réparation.',
+        { extensions: { code: 'BAD_REQUEST' } },
+      );
+    }
+    // 1) Devis (upload Drive + routage cycle initial/retour par addDevisPDF).
+    await this.addDevisPDF(_idDi, devisPdf);
+    // 2) Affectation du technicien réparateur (retour-aware, écrit id_tech_rep).
+    await this.statsService.affectForRep(_idDi, repTechId);
+    // 3) La DI n'attend plus le devis → retire le marqueur avant la transition.
+    await this.diModel.updateOne(
+      { _id: _idDi },
+      { $set: { needsDevisBeforeRepair: false } },
+    );
+    // 4) PENDING3 → REPARATION (notifie le tech réparateur affecté ci-dessus).
+    return this.changeStatusRepaire(_idDi) as unknown as Promise<Di>;
   }
 
   /**
@@ -3505,6 +4412,7 @@ export class DiService {
       target: {},
     });
 
+    await this.emitRetourNotification(_id, updated, 1, reason);
     return updated;
   }
   async changeDiRetour2(_id: string, reason?: string) {
@@ -3533,6 +4441,7 @@ export class DiService {
       target: {},
     });
 
+    await this.emitRetourNotification(_id, updated, 2, reason);
     return updated;
   }
   async changeDiRetour3(_id: string, reason?: string) {
@@ -3561,21 +4470,111 @@ export class DiService {
       target: {},
     });
 
+    await this.emitRetourNotification(_id, updated, 3, reason);
     return updated;
   }
+
+  /** Notification ERP : bon de livraison attendu ARRIVÉ → coordination.
+   *  Un seul point pour les deux branches d'`addBlPDF`. */
+  private async emitBlUploadedNotification(
+    _id: string,
+    di: any,
+  ): Promise<void> {
+    try {
+      await this.notificationService.emit({
+        type: 'DI_DOC_BL',
+        diId: _id,
+        actorId: null,
+        message: `DI ${
+          di?._idnum ?? _id
+        } — bon de livraison ajouté, en attente de facture`,
+        payload: { doc: 'BL' },
+        notify: {
+          roles: ['Coordinator', 'Manager', 'Admin_Tech', 'Admin_Manager'],
+        },
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('erp-notification', err);
+    }
+  }
+
+  /** Notification ERP d'un retour (niveau 1/2/3) → Manager + Coordination.
+   *  Best-effort ; acteur inconnu (mutation non authentifiée). */
+  private async emitRetourNotification(
+    _id: string,
+    updated: any,
+    level: 1 | 2 | 3,
+    reason?: string,
+  ): Promise<void> {
+    try {
+      await this.notificationService.emit({
+        type: `DI_RETOUR_${level}`,
+        diId: _id,
+        actorId: null,
+        message: `Retour ${level} (${updated?._idnum ?? _id})${
+          reason ? ' — ' + reason : ''
+        }`,
+        payload: { level, reason: reason ?? null, status: updated?.status },
+        notify: { roles: ['Manager', 'Coordinator'] },
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('erp-notification', err);
+    }
+  }
+
+  /**
+   * Point d'aide UNIQUE pour les hand-offs de statut : un seul `emit()` (via le
+   * point central), mapping de rôles centralisé, acteur exclu de ses propres
+   * notifications (géré par `emit`). Best-effort — n'échoue jamais la transition.
+   */
+  private async emitDiHandoff(
+    _id: string,
+    di: any,
+    type: string,
+    message: string,
+    roles: string[],
+    actor?: { id?: string | null; role?: string | null },
+  ): Promise<void> {
+    try {
+      await this.notificationService.emit({
+        type,
+        diId: _id,
+        actorId: actor?.id ?? null,
+        actorRole: actor?.role ?? null,
+        message,
+        payload: { status: di?.status ?? null },
+        notify: { roles },
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('erp-notification', err);
+    }
+  }
+
   async changeToPending1(_id: string) {
     const pending1 = await this.diModel.updateOne(
       { _id },
       { $set: { status: STATUS_DI.Pending1.status } },
     );
 
-    const di = this.getDiById(_id);
-
+    // BUG corrigé : `getDiById` renvoie une PROMESSE — l'ancien code diffusait
+    // la promesse (non attendue) dans `updateTicket`, donc la liste des autres
+    // profils ne pouvait PAS appender la DI. On récupère la DI réelle et on la
+    // diffuse (temps réel des listes).
+    const fresh: any = await this.diModel.findOne({ _id }).lean();
     this.notificationGateway.updateTicket({
       action: 'updateState',
-      content: { di, states: di },
+      content: { result: fresh, states: fresh },
       target: {},
     });
+
+    // Notif ERP : passage en PENDING1 → la coordination doit affecter la DI.
+    await this.emitDiHandoff(
+      _id,
+      fresh,
+      'DI_PENDING1',
+      `Nouvelle DI à affecter (${fresh?._idnum ?? _id})`,
+      ['Coordinator'],
+    );
 
     return pending1;
   }
@@ -3831,6 +4830,9 @@ export class DiService {
           _id,
           STATUS_DI.ConfirmationComposants.status,
         );
+        // 📦 DÉCRÉMENT DE STOCK — déclencheur PRINCIPAL : le magasin envoie la
+        // liste au coordinateur. Une seule fois par cycle (marqueur atomique).
+        await this.commitStockDecrementOnce(_id);
       }
     }
 
@@ -3850,6 +4852,21 @@ export class DiService {
 
     // existing socket notification
     this.notificationGateway.sendComponentToCoordinatorFromMagasin(payload);
+
+    // Notification ERP : hand-off magasin → COORDINATION (doit valider les
+    // composants). Ciblage par rôle (mappé vers la valeur profil réelle).
+    try {
+      await this.notificationService.emit({
+        type: 'COMPONENTS_SENT_TO_COORDINATOR',
+        diId: _id,
+        actorId: null, // non authentifié → acteur inconnu
+        message: `Composants à valider (${(updated as any)?._idnum ?? _id})`,
+        payload: { status: STATUS_DI.ConfirmationComposants.status },
+        notify: { roles: ['Coordinator'] },
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('erp-notification', err);
+    }
 
     return updated;
   }
@@ -3881,6 +4898,34 @@ export class DiService {
           },
         ],
       );
+    }
+  }
+
+  /**
+   * Décrémente le stock des composants d'une DI **exactement une fois par cycle**.
+   * Réservation atomique single-winner sur `stockDecrementedAt` (le match `null`
+   * couvre null ET absent) : seule la 1re requête qui bascule null→date décrémente ;
+   * tout appel ultérieur (renvoi, autre chemin) ne matche rien → no-op. Appelé au
+   * PREMIER des deux événements de commit — envoi de la liste au coordinateur OU
+   * entrée en réparation (PENDING3) — pour que le stock soit réel quel que soit le
+   * chemin. Ré-armé à chaque nouveau diagnostic (cf. `tech_startDiagnostic`).
+   * Best-effort : un échec de décrément ne casse jamais la transition appelante.
+   * Ne concerne QUE le cycle normal (`ignoreCount === 0`) ; les cycles Retour
+   * gardent leur décrément par ligne de log dans `componentConfirmedFromCoordinator`.
+   */
+  private async commitStockDecrementOnce(diId: string): Promise<void> {
+    try {
+      const claimed = await this.diModel.findOneAndUpdate(
+        { _id: diId, stockDecrementedAt: null },
+        { $set: { stockDecrementedAt: new Date() } },
+        { new: false }, // doc PRÉ-update → porte encore array_composants + marqueur null
+      );
+      if (!claimed) return; // déjà décrémenté ce cycle → idempotent
+      await this.decrementStockForComposants(claimed.array_composants);
+    } catch (err) {
+      await this.captureDiscordFailure?.('commitStockDecrementOnce', err, {
+        diId,
+      });
     }
   }
 
@@ -3957,15 +5002,10 @@ export class DiService {
       );
       if (flipped) {
         updated = flipped;
-        try {
-          await this.decrementStockForComposants(di.array_composants);
-        } catch (err) {
-          await this.captureDiscordFailure?.(
-            'decrementStockForComposants',
-            err,
-            { diId: _id },
-          );
-        }
+        // Décrément via le marqueur idempotent : normalement DÉJÀ fait à l'envoi
+        // de la liste (no-op ici) ; sinon (envoi court-circuité) c'est ce point
+        // qui décrémente. Cycle normal uniquement (le Retour garde sa branche).
+        await this.commitStockDecrementOnce(_id);
         // Stat.status en lock-step avec Di.status — BEST-EFFORT : une DI sans
         // ligne Stat ne doit pas faire échouer la confirmation (le statut Di est
         // déjà avancé, et le stock déjà décrémenté au-dessus).
@@ -4001,6 +5041,23 @@ export class DiService {
 
     // existing socket notification
     this.notificationGateway.sendComponentToMagasinFromCoordinator(payload);
+
+    // Notification ERP : hand-off COORDINATION → magasin (peut continuer).
+    // Acteur = coordinateur authentifié (`componentsConfirmedBy`) → il ne se
+    // notifie pas lui-même ; ciblage rôle MAGASIN.
+    try {
+      await this.notificationService.emit({
+        type: 'COMPONENTS_CONFIRMED_BY_COORDINATOR',
+        diId: _id,
+        actorId: componentsConfirmedBy ?? null,
+        actorRole: 'COORDIANTOR',
+        message: `Composants validés (${(updated as any)?._idnum ?? _id})`,
+        payload: { status: STATUS_DI.MagasinFinalisation.status },
+        notify: { roles: ['Magasin'] },
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('erp-notification', err);
+    }
 
     return updated;
   }

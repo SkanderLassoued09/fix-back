@@ -169,7 +169,77 @@ export class StatService {
         await this.logsDiService.create(createStatInput._idDi, di.ignoreCount);
       }
 
-      const result = await new this.StatModel(createStatInput).save();
+      // ── Réaffectation diagnostic dans le MÊME cycle (post-abandon) ─────────
+      // Une ligne Stat existe déjà pour ce (DI, cycle) → on NE crée PAS de
+      // doublon : on met à jour le pointeur `id_tech_diag` et on OUVRE une
+      // nouvelle entrée d'historique. Blocage MÊME-TECH : un technicien déjà
+      // affecté sur ce cycle (donc ayant abandonné) est refusé côté serveur.
+      if (createStatInput.id_tech_diag) {
+        const cycle = di?.ignoreCount ?? 0;
+        // `any` : le modèle est typé `Model<Stat>` (type GraphQL) alors que
+        // `diagAssignments` vit sur `StatDocument` (schéma) — cast localisé.
+        const existing: any = await this.StatModel.findOne(
+          cycle > 0
+            ? { _idDi: createStatInput._idDi, ignoreCount: cycle }
+            : { _idDi: createStatInput._idDi },
+        );
+        if (existing) {
+          const alreadyAssigned = (existing.diagAssignments ?? []).some(
+            (a) => a.tech === createStatInput.id_tech_diag,
+          );
+          if (alreadyAssigned) {
+            throw new ForbiddenException(
+              "Ce technicien a déjà été affecté à cette DI sur ce cycle et l'a abandonnée — choisissez un autre technicien.",
+            );
+          }
+          existing.id_tech_diag = createStatInput.id_tech_diag;
+          existing.diagAssignments = [
+            ...(existing.diagAssignments ?? []),
+            {
+              tech: createStatInput.id_tech_diag,
+              assignedAt: new Date(),
+              abandonedAt: null,
+              motif: null,
+              abandonedBy: null,
+              diagTimeStart: existing.diag_time ?? '00:00:00',
+              diagTime: null,
+            },
+          ];
+          existing.markModified('diagAssignments');
+          await existing.save();
+
+          const statWithStatusReassigned = {
+            ...existing.toObject(),
+            status: di?.status || null,
+          };
+          const reassignedProfile = await this.profileService.findProlileById(
+            createStatInput.id_tech_diag,
+          );
+          this.notificationGateway.updateTicket({
+            action: 'updateState',
+            content: { di, states: statWithStatusReassigned },
+            target: reassignedProfile,
+          });
+          return statWithStatusReassigned;
+        }
+      }
+
+      // Première affectation du cycle : ouvre la 1re entrée d'historique.
+      const statDoc: any = new this.StatModel(createStatInput);
+      if (createStatInput.id_tech_diag) {
+        statDoc.diagAssignments = [
+          {
+            tech: createStatInput.id_tech_diag,
+            assignedAt: new Date(),
+            abandonedAt: null,
+            motif: null,
+            abandonedBy: null,
+            diagTimeStart: createStatInput.diag_time ?? '00:00:00',
+            diagTime: null,
+          },
+        ];
+      }
+      const result = await statDoc.save();
 
       if (!result) {
         throw new InternalServerErrorException('Unable to create');
@@ -204,6 +274,11 @@ export class StatService {
 
       return statWithStatus;
     } catch (error) {
+      // Rejets MÉTIER attendus (gate Retour, blocage même-tech post-abandon) :
+      // on propage sans les journaliser comme erreur opérationnelle (HIGH).
+      if (error instanceof ForbiddenException) {
+        throw error;
+      }
       await this.operationalErrorService.capture({
         module: 'stat',
         submodule: 'statService',
@@ -876,6 +951,81 @@ export class StatService {
       },
     );
     return (res as any)?.modifiedCount > 0 ? newDiagTime : null;
+  }
+
+  /**
+   * Enregistre l'ABANDON du diagnostic courant sur le cycle `ignoreCount` :
+   *   1. `closeDiagLeg` fige le leg en cours → `diag_time` cumulé (JAMAIS remis
+   *      à zéro : facturation A+B, choix produit) ;
+   *   2. clôt la dernière entrée `diagAssignments` OUVERTE (abandonedAt, motif,
+   *      abandonedBy) et y stocke la contribution du tech (`diagTime`, affichage
+   *      seul = diag_time cumulé − snapshot d'entrée). Fallback : si aucune entrée
+   *      ouverte (DI affectée avant la feature), une entrée clôturée est créée
+   *      depuis `id_tech_diag`. Renvoie true si un Stat a été trouvé.
+   */
+  async recordDiagAbandon(
+    _idDi: string,
+    ignoreCount: number,
+    motif: string,
+    abandonedBy: string,
+  ): Promise<boolean> {
+    await this.closeDiagLeg(_idDi, ignoreCount); // fige diag_time (cumulatif)
+    const filter =
+      ignoreCount > 0 ? { _idDi, ignoreCount } : { _idDi };
+    const stat: any = await this.StatModel.findOne(filter);
+    if (!stat) return false;
+
+    const now = new Date();
+    const cumulMs = StatService.hhmmssToMs(stat.diag_time);
+    const list = [...(stat.diagAssignments ?? [])];
+    // Index de la DERNIÈRE entrée ouverte (abandonedAt == null).
+    let openIdx = -1;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (!list[i].abandonedAt) {
+        openIdx = i;
+        break;
+      }
+    }
+    if (openIdx >= 0) {
+      const entry = list[openIdx];
+      const contribMs = Math.max(
+        0,
+        cumulMs - StatService.hhmmssToMs(entry.diagTimeStart),
+      );
+      entry.abandonedAt = now;
+      entry.motif = motif;
+      entry.abandonedBy = abandonedBy;
+      entry.diagTime = StatService.msToHhmmss(contribMs);
+    } else {
+      // Fallback (données héritées) : entrée clôturée depuis le tech courant.
+      list.push({
+        tech: stat.id_tech_diag,
+        assignedAt: (stat as any).createdAt ?? now,
+        abandonedAt: now,
+        motif,
+        abandonedBy,
+        diagTimeStart: '00:00:00',
+        diagTime: stat.diag_time ?? null,
+      });
+    }
+    stat.diagAssignments = list;
+    stat.markModified('diagAssignments');
+    await stat.save();
+    return true;
+  }
+
+  /**
+   * Techniciens ayant été affectés (donc potentiellement ayant abandonné) sur le
+   * cycle courant d'une DI. Sert au blocage « même tech » côté sélecteur
+   * coordinatrice (le serveur re-vérifie dans `createStat`).
+   */
+  async abandonedTechsForDi(_idDi: string, ignoreCount = 0): Promise<string[]> {
+    const filter = ignoreCount > 0 ? { _idDi, ignoreCount } : { _idDi };
+    const stat = await this.StatModel.findOne(filter).lean();
+    if (!stat) return [];
+    return ((stat as any).diagAssignments ?? [])
+      .filter((a: any) => !!a.abandonedAt)
+      .map((a: any) => a.tech);
   }
 
   /**

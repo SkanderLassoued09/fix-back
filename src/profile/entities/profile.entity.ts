@@ -24,6 +24,12 @@ export const ProfileSchema = new mongoose.Schema(
     // on tab/window close via the frontend's `pagehide` hook. No heartbeat,
     // no loginId, no expiration window — by design.
     isConnected: { type: Boolean, required: false, default: false },
+
+    // Préférence son des notifications (cloche ERP). Défaut ON (sinon personne
+    // ne découvre la fonctionnalité) ; coupable en 1 clic. Stockée côté profil
+    // → suit l'utilisateur d'un poste à l'autre (cohérent avec le verrou de
+    // session unique).
+    notificationSound: { type: Boolean, required: false, default: true },
   },
   { timestamps: true },
 );
@@ -56,6 +62,8 @@ export class Profile extends Document {
   email: string;
   @Field({ nullable: true })
   isTechBusy: boolean;
+  @Field({ nullable: true })
+  notificationSound: boolean;
   @Field({ nullable: true })
   createdAt: Date;
   @Field({ nullable: true })

@@ -58,13 +58,15 @@ export class GoogleSheetsClient implements OnModuleInit {
     range: string,
     rows: (string | number | boolean)[][],
     headerRow?: string[],
+    // Cible optionnelle : par défaut le classeur d'export (`GOOGLE_SHEETS_ID`).
+    // Le rapport de stagnation quotidien passe `GOOGLE_STAGNATION_SHEETS_ID`.
+    spreadsheetId: string = process.env.GOOGLE_SHEETS_ID ?? '',
   ): Promise<void> {
     if (!rows.length) {
       this.logger.log(`appendRows skipped (empty) · range=${range}`);
       return;
     }
 
-    const spreadsheetId = process.env.GOOGLE_SHEETS_ID;
     if (!spreadsheetId) {
       throw new Error('GOOGLE_SHEETS_ID env var is required for Google Sheets sync');
     }
@@ -154,6 +156,30 @@ export class GoogleSheetsClient implements OnModuleInit {
     this.logger.log(`replaceRows · ${tabName} · rows=${rows.length}`);
   }
 
+  /**
+   * Résout le `gid` (sheetId) d'un onglet par son NOM — pour construire un lien
+   * PROFOND vers cet onglet (`…/edit?gid=<gid>#gid=<gid>`). Retourne `null` si le
+   * classeur ou l'onglet est introuvable (l'appelant retombe sur le lien classeur).
+   */
+  async getSheetGid(
+    spreadsheetId: string,
+    tabName: string,
+  ): Promise<number | null> {
+    if (!spreadsheetId || !tabName) return null;
+    const sheets = await this.ensureClient();
+    const meta = await this.callWithRetry(`get gid ${tabName}`, () =>
+      sheets.spreadsheets.get({
+        spreadsheetId,
+        fields: 'sheets.properties(sheetId,title)',
+      }),
+    );
+    const found = meta.data.sheets?.find(
+      (s) => s.properties?.title === tabName,
+    );
+    const gid = found?.properties?.sheetId;
+    return typeof gid === 'number' ? gid : null;
+  }
+
   /** Create the tab if absent; seed `headerRow` as row 1 when provided. */
   private async ensureTab(
     sheets: sheets_v4.Sheets,
@@ -172,12 +198,14 @@ export class GoogleSheetsClient implements OnModuleInit {
     if (existing) return;
 
     this.logger.log(`Auto-creating missing tab "${tabName}"`);
-    await sheets.spreadsheets.batchUpdate({
+    const addRes = await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
       requestBody: {
         requests: [{ addSheet: { properties: { title: tabName } } }],
       },
     });
+    const newSheetId =
+      addRes.data.replies?.[0]?.addSheet?.properties?.sheetId ?? null;
 
     if (headerRow?.length) {
       await sheets.spreadsheets.values.update({
@@ -187,7 +215,85 @@ export class GoogleSheetsClient implements OnModuleInit {
         requestBody: { values: [headerRow] },
       });
       this.logger.log(`Seeded header row on "${tabName}" (${headerRow.length} cols)`);
+
+      // Mise en forme de l'entête (fond coloré + texte blanc gras + ligne figée).
+      // Best-effort : un échec de STYLE ne doit jamais bloquer l'écriture des
+      // données (le style est cosmétique, la donnée est l'essentiel).
+      if (typeof newSheetId === 'number') {
+        try {
+          await this.styleHeaderRow(
+            sheets,
+            spreadsheetId,
+            newSheetId,
+            headerRow.length,
+          );
+        } catch (err) {
+          this.logger.warn(
+            `Header styling skipped on "${tabName}": ${(err as Error).message}`,
+          );
+        }
+      }
     }
+  }
+
+  /**
+   * Colore + met en gras la ligne d'entête (ligne 1) et la fige. Appelée UNE
+   * SEULE FOIS, à la création de l'onglet (dans `ensureTab`) — jamais réappliquée
+   * aux ajouts suivants. Cosmétique : best-effort (voir l'appelant).
+   */
+  private async styleHeaderRow(
+    sheets: sheets_v4.Sheets,
+    spreadsheetId: string,
+    sheetId: number,
+    numCols: number,
+  ): Promise<void> {
+    await this.callWithRetry(`style header (sheetId=${sheetId})`, () =>
+      sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              repeatCell: {
+                range: {
+                  sheetId,
+                  startRowIndex: 0,
+                  endRowIndex: 1,
+                  startColumnIndex: 0,
+                  endColumnIndex: numCols,
+                },
+                cell: {
+                  userEnteredFormat: {
+                    // Entête BLEU (#1a73e8) · texte blanc gras. SEULE la ligne
+                    // d'entête est colorée — les lignes de données restent sans
+                    // couleur (aucun autre style appliqué).
+                    backgroundColor: { red: 0.102, green: 0.451, blue: 0.91 },
+                    horizontalAlignment: 'CENTER',
+                    verticalAlignment: 'MIDDLE',
+                    textFormat: {
+                      foregroundColor: { red: 1, green: 1, blue: 1 },
+                      bold: true,
+                      fontSize: 11,
+                    },
+                  },
+                },
+                fields:
+                  'userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat)',
+              },
+            },
+            {
+              updateSheetProperties: {
+                properties: {
+                  sheetId,
+                  gridProperties: { frozenRowCount: 1 },
+                },
+                fields: 'gridProperties.frozenRowCount',
+              },
+            },
+          ],
+        },
+      }),
+    );
+    this.logger.log(`Styled + froze header row on sheetId=${sheetId}`);
   }
 
   private isMissingTabError(err: unknown): boolean {

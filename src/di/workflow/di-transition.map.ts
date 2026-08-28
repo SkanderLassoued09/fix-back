@@ -20,6 +20,27 @@ export const DI_TRANSITIONS = {
     strictRole: false,
   },
   /**
+   * Nouvelle mutation : abandonDi (bouton « Abandonner » du technicien).
+   * Le tech rend la DI à la coordination (PENDING1). `strictFrom: true` REFUSE
+   * DUREMENT toute source hors diagnostic → aucun chemin non voulu, et la règle
+   * Retour n'est pas contournée (l'abandon ne part jamais d'un statut RETOUR).
+   * `updateStatStatus: true` synchronise `Stat.status` sur PENDING1.
+   */
+  TECH_ABANDON_TO_PENDING1: {
+    key: 'TECH_ABANDON_TO_PENDING1',
+    from: [
+      STATUS_DI.Diagnostic.status,
+      STATUS_DI.InDiagnostic.status,
+      STATUS_DI.DiagnosticInPause.status,
+    ],
+    to: STATUS_DI.Pending1.status,
+    currentRoles: STATUS_DI.Pending1.role,
+    allowedActorRoles: [Role.TECH],
+    updateStatStatus: true,
+    strictFrom: true,
+    strictRole: false,
+  },
+  /**
    * Existing mutation: magasinTech_Pending2
    * Existing behavior: update status + current_roles.
    *
@@ -41,6 +62,34 @@ export const DI_TRANSITIONS = {
     allowedActorRoles: [Role.MAGASIN, Role.TECH],
     updateStatStatus: true,
     strictFrom: false,
+    strictRole: false,
+  },
+  /**
+   * Nouvelle mutation : magasinTech_Pending3 (raccourci RETOUR sans PDR, erreur
+   * Fixtronix). Le diagnostic conclut « aucune pièce » sur un retour dont la
+   * faute est Fixtronix → on saute magasin ET tarification et on file en PENDING3
+   * (non facturé ; la coordinatrice joindra le devis à l'envoi en réparation).
+   *
+   * `strictFrom: true` — REFUSE DUREMENT toute source hors diagnostic
+   * (INDIAGNOSTIC / DIAGNOSTIC_Pause) directement dans le moteur, SANS ajouter
+   * INDIAGNOSTIC à `ALLOWED_TRANSITIONS[PENDING3]` : on n'ouvre donc AUCUN chemin
+   * générique diagnostic→PENDING3 pour les autres mutations (changeStatusPending3
+   * garde sa whitelist intacte). Même parade que TECH_ABANDON_TO_PENDING1.
+   * La condition métier (retour + sans PDR + erreur Fixtronix) est vérifiée en
+   * amont dans `changeStatusMagasinEstimation`. `updateStatStatus: true` garde
+   * `Stat.status` synchro (vue tech).
+   */
+  MAGASIN_TECH_TO_PENDING3: {
+    key: 'MAGASIN_TECH_TO_PENDING3',
+    from: [
+      STATUS_DI.InDiagnostic.status,
+      STATUS_DI.DiagnosticInPause.status,
+    ],
+    to: STATUS_DI.Pending3.status,
+    currentRoles: STATUS_DI.Pending3.role,
+    allowedActorRoles: [Role.TECH],
+    updateStatStatus: true,
+    strictFrom: true,
     strictRole: false,
   },
   /**

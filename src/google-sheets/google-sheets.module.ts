@@ -55,6 +55,6 @@ import { SheetSyncService } from './sheet-sync.service';
     SheetSyncService,
     SheetSyncScheduler,
   ],
-  exports: [SheetSyncService],
+  exports: [SheetSyncService, GoogleSheetsClient],
 })
 export class GoogleSheetsModule {}

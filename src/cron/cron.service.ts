@@ -6,11 +6,14 @@ import { DiService } from 'src/di/di.service';
 import { Di } from 'src/di/entities/di.entity';
 import { NotificationsGateway } from 'src/notification.gateway';
 import { StagnationService } from 'src/stagnation/stagnation.service';
+import { StagnationDailyReportService } from 'src/stagnation/stagnation-daily-report.service';
+import { MagasinStockReminderService } from 'src/magasin-stock/magasin-stock-reminder.service';
 import { SheetSyncService } from 'src/google-sheets/sheet-sync.service';
 import { JiraCronNotificationService } from 'src/jira-cron-notification/jira-cron-notification.service';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { DiArchiveDigestService } from 'src/di-archive/di-archive-digest.service';
 import { ReunionPVService } from 'src/reunion-pv/reunion-pv.service';
+import { DbBackupService } from 'src/db-backup/db-backup.service';
 
 /**
  * The 5 Discord channels of an environment, mapped to the EXACT env vars read
@@ -33,11 +36,14 @@ export class AppCronService {
     private readonly notificationsGateway: NotificationsGateway,
     private readonly auditService: AuditService,
     private readonly stagnationService: StagnationService,
+    private readonly stagnationDailyReportService: StagnationDailyReportService,
+    private readonly magasinStockReminderService: MagasinStockReminderService,
     private readonly sheetSyncService: SheetSyncService,
     private readonly jiraCronNotificationService: JiraCronNotificationService,
     private readonly discordHookService: DiscordHookService,
     private readonly diArchiveDigestService: DiArchiveDigestService,
     private readonly reunionPVService: ReunionPVService,
+    private readonly dbBackupService: DbBackupService,
   ) {}
 
   /**
@@ -73,9 +79,39 @@ export class AppCronService {
       case 'REUNION_REMINDER':
         await this.triggerReunionReminder();
         break;
+      case 'BACKUP_DB_TO_DRIVE':
+        await this.triggerBackupDbToDrive();
+        break;
+      case 'MAGASIN_STOCK_REMINDER':
+        await this.triggerMagasinStockReminder();
+        break;
       default:
         this.logger.error(`Unknown ACTION: ${action}`);
     }
+  }
+
+  /**
+   * Trigger-only — BACKUP_DB_TO_DRIVE. Dumps the ACTIVE environment's MongoDB
+   * database (`mongodb --gzip --archive`), uploads it to that environment's
+   * dedicated Drive folder, purges everything past the newest N, and posts a
+   * Discord line (success) or alert (failure). All business logic lives in
+   * `DbBackupService.run()` so it is testable on its own.
+   *
+   * Run via `ACTION=BACKUP_DB_TO_DRIVE node dist/main`
+   * (aliases: `action:backup-db-to-drive[:preprod|:dev]`), scheduled daily at
+   * 18:00 Africa/Tunis by the system crontab.
+   *
+   * A failure is RETHROWN on purpose: the bootstrap logs "ACTION failed" and
+   * sets `process.exitCode = 1`, so the crontab/monitoring sees a non-zero exit
+   * instead of a silent no-op. A backup failing quietly is worse than no backup.
+   */
+  async triggerBackupDbToDrive() {
+    const res = await this.dbBackupService.run();
+    this.logger.log(
+      `DB backup: db=${res.dbName} file=${res.fileName} size=${res.sizeBytes}o ` +
+        `duration=${res.durationMs}ms folder=${res.folderName} ` +
+        `retention(kept=${res.kept}, deleted=${res.deleted})`,
+    );
   }
 
   /**
@@ -271,6 +307,7 @@ export class AppCronService {
    */
   @Cron('0 8 * * *', { timeZone: 'Africa/Tunis' })
   async triggerStagnationDetection() {
+    // (A) Inbox d'alertes 48h existant — INCHANGÉ (persistance + digest Discord).
     try {
       const result = await this.stagnationService.detectStagnantDi();
       const total = result.buckets.reduce((sum, b) => sum + b.count, 0);
@@ -289,6 +326,43 @@ export class AppCronService {
     } catch (err) {
       this.logger.error(
         `Stagnation cron failed: ${(err as Error).stack ?? err}`,
+      );
+    }
+
+    // (B) Rapport quotidien 24h — feuille Google du jour + rappel ERP
+    //     (DAILY_REMINDER) + Discord APP_ALERT. Idempotent (dispatch record).
+    //     Isolé dans son propre try/catch pour ne jamais casser (A) ni le cron.
+    try {
+      const report = await this.stagnationDailyReportService.run();
+      this.logger.log(
+        `Daily stagnation report · date=${report.date} · detected=${report.detected} · dispatched=${report.dispatched} · skipped=${report.skipped}`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Daily stagnation report failed: ${(err as Error).stack ?? err}`,
+      );
+    }
+  }
+
+  /**
+   * Rappel quotidien de STOCK MAGASIN — 16:00 Africa/Tunis (aussi via l'ACTION
+   * runtime `ACTION=MAGASIN_STOCK_REMINDER`). Alerte le rôle Magasin (cloche ERP)
+   * sur les composants suivis en stock EN RUPTURE (≤0) ou BIENTÔT VIDES
+   * (≤ `STOCK_LOW_THRESHOLD`, défaut 5). C'est un rappel : il re-part chaque jour
+   * tant que du stock est bas. Erreur isolée → ne casse jamais la boucle cron ;
+   * une journée « rien à signaler » n'émet aucune notification.
+   */
+  @Cron('0 16 * * *', { timeZone: 'Africa/Tunis' })
+  async triggerMagasinStockReminder() {
+    try {
+      const r = await this.magasinStockReminderService.run();
+      this.logger.log(
+        `Magasin stock reminder · seuil=${r.threshold} · rupture=${r.rupture} · ` +
+          `bientôt-vide=${r.low} · notifié=${r.notified}`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Magasin stock reminder failed: ${(err as Error).stack ?? err}`,
       );
     }
   }

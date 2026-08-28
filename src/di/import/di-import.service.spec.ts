@@ -157,7 +157,7 @@ describe('DiImportService — import (dryRun=false)', () => {
     ]);
     const report = await svc.run(buf, { dryRun: false, createdBy: 'PROFILE_1' });
 
-    expect(report.crees).toEqual({ dis: 1, clients: 1, locations: 1, ignorees: 0 });
+    expect(report.crees).toEqual({ dis: 1, clients: 1, locations: 1, ignorees: 0, reactivees: 0 });
     expect(deps.diService.createDi).toHaveBeenCalledTimes(1);
     const [input, opts] = deps.diService.createDi.mock.calls[0];
     expect(opts).toEqual({ forcedRef: 'T1394', skipNotify: true });
@@ -193,7 +193,7 @@ describe('DiImportService — import (dryRun=false)', () => {
     ]);
     const report = await svc.run(buf, { dryRun: false });
 
-    expect(report.crees).toEqual({ dis: 2, clients: 1, locations: 1, ignorees: 0 });
+    expect(report.crees).toEqual({ dis: 2, clients: 1, locations: 1, ignorees: 0, reactivees: 0 });
     expect(deps.clientsService.createClient).toHaveBeenCalledTimes(1);
     expect(deps.locationService.createlocation).toHaveBeenCalledTimes(1);
     // Both DIs point at the same auto-created client + location.
@@ -208,7 +208,7 @@ describe('DiImportService — import (dryRun=false)', () => {
     const buf = buildXlsx(HEADERS, [['T1', 'A', '***', 'cogemhy', '', '']]);
     const report = await svc.run(buf, { dryRun: false });
 
-    expect(report.crees).toEqual({ dis: 1, clients: 0, locations: 0, ignorees: 0 });
+    expect(report.crees).toEqual({ dis: 1, clients: 0, locations: 0, ignorees: 0, reactivees: 0 });
     expect(deps.clientsService.createClient).not.toHaveBeenCalled();
     const [input] = deps.diService.createDi.mock.calls[0];
     expect(input.company_id).toBe('CMP1');
@@ -238,7 +238,7 @@ describe('DiImportService — import (dryRun=false)', () => {
     const buf = buildXlsx(HEADERS, [['T1', 'A', '***', 'COGEMHY', '', 'A28']]);
     const report = await svc.run(buf, { dryRun: false });
 
-    expect(report.crees).toEqual({ dis: 1, clients: 0, locations: 0, ignorees: 0 });
+    expect(report.crees).toEqual({ dis: 1, clients: 0, locations: 0, ignorees: 0, reactivees: 0 });
     expect(deps.clientsService.createClient).not.toHaveBeenCalled();
     const [input] = deps.diService.createDi.mock.calls[0];
     expect(input.client_id).toBe('C9');
@@ -326,7 +326,7 @@ describe('DiImportService — alias (mémoire des décisions)', () => {
     });
     const buf = buildXlsx(HEADERS, [['T1', 'A', '***', 'PERSO (PROMODAR)', '', '']]);
     const report = await svc.run(buf, { dryRun: false });
-    expect(report.crees).toEqual({ dis: 1, clients: 0, locations: 0, ignorees: 0 });
+    expect(report.crees).toEqual({ dis: 1, clients: 0, locations: 0, ignorees: 0, reactivees: 0 });
     expect(deps.clientsService.createClient).not.toHaveBeenCalled();
     const [input] = deps.diService.createDi.mock.calls[0];
     expect(input.company_id).toBe('CMP2');

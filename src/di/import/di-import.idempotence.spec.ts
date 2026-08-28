@@ -155,6 +155,56 @@ describe('Idempotence — concurrence sur la même référence', () => {
   });
 });
 
+describe('Ré-import après suppression (soft-delete)', () => {
+  it('réf d’une DI SUPPRIMÉE → vestige purgé puis RECRÉÉE (pas « existe déjà »)', async () => {
+    const { svc, refStore } = makeHarness();
+    // `refStore` mime l'index unique : T500 est "occupée" par une DI SUPPRIMÉE.
+    // `freeDeletedRef` doit la purger (libérer l'index) puis `createDi` recrée.
+    refStore.add('T500');
+    svc.diModel = {
+      deleteOne: jest.fn(async (q: any) => {
+        if (q?._idnum && q?.isDeleted === true && refStore.has(q._idnum)) {
+          refStore.delete(q._idnum); // purge → l'index unique est libéré
+          return { deletedCount: 1 };
+        }
+        return { deletedCount: 0 };
+      }),
+    };
+
+    const j = await svc.jobService.create({ createdBy: 'U1', total: 1 });
+    await svc.processJob(j.jobId, [pr(500)], {
+      ...ctx(),
+      deletedRefs: new Set(['T500']), // T500 = réf d'une DI supprimée
+    });
+    const r = await svc.jobService.getById(j.jobId);
+
+    expect(svc.diModel.deleteOne).toHaveBeenCalledWith({
+      _idnum: 'T500',
+      isDeleted: true,
+    });
+    expect(r.report.crees.dis).toBe(1); // RECRÉÉE (et non « ignorée »)
+    expect(r.report.crees.reactivees).toBe(1);
+    expect(r.report.crees.ignorees).toBe(0);
+    expect(r.report.erreurs).toHaveLength(0);
+    expect(refStore.has('T500')).toBe(true); // l'index reporte T500 (recréée)
+  });
+
+  it('réf d’une DI ACTIVE → reste BLOQUÉE (idempotence), aucune purge', async () => {
+    const { svc, refStore } = makeHarness();
+    refStore.add('T501'); // DI ACTIVE (non supprimée)
+    svc.diModel = { deleteOne: jest.fn(async () => ({ deletedCount: 0 })) };
+    const j = await svc.jobService.create({ createdBy: 'U1', total: 1 });
+    // T501 n'est PAS dans deletedRefs (active) → pas de purge → E11000 → ignorée.
+    await svc.processJob(j.jobId, [pr(501)], { ...ctx(), deletedRefs: new Set() });
+    const r = await svc.jobService.getById(j.jobId);
+
+    expect(svc.diModel.deleteOne).not.toHaveBeenCalled();
+    expect(r.report.crees.dis).toBe(0);
+    expect(r.report.crees.ignorees).toBe(1);
+    expect(r.report.crees.reactivees).toBe(0);
+  });
+});
+
 describe('Idempotence — erreur individuelle & continuation', () => {
   it('T100 ok, T101 erreur (non-duplicate), T102 ok → created=2, errors=1, job COMPLETED', async () => {
     const { svc } = makeHarness();

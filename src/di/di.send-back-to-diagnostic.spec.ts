@@ -47,6 +47,9 @@ describe('Renvoyer au diagnostic — PRICING → PENDING1', () => {
       svc.statsService = {
         updateStatus: jest.fn().mockResolvedValue(undefined),
       };
+      // Notif ERP « renvoyé au diagnostic » → PENDING1 doit prévenir la
+      // coordination (émis en best-effort par sendDiBackToDiagnostic).
+      svc.notificationService = { emit: jest.fn().mockResolvedValue({}) };
       return svc;
     }
 
@@ -56,6 +59,13 @@ describe('Renvoyer au diagnostic — PRICING → PENDING1', () => {
       expect(svc.assertTransitionAllowed).toHaveBeenCalledWith(
         'DI1',
         'PENDING1',
+      );
+      // La coordination est notifiée (DI_PENDING1) sur ce renvoi.
+      expect(svc.notificationService.emit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'DI_PENDING1',
+          notify: { roles: ['Coordinator'] },
+        }),
       );
       expect(res.status).toBe('PENDING1');
       expect(svc.statsService.updateStatus).toHaveBeenCalledWith(

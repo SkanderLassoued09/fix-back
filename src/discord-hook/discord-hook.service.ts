@@ -60,10 +60,22 @@ const STATUS_LABELS: Record<string, string> = {
   CLOSING: '📄 CLOSING',
   ATTENTE_BL_FACTURE: '📄 CLOSING',
   FINISHED: '✅ Terminée',
+  IRREPARABLE: '⛔ Irréparable',
   RETOUR1: '🔁 Retour 1',
   RETOUR2: '🔁 Retour 2',
   RETOUR3: '⚠️ Retour 3',
 };
+
+/** Human-readable byte size for embeds (`1.4 MB`) — display only. */
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1,
+  );
+  return `${(bytes / 1024 ** i).toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
+}
 
 interface EmbedContext {
   idnum: string;
@@ -612,6 +624,30 @@ export class DiscordHookService {
     });
   }
 
+  async sendDiIrreparable(di: any) {
+    // Clôture d'une DI NON RÉPARABLE (statut terminal IRREPARABLE) — l'équipement
+    // ne peut pas être réparé. Miroir de `sendDiFinished` (canal général).
+    const ctx = await this.buildContext(di);
+    await this.postEmbed('GENERAL_ATELIER', {
+      embeds: [
+        {
+          title: '⛔ DI irréparable',
+          description: 'Équipement jugé non réparable — dossier clôturé.',
+          color: 15158332,
+          fields: this.buildBaseFields(ctx, undefined, [
+            {
+              name: '💵 Diagnostic',
+              value: di?.price ? `${di.price} TND` : 'Non facturé',
+              inline: true,
+            },
+          ]),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
   async sendDiInReparation(di: any) {
     // Called when status is REPARATION — assigned but not yet started.
     const ctx = await this.buildContext(di);
@@ -868,6 +904,22 @@ export class DiscordHookService {
     });
   }
 
+  async sendDiAbandoned(di: any, motif: string) {
+    const ctx = await this.buildContext(di);
+    await this.postEmbed('GENERAL_ATELIER', {
+      embeds: [
+        {
+          title: '🚫 Diagnostic abandonné',
+          description: `Un technicien a abandonné le diagnostic — motif : ${motif}. DI renvoyée à la coordination (PENDING1) pour réaffectation.`,
+          color: 15105570,
+          fields: this.buildBaseFields(ctx),
+          footer: { text: 'Fixtronix System' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
   async sendDiRetour(di: any, level: 1 | 2 | 3) {
     const ctx = await this.buildContext(di);
     const titles = {
@@ -1037,6 +1089,120 @@ export class DiscordHookService {
   }
 
   /**
+   * BACKUP_DB_TO_DRIVE — nightly database backup SUCCEEDED.
+   *
+   * ⚠️ Goes through `deliverEmbed` (NOT `postEmbed`) on purpose: the global
+   * `DISCORD_NOTIFS_DISABLED` gate would swallow it, and a backup channel that
+   * is silent by design defeats its own purpose. The whole point of the daily
+   * success line is that its ABSENCE is the alarm — so it must never be gated.
+   */
+  async sendDbBackupSuccess(info: {
+    fileName: string;
+    dbName: string;
+    sizeBytes: number;
+    durationMs: number;
+    folderName: string;
+    webViewLink?: string;
+    deleted?: number;
+    kept?: number;
+    env?: string;
+  }): Promise<void> {
+    const envUpper = (info.env || process.env.NODE_ENV || 'development')
+      .trim()
+      .toUpperCase();
+    const when = new Intl.DateTimeFormat('fr-FR', {
+      timeZone: process.env.APP_TIMEZONE || 'Africa/Tunis',
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(new Date());
+
+    await this.deliverEmbed('APP_ALERT', {
+      embeds: [
+        {
+          title: `💾 Sauvegarde BDD OK — [${envUpper}]`,
+          description:
+            `Base \`${info.dbName}\` sauvegardée sur Google Drive · ${when} (Africa/Tunis).` +
+            (info.webViewLink ? `\n[Ouvrir le fichier](${info.webViewLink})` : ''),
+          color: 3066993, // green
+          fields: [
+            { name: '📄 Fichier', value: info.fileName, inline: false },
+            {
+              name: '📦 Taille',
+              value: formatBytes(info.sizeBytes),
+              inline: true,
+            },
+            {
+              name: '⏱️ Durée',
+              value: `${(info.durationMs / 1000).toFixed(1)} s`,
+              inline: true,
+            },
+            { name: '📁 Dossier', value: info.folderName, inline: true },
+            ...(typeof info.deleted === 'number'
+              ? [
+                  {
+                    name: '🧹 Rétention',
+                    value: `${info.kept ?? '?'} conservé(s), ${info.deleted} supprimé(s)`,
+                    inline: false,
+                  },
+                ]
+              : []),
+          ],
+          footer: { text: 'Fixtronix · Sauvegarde quotidienne' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  /**
+   * BACKUP_DB_TO_DRIVE — nightly database backup FAILED. Same ungated
+   * `deliverEmbed` path as the success line: a backup that fails silently is
+   * strictly worse than no backup at all.
+   */
+  async sendDbBackupFailure(info: {
+    reason: string;
+    dbName?: string;
+    step?: string;
+    env?: string;
+  }): Promise<void> {
+    const envUpper = (info.env || process.env.NODE_ENV || 'development')
+      .trim()
+      .toUpperCase();
+    const when = new Intl.DateTimeFormat('fr-FR', {
+      timeZone: process.env.APP_TIMEZONE || 'Africa/Tunis',
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(new Date());
+
+    await this.deliverEmbed('APP_ALERT', {
+      embeds: [
+        {
+          title: `🚨 ÉCHEC sauvegarde BDD — [${envUpper}]`,
+          description:
+            `**Aucune sauvegarde n'a été produite ce soir.** Intervention requise · ${when} (Africa/Tunis).`,
+          color: 15158332, // red
+          fields: [
+            {
+              name: '🗄️ Base',
+              value: info.dbName || 'inconnue',
+              inline: true,
+            },
+            { name: '🔧 Étape', value: info.step || 'inconnue', inline: true },
+            {
+              name: '❌ Motif',
+              // Discord hard-caps a field value at 1024 chars.
+              value: (info.reason || 'inconnu').slice(0, 1024),
+              inline: false,
+            },
+          ],
+          footer: { text: 'Fixtronix · Sauvegarde quotidienne' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  /**
    * Operational stagnation alert. Reads everything from the persisted
    * alert document — no Di / Profile / Company lookups needed, so this
    * works inside the ACTION runtime with the same fidelity as the
@@ -1166,6 +1332,54 @@ export class DiscordHookService {
           fields,
           footer: { text: 'Fixtronix · Rappel stagnation' },
           timestamp: (digest.generatedAt ?? new Date()).toISOString(),
+        },
+      ],
+    });
+  }
+
+  /**
+   * Rappel quotidien des DI STAGNANTES (≥ seuil) — feuille du jour générée.
+   * UNE seule embed vers `fixtronix-app-alert` via le chemin NON-gated
+   * `deliverEmbed` (comme le digest Jira/stagnation), donc NON impacté par
+   * `DISCORD_NOTIFS_DISABLED` — que l'on NE modifie pas.
+   */
+  async sendDailyStagnationReminder(report: {
+    date: string; // YYYY-MM-DD (worksheet name)
+    count: number;
+    seuil: number;
+    unite: string;
+    examples: string[]; // _idNum refs (up to ~8)
+    spreadsheetUrl?: string; // lien PROFOND vers l'onglet du jour (gid)
+  }): Promise<void> {
+    const when = new Intl.DateTimeFormat('fr-FR', {
+      timeZone: 'Africa/Tunis',
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(new Date());
+    // Lien cliquable vers la feuille du jour — titre + ligne « Détails ».
+    const link = report.spreadsheetUrl
+      ? `\n🔗 [Ouvrir la feuille « ${report.date} »](${report.spreadsheetUrl})`
+      : '';
+    await this.deliverEmbed('APP_ALERT', {
+      embeds: [
+        {
+          title: '⏳ Rappel quotidien — DI stagnantes',
+          ...(report.spreadsheetUrl ? { url: report.spreadsheetUrl } : {}),
+          description:
+            `${report.count} DI stagnante(s) dans le même statut depuis ≥ ${report.seuil} ${report.unite}.\n` +
+            `Feuille du jour : \`${report.date}\` · ${when} (Africa/Tunis).` +
+            link,
+          color: 16289308, // orange (WARNING)
+          fields: report.examples.length
+            ? [
+                {
+                  name: `Exemples (${report.examples.length})`,
+                  value: report.examples.map((r) => `• ${r}`).join('\n'),
+                },
+              ]
+            : [],
+          footer: { text: 'Fixtronix · Rappel stagnation quotidien' },
+          timestamp: new Date().toISOString(),
         },
       ],
     });

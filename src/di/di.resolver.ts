@@ -9,6 +9,7 @@ import {
 import { DiService } from './di.service';
 import {
   Di,
+  DiTable,
   DiTableData,
   LogsDiData,
   StatusCount,
@@ -23,11 +24,14 @@ import {
   UpdateDi,
 } from './dto/create-di.input';
 import { AnnulerDiInput } from './dto/annuler-di.input';
+import { AbandonDiInput } from './dto/abandon-di.input';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
 import { Profile } from 'src/profile/entities/profile.entity';
 import { ProfileService } from 'src/profile/profile.service';
 import { UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
+import { RolesGuard } from 'src/auth/role-guard';
+import { Roles, Role } from 'src/profile/role-decorator';
 import { GraphQLError } from 'graphql';
 import { error, log } from 'console';
 import { StatService } from 'src/stat/stat.service';
@@ -91,6 +95,39 @@ export class DiResolver {
       // `username` (lisible) plutôt que `_id` → affichage direct « par … » dans
       // le modal détail, sans résolution id→nom dans les mappers de liste.
       annulePar: profile.username,
+    });
+  }
+
+  /** RÉACTIVATION d'une DI annulée → statut précédent (lu dans statusHistory).
+   *  Gouvernance : coordinatrice + admins (rôle TECH EXCLU), garde de rôle BACK
+   *  réelle (pas un bouton masqué). Auteur tracé (Audit) via `@CurrentUser`.
+   *  Refus back : non annulée / sans statut précédent / origine post-document
+   *  (BL·facture émis) / déjà réactivée une fois. */
+  @Mutation(() => Di)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.COORDIANTOR, Role.ADMIN_MANAGER, Role.ADMIN_TECH)
+  async reactiverDi(
+    @Args('diId') diId: string,
+    @CurrentUser() profile: Profile,
+  ) {
+    return this.diService.reactiverDi(diId, { username: profile?.username });
+  }
+
+  /**
+   * ABANDON du diagnostic par un technicien. AUTHENTIFIÉE (`@CurrentUser`) — on
+   * sait ainsi QUI abandonne (`abandonedBy`). La DI retourne en PENDING1 pour
+   * réaffectation ; l'abandon est tracé (motif/qui/quand) dans l'historique.
+   */
+  @Mutation(() => Di)
+  @UseGuards(JwtAuthGuard)
+  async abandonDi(
+    @Args('AbandonDiInput') input: AbandonDiInput,
+    @CurrentUser() profile: Profile,
+  ) {
+    return this.diService.abandonDi(input.diId, {
+      motif: input.motif,
+      motifAutre: input.motifAutre,
+      abandonedBy: profile.username,
     });
   }
 
@@ -161,6 +198,13 @@ export class DiResolver {
     } catch (error) {
       throw new Error(error);
     }
+  }
+
+  /** Détail d'UNE DI (même projection que la liste coordinatrice) pour le modal
+   *  détail partagé ouvert au clic d'une notification (deep-link). */
+  @Query(() => DiTable, { nullable: true })
+  async getDiDetail(@Args('_id') _id: string) {
+    return this.diService.getDiDetailById(_id);
   }
 
   @Mutation(() => Di)
@@ -463,9 +507,29 @@ export class DiResolver {
     await this.diService.setRepairEstimate(_id, estimate);
     return true;
   }
+
+  /** Gouvernance COORDINATRICE — bascule « Diagnostic payant » (verrouillé une
+   *  fois la tarification faite). Rôle TECH refusé (appel API direct compris). */
+  @Mutation(() => Boolean)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.COORDIANTOR, Role.ADMIN_MANAGER, Role.ADMIN_TECH)
+  async setDiagnosticPayant(
+    @Args('diId') diId: string,
+    @Args('payant') payant: boolean,
+  ) {
+    return this.diService.setDiagnosticPayant(diId, payant);
+  }
+
   @Mutation(() => Boolean)
   async changeStatusNegociate1(@Args('_id') _id: string) {
     await this.diService.changeStatusNegociate1(_id);
+    return true;
+  }
+  // Cas PAYANT irréparable : « Valider le prix » clôture en IRREPARABLE au lieu
+  // d'entrer dans l'Approval (voir DiService.changeStatusIrreparableFromPricing).
+  @Mutation(() => Boolean)
+  async changeStatusIrreparableFromPricing(@Args('_id') _id: string) {
+    await this.diService.changeStatusIrreparableFromPricing(_id);
     return true;
   }
   @Mutation(() => Boolean)
@@ -482,6 +546,22 @@ export class DiResolver {
   @Mutation(() => Boolean)
   async changeStatusRepaire(@Args('_id') _id: string) {
     await this.diService.changeStatusRepaire(_id);
+    return true;
+  }
+
+  /** Envoi en réparation par la COORDINATRICE avec devis OBLIGATOIRE — « un seul
+   *  geste » du raccourci « retour sans pièces » (PENDING3). Joint le devis
+   *  (routé sur le bon cycle), affecte le tech réparateur, passe en réparation.
+   *  Réservé à la coordination : rôle TECH refusé (appel API direct compris). */
+  @Mutation(() => Boolean)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.COORDIANTOR, Role.ADMIN_MANAGER, Role.ADMIN_TECH)
+  async coordinatorSendToRepairWithDevis(
+    @Args('_id') _id: string,
+    @Args('repTechId') repTechId: string,
+    @Args('pdf') pdf: string,
+  ) {
+    await this.diService.coordinatorSendToRepairWithDevis(_id, repTechId, pdf);
     return true;
   }
 

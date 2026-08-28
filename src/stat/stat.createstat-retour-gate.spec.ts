@@ -31,9 +31,12 @@ describe('StatService.createStat — Retour manager gate', () => {
     svc.StatModel = jest
       .fn()
       .mockImplementation(() => ({ save: jest.fn().mockResolvedValue(saved) }));
-    svc.StatModel.findOne = jest
-      .fn()
-      .mockResolvedValue({ toObject: () => saved });
+    // Filter-aware : le contrôle de réaffectation (`{ _idDi }`) ne trouve AUCUN
+    // Stat sur une PREMIÈRE affectation (→ chemin création) ; la relecture
+    // `statTech` (`{ _id }`) renvoie le doc sauvegardé.
+    svc.StatModel.findOne = jest.fn((filter: any) =>
+      Promise.resolve(filter && filter._id ? { toObject: () => saved } : null),
+    );
     svc.profileService = {
       findProlileById: jest
         .fn()

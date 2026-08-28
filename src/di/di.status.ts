@@ -175,7 +175,10 @@ export const STATUS_DI = {
   WaitingBl: {
     status: 'WAITING_BL',
     description: 'Clôture — attente du bon de livraison',
-    role: ['Tech', 'Manager', 'Admin_Tech', 'Admin_Manager'],
+    // Le Tech a FINI sa réparation : dès WAITING_BL, la DI sort de sa vue (le
+    // BL est uploadé par la coordination). Retirer 'Tech' l'exclut de
+    // `TECH_STATUS_DI_VALUES` → la DI n'apparaît plus dans la liste technicien.
+    role: ['Manager', 'Admin_Tech', 'Admin_Manager'],
     future_status: ['WaitingFacture'],
   },
   WaitingFacture: {
@@ -189,6 +192,21 @@ export const STATUS_DI = {
     description: 'DI process completed',
     role: ['Manager', 'Admin_Tech', 'Admin_Manager'],
     future_status: ['Retour1'],
+  },
+  // Statut TERMINAL « équipement irréparable » — clôture d'une DI non réparable.
+  // Remplace FINISHED pour les fins NON RÉPARABLES. Deux chemins d'entrée :
+  //   - non payant OU retour  → directement depuis le diagnostic (aucun fichier) ;
+  //   - payant (flux original) → passe d'abord par PENDING2 → PRICING_DIAG pour
+  //     FACTURER le diagnostic, puis clôture en IRREPARABLE à « Valider le prix ».
+  // Terminal (`future_status: null`, aucun retour). Mêmes rôles de visibilité que
+  // FINISHED (Manager/Admin_Tech/Admin_Manager → hors listes Tech/Magasin/Coord).
+  // NB : la VALEUR 'IRREPARABLE' coexiste avec un motif d'ANNULATION homonyme
+  // (champ distinct) — aucune collision fonctionnelle.
+  Irreparable: {
+    status: 'IRREPARABLE',
+    description: 'Équipement irréparable — clôturé',
+    role: ['Manager', 'Admin_Tech', 'Admin_Manager'],
+    future_status: null,
   },
   Annuler: {
     status: 'ANNULER',

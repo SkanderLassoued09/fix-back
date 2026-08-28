@@ -63,6 +63,13 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = 
     // technician is re-assigned for a fresh diagnostic. PRICING → PENDING1.
     STATUS_DI.Pricing.status,
     LEGACY_PRICING,
+    // NB « Abandonner » (DIAGNOSTIC/INDIAGNOSTIC → PENDING1) n'est
+    // VOLONTAIREMENT pas ajouté ici : l'abandon ne passe PAS par ce garde
+    // générique (M1). Il emprunte la transition dédiée
+    // `TECH_ABANDON_TO_PENDING1` (`strictFrom: true`) + un contrôle explicite
+    // dans `abandonDi`. Garder la whitelist stricte préserve le garde-fou
+    // « pas de retour arrière accidentel INDIAGNOSTIC → PENDING1 » pour toute
+    // AUTRE mutation, sans ouvrir de chemin non voulu.
   ],
   [STATUS_DI.Diagnostic.status]: [STATUS_DI.Pending1.status],
   [STATUS_DI.InDiagnostic.status]: [
@@ -216,6 +223,28 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = 
     STATUS_DI.Diagnostic.status,
     STATUS_DI.InDiagnostic.status,
     STATUS_DI.DiagnosticInPause.status,
+  ],
+  // Statut TERMINAL « irréparable » — clôture d'une DI non réparable. Sources
+  // autorisées :
+  //   - les trois états de diagnostic (verdict non réparable : non-payant en
+  //     direct, ou retour) — miroir de la clôture FINISHED non réparable ;
+  //   - PRICING_DIAG : cas PAYANT (flux original) — après facturation du
+  //     diagnostic, « Valider le prix » clôture en IRREPARABLE ;
+  //   - la phase Approval (WAITING_DEVIS/WAITING_BC/NEGOTIATION2 + legacy) : une
+  //     DI jugée non réparable pendant la négociation ferme aussi en IRREPARABLE
+  //     (miroir de la branche non-réparable de « Confirmer » / exitWaitingBcOnBc).
+  // IRREPARABLE n'est source d'AUCUNE transition (terminal) et n'est pas dans
+  // REENTRY_SOURCES.
+  [STATUS_DI.Irreparable.status]: [
+    STATUS_DI.Diagnostic.status,
+    STATUS_DI.InDiagnostic.status,
+    STATUS_DI.DiagnosticInPause.status,
+    STATUS_DI.Pricing.status,
+    STATUS_DI.WaitingDevis.status,
+    STATUS_DI.WaitingBc.status,
+    STATUS_DI.Negotiation2.status,
+    LEGACY_ATTENTE_BC_DEVIS,
+    LEGACY_NEGOTIATION1,
   ],
 };
 
