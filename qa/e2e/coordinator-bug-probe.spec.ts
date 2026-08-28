@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { authFile, tokenFor } from '../utils/auth';
 import { withDb } from '../utils/mongo';
+import { techId } from '../utils/accounts';
 
 /**
  * Bug probe: open the Coordinator page, then the Flow modal on a DI with
@@ -9,7 +10,8 @@ import { withDb } from '../utils/mongo';
  */
 
 const COORDINATOR = '/tickets/ticket/coordinator-di-list';
-const TECH_ID = '69fb49a8fbdfcb7ca81bed0e';
+/** Compte `tech` seedé — résolu à l'exécution (l'id figé visait l'autre base). */
+let TECH_ID = '';
 const tag = `cf_probe_${Date.now().toString(36)}`;
 const diId = `DI_${tag}`;
 const logId = `LOG_${tag}`;
@@ -18,6 +20,7 @@ const idnum = `CFP-${tag.toUpperCase()}`;
 test.use({ storageState: authFile('ADMIN_MANAGER') });
 
 test.beforeAll(async () => {
+    TECH_ID = await withDb(techId);
     void tokenFor('ADMIN_MANAGER');
     await withDb(async (db) => {
         await db.collection('dis').insertOne({

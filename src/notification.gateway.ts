@@ -69,6 +69,17 @@ export class NotificationsGateway
     this.server.to(`role:${role}`).emit('notification.new', payload);
   }
 
+  /** Émission CIBLÉE de RETRAIT d'une notification (room `user:{id}`). Permet au
+   *  front de retirer l'item de la cloche + couper un son en temps réel, sans
+   *  attendre un re-fetch. */
+  emitRemovedToUser(
+    userId: string,
+    payload: { diId?: string | null; type?: string | null },
+  ) {
+    if (!userId) return;
+    this.server.to(`user:${userId}`).emit('notification.removed', payload);
+  }
+
   sendReminder(message: any) {
     this.server.emit('reminder', message);
   }

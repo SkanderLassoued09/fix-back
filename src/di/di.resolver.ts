@@ -355,12 +355,12 @@ export class DiResolver {
   ) {
     // Only the technician the DI is assigned to (diagnostic) may start it.
     await this.statService.assertTechOwnsDi(_id, user, 'diag');
-    const isDiag = this.diService.tech_startDiagnostic(_id, diag);
-    if (isDiag) {
-      return true;
-    } else {
-      return false;
-    }
+    // `await` OBLIGATOIRE : sans lui la promesse FLOTTE. Une erreur métier
+    // (GraphQLError) devient alors un « unhandled rejection » et Node ABAT LE
+    // PROCESSUS — l'API entière tombe. Et `if (promesse)` est toujours vrai, donc
+    // la mutation répondait `true` même quand l'écriture avait échoué.
+    await this.diService.tech_startDiagnostic(_id, diag);
+    return true;
   }
 
   @Mutation(() => Di)
@@ -381,12 +381,12 @@ export class DiResolver {
   ) {
     // Only the technician the DI is assigned to (réparation) may start it.
     await this.statService.assertTechOwnsDi(_id, user, 'rep');
-    const isDiag = this.diService.tech_startReperation(_id);
-    if (isDiag) {
-      return true;
-    } else {
-      return false;
-    }
+    // `await` OBLIGATOIRE : sans lui la promesse FLOTTE. Une erreur métier
+    // (GraphQLError) devient alors un « unhandled rejection » et Node ABAT LE
+    // PROCESSUS — l'API entière tombe. Et `if (promesse)` est toujours vrai, donc
+    // la mutation répondait `true` même quand l'écriture avait échoué.
+    await this.diService.tech_startReperation(_id);
+    return true;
   }
 
   @Mutation(() => Di)
@@ -413,13 +413,18 @@ export class DiResolver {
   }
 
   @Mutation(() => Boolean)
-  affectinitialPrice(@Args('_id') _id: string, @Args('price') price: number) {
-    const priceaffecting = this.diService.affectinitialPrice(_id, price);
-    if (priceaffecting) {
-      return true;
-    } else {
-      return false;
-    }
+  async affectinitialPrice(
+    @Args('_id') _id: string,
+    @Args('price') price: number,
+  ) {
+    // `await` OBLIGATOIRE : sans lui la promesse FLOTTE. Une erreur métier
+    // (GraphQLError) devient alors un « unhandled rejection » et Node ABAT LE
+    // PROCESSUS — l'API entière tombe. Et `if (promesse)` est toujours vrai, donc
+    // la mutation répondait `true` même quand l'écriture avait échoué.
+    // Reproduction : saisir un prix de diagnostic nul/négatif faisait remonter
+    // « Prix du diagnostic invalide » hors du cycle de vie GraphQL → crash.
+    await this.diService.affectinitialPrice(_id, price);
+    return true;
   }
   @Query(() => Number)
   calculateTicketComposantPrice(@Args('_id') _id: string) {

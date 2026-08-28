@@ -3,11 +3,16 @@ import type { Page } from '@playwright/test';
 import { authFile } from '../utils/auth';
 import { withDb } from '../utils/mongo';
 import { nextDiIdnum } from '../utils/di-seed';
+import { techId } from '../utils/accounts';
 
 /**
  * Repair wizard B1–B3 — finishing a repair from the UI.
  *
- *  B1: « Fin réparation » runs the real finish chain → DI becomes FINISHED.
+ *  B1: « Fin réparation » runs the real finish chain → DI becomes WAITING_BL.
+ *      La fin de réparation ne clôture plus : elle ouvre la chaîne de clôture
+ *      documentaire (WAITING_BL → WAITING_FACTURE → FINISHED, pilotée par les
+ *      uploads de BL puis de facture). Sans document seedé, elle s'arrête au
+ *      1er gate.
  *  B2: the used parts + repair remark persist (via updateDi) — survive in DB.
  *  B3: the form opens pre-filled — the category is pre-filled from the DI, so
  *      the finish gate is satisfied WITHOUT the test ever touching the category
@@ -16,8 +21,10 @@ import { nextDiIdnum } from '../utils/di-seed';
  * Staged in Mongo (test DB), hard-deleted after.
  */
 
-const TECH_ID = '69fb49a8fbdfcb7ca81bed0e'; // seeded `tech` account
 const TECH_LIST = '/tickets/ticket/tech-di-list';
+
+/** Compte `tech` seedé — résolu à l'exécution (l'id figé visait l'autre base). */
+let TECH_ID = '';
 
 test.use({ storageState: authFile('TECH') });
 test.describe.configure({ mode: 'serial' });
@@ -29,6 +36,7 @@ const idnum = `FIN-${TAG}`;
 const PART = `QA Part ${TAG}`;
 
 test.beforeAll(async () => {
+    TECH_ID = await withDb(techId);
     await withDb(async (db) => {
         const client = await db
             .collection('clients')
@@ -89,7 +97,7 @@ async function next(page: Page) {
     await page.locator('.sav-diag-modal__nav-btn--primary').click();
 }
 
-test('« Fin réparation » → DI FINISHED, parts persist, category pre-filled', async ({
+test('« Fin réparation » → DI WAITING_BL, parts persist, category pre-filled', async ({
     page,
 }) => {
     const pageErrors: string[] = [];
@@ -126,12 +134,13 @@ test('« Fin réparation » → DI FINISHED, parts persist, category pre-filled'
     });
     await finishBtn.click();
 
-    // B1: one success toast + DI becomes FINISHED in the DB.
-    await expect(page.locator('.p-toast-message-success')).toHaveCount(1, {
-        timeout: 12000,
-    });
+    // B1: la DI entre dans la chaîne de clôture documentaire (WAITING_BL).
+    // PAS de toast de succès : il a été RETIRÉ volontairement de la chaîne
+    // « Fin réparation » au profit de la notification ERP (cf. le commentaire
+    // « Ancien toast … retiré » dans onRepairModalFinish). Seul le toast
+    // d'ERREUR subsiste — c'est lui qui doit rester à zéro.
+    await expect.poll(dbStatus, { timeout: 12000 }).toBe('WAITING_BL');
     await expect(page.locator('.p-toast-message-error')).toHaveCount(0);
-    await expect.poll(dbStatus, { timeout: 12000 }).toBe('FINISHED');
 
     // B2: the part + repair remark persisted.
     await withDb(async (db) => {
@@ -209,7 +218,7 @@ async function fillWorksAndGoSummary(page: Page) {
     await next(page); // works → summary
 }
 
-test('a finish-step failure → ONE error toast, NO success, status unchanged, FINISHED transition NOT fired', async ({
+test('a finish-step failure → ONE error toast, NO success, status unchanged, closing transition NOT fired', async ({
     page,
 }) => {
     const { id, num } = await seedRepairDi('REPARATION');
@@ -259,6 +268,7 @@ test('a finish-step failure → ONE error toast, NO success, status unchanged, F
     const finalStatus = await withDb(async (db) =>
         (await db.collection('dis').findOne({ _id: id }))?.status,
     );
+    expect(finalStatus).not.toBe('WAITING_BL');
     expect(finalStatus).not.toBe('FINISHED');
     expect(finalStatus).toBe('INREPARATION');
     await expect(page.locator('.sav-diag-header')).toBeVisible();
@@ -267,7 +277,7 @@ test('a finish-step failure → ONE error toast, NO success, status unchanged, F
     await dropRepairDi(id);
 });
 
-test('« Fin réparation » from REPARATION_Pause → DI FINISHED, ONE success toast', async ({
+test('« Fin réparation » from REPARATION_Pause → DI WAITING_BL, aucun toast d’erreur', async ({
     page,
 }) => {
     const { id, num } = await seedRepairDi('REPARATION_Pause');
@@ -280,10 +290,9 @@ test('« Fin réparation » from REPARATION_Pause → DI FINISHED, ONE success t
     await fillWorksAndGoSummary(page);
     await page.locator('.cta__btn').click();
 
-    // Finishing from the PAUSED state is a legal M1 arc → one success, no error.
-    await expect(page.locator('.p-toast-message-success')).toHaveCount(1, {
-        timeout: 12000,
-    });
+    // Finishing from the PAUSED state is a legal M1 arc → aucune erreur.
+    // (Le toast de SUCCÈS a été retiré de cette chaîne au profit de la
+    // notification ERP ; seul le toast d'erreur reste observable.)
     await expect(page.locator('.p-toast-message-error')).toHaveCount(0);
     await expect
         .poll(
@@ -291,7 +300,7 @@ test('« Fin réparation » from REPARATION_Pause → DI FINISHED, ONE success t
                 withDb(async (db) => (await db.collection('dis').findOne({ _id: id }))?.status),
             { timeout: 12000 },
         )
-        .toBe('FINISHED');
+        .toBe('WAITING_BL');
 
     await dropRepairDi(id);
 });

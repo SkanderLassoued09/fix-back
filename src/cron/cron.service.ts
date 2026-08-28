@@ -85,6 +85,9 @@ export class AppCronService {
       case 'MAGASIN_STOCK_REMINDER':
         await this.triggerMagasinStockReminder();
         break;
+      case 'PENDING_BL_REMINDER':
+        await this.triggerPendingBlReminder();
+        break;
       default:
         this.logger.error(`Unknown ACTION: ${action}`);
     }
@@ -307,22 +310,13 @@ export class AppCronService {
    */
   @Cron('0 8 * * *', { timeZone: 'Africa/Tunis' })
   async triggerStagnationDetection() {
-    // (A) Inbox d'alertes 48h existant — INCHANGÉ (persistance + digest Discord).
+    // (A) Inbox d'alertes 48h : PERSISTANCE uniquement. Le digest Discord
+    //     « 📊 Rappel quotidien — DI stagnantes » (regroupé par ancienneté,
+    //     🟠 > 48 h) a été RETIRÉ à la demande produit — doublon du rapport
+    //     quotidien (B). On garde `detectStagnantDi()` qui alimente l'inbox
+    //     d'alertes IN-APP (aucun post Discord ici).
     try {
-      const result = await this.stagnationService.detectStagnantDi();
-      const total = result.buckets.reduce((sum, b) => sum + b.count, 0);
-      if (total > 0) {
-        await this.discordHookService.sendStagnationDigest({
-          total,
-          buckets: result.buckets,
-        });
-        this.logger.log(
-          `Stagnation digest sent · total=${total} · ` +
-            result.buckets.map((b) => `${b.type}=${b.count}`).join(' '),
-        );
-      } else {
-        this.logger.log('Stagnation digest skipped · 0 stagnant DI');
-      }
+      await this.stagnationService.detectStagnantDi();
     } catch (err) {
       this.logger.error(
         `Stagnation cron failed: ${(err as Error).stack ?? err}`,
@@ -363,6 +357,24 @@ export class AppCronService {
     } catch (err) {
       this.logger.error(
         `Magasin stock reminder failed: ${(err as Error).stack ?? err}`,
+      );
+    }
+  }
+
+  // Item 5 — cloche « BL à téléverser » qui INSISTE tant que le fichier n'est
+  // pas fourni. Relance toutes les 2 h pendant les heures ouvrées (Lun–Sam,
+  // 08–18 h, heure de Tunis) : le son re-sonne à chaque passage, et la relance
+  // s'arrête d'elle-même dès que le BL est uploadé (la DI quitte WAITING_BL).
+  @Cron('0 8-18/2 * * 1-6', { timeZone: 'Africa/Tunis' })
+  async triggerPendingBlReminder() {
+    try {
+      const count = await this.diService.remindPendingBl();
+      if (count > 0) {
+        this.logger.log(`Rappel BL en attente : ${count} DI(s) relancée(s).`);
+      }
+    } catch (err) {
+      this.logger.error(
+        `Pending-BL reminder failed: ${(err as Error).stack ?? err}`,
       );
     }
   }

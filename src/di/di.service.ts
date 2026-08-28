@@ -734,6 +734,10 @@ export class DiService {
       const { webViewLink, driveFileId, fileName } =
         await this.uploadDiDocToDrive(di, pdf, 'Devis');
 
+      // Devis fourni → on éteint le prompt « en attente de devis »
+      // (DI_NEGOTIATION1). Situation courante : la notif disparaît de la cloche.
+      await this.notificationService.clearByDiAndType(_id, 'DI_NEGOTIATION1');
+
       let result;
 
       if (di.ignoreCount && di.ignoreCount > 0) {
@@ -802,6 +806,12 @@ export class DiService {
 
       const { webViewLink, driveFileId, fileName } =
         await this.uploadDiDocToDrive(di, pdf, 'BL');
+
+      // BL fourni → on éteint les prompts « en attente de BL » : la relance
+      // battante (DI_DOC_BL_PENDING, coupe le cœur + le son) ET l'avis
+      // DI_REP_FINISHED. Situation courante : les deux disparaissent de la cloche.
+      await this.notificationService.clearByDiAndType(_id, 'DI_DOC_BL_PENDING');
+      await this.notificationService.clearByDiAndType(_id, 'DI_REP_FINISHED');
 
       if (di.ignoreCount && di.ignoreCount > 0) {
         await this.logsDiService.addBLPDFLogs(
@@ -895,6 +905,10 @@ export class DiService {
       const { webViewLink, driveFileId, fileName } =
         await this.uploadDiDocToDrive(di, pdf, 'Facture');
 
+      // Facture fournie → on éteint le prompt « en attente de facture »
+      // (DI_DOC_BL). Situation courante : la notif disparaît de la cloche.
+      await this.notificationService.clearByDiAndType(_id, 'DI_DOC_BL');
+
       if (di.ignoreCount && di.ignoreCount > 0) {
         await this.logsDiService.addFacturePDFLogs(
           di._id,
@@ -960,6 +974,10 @@ export class DiService {
 
       const { webViewLink, driveFileId, fileName } =
         await this.uploadDiDocToDrive(di, pdf, 'BC');
+
+      // BC fourni → on éteint le prompt « en attente de BC » (DI_DOC_DEVIS).
+      // Situation courante : la notif disparaît de la cloche.
+      await this.notificationService.clearByDiAndType(_id, 'DI_DOC_DEVIS');
 
       let result;
 
@@ -1671,6 +1689,20 @@ export class DiService {
   // InMagasin or InDiagnostic ==> PENDING2
   //from magasin or tech to coordinator
   async magasinTech_Pending2(_idDI: string): Promise<Di> {
+    // Miroir de la garde posée dans `changeStatusPending2` : cette mutation est
+    // la SECONDE porte vers PENDING2 depuis MagasinEstimation (exposée telle
+    // quelle par le resolver). Un RETOUR Fixtronix ne doit sortir du magasin que
+    // vers la poignée de main composants, jamais vers la tarification.
+    {
+      const guardDi: any = await this.diModel.findOne({ _id: _idDI }).lean();
+      if (await this.shouldDetourMagasinExitForFixtronix(guardDi, _idDI)) {
+        await this.diModel.updateOne(
+          { _id: _idDI },
+          { $set: { needsDevisBeforeRepair: true } },
+        );
+        return (await this.changeStatusInMagasin(_idDI)) as any;
+      }
+    }
     await this.assertTransitionAllowed(_idDI, STATUS_DI.Pending2.status);
     // Sortie de diagnostic possible (fin sans pause préalable) : ferme le
     // segment de travail courant côté serveur avant la transition. No-op si
@@ -1787,6 +1819,7 @@ export class DiService {
 
     return result.di;
   }
+
   //TODO check if we need to delet this one
   // Negotiation1 or Negotiation2 ==> PENDING3
   // Admin or manager ==> coordinator
@@ -2525,24 +2558,50 @@ export class DiService {
         // IRREPARABLE sera posée à « Valider le prix » en PRICING_DIAG.
         return this.magasinTech_Pending2(_id) as any;
       }
-      // RETOUR : « erreur Fixtronix » (notre faute) + SANS PDR (aucune pièce
-      // consommée) → envoi en réparation SANS facturation (PENDING3) ; le devis
-      // est attaché ensuite par la coordination. Le verdict est lu sur le
-      // snapshot du CYCLE (logsDi), jamais sur la DI vive.
+      // RETOUR — routage COMPLET, identique à `changeStatusMagasinEstimation`.
+      //
+      // Avant, cette branche ne savait traiter qu'UN cas (Fixtronix + réparable +
+      // sans PDR → PENDING3) et TOUT le reste tombait dans `closeIrreparable` —
+      // y compris des DI RÉPARABLES. Une DI réparable clôturée « irréparable »
+      // parce que le tech avait cliqué « Envoyer vers finir » plutôt que
+      // « Fin diagnostique retour » : c'est ce que le grisage du bouton masquait.
+      // Le routage est désormais SERVEUR-AUTORITAIRE, donc les deux boutons
+      // produisent le même statut et l'UI n'a plus rien à griser.
       if (!isOriginalFlow) {
         const cycle = di?.ignoreCount ?? 0;
         const log: any = await this.logsDiService.getLogsById(cycle, _id);
+        // Même PRIORITÉ que `changeStatusMagasinEstimation` : le flag PERSISTANT
+        // de la DI d'abord, le log du cycle en repli. `tech_startDiagnostic`
+        // réécrit le log depuis le formulaire (défauts réparable=ON /
+        // Fixtronix=OFF), donc lire le seul log ferait diverger les deux boutons
+        // sur la MÊME DI.
+        const cycleReparable =
+          di?.can_be_repaired === false
+            ? false
+            : di?.can_be_repaired === true || log?.can_be_repaired === true;
+        const cycleFixtronix = await this.isFixtronixCycle(di, _id);
         const cyclePdr = log?.contain_pdr === true;
         const cycleComposants =
           Array.isArray(log?.array_composants) &&
           log.array_composants.length > 0;
-        const cycleFixtronix = log?.isErrorFromFixtronix === true;
-        if (cycleFixtronix && !cyclePdr && !cycleComposants) {
-          return this.magasinTech_Pending3(_id) as any;
+
+        if (cycleReparable) {
+          // AVEC PDR → magasin (→ poignée de main composants → PENDING3).
+          if (cyclePdr && cycleComposants) {
+            return this.changeStatusMagasinEstimation(_id) as any;
+          }
+          // SANS PDR + erreur Fixtronix → PENDING3 direct, non facturé.
+          if (cycleFixtronix) {
+            return this.magasinTech_Pending3(_id) as any;
+          }
+          // SANS PDR + erreur CLIENT → PENDING2 → tarification (client facturé).
+          return this.magasinTech_Pending2(_id) as any;
         }
+        // NON réparable → clôture IRREPARABLE ci-dessous (magasin sauté).
       }
-      // Non payant (flux original) OU retour (hors raccourci Fixtronix ci-dessus)
-      // → clôture directe IRREPARABLE (aucune facturation, aucun fichier).
+      // Non payant (flux original) OU retour NON réparable → clôture directe
+      // IRREPARABLE (« pas de PDR si non réparable » → on saute le magasin ;
+      // aucune facturation, aucun fichier).
       const closed = await this.closeIrreparable(_id);
       // Sortie de diagnostic → fermeture du leg diagnostic (cumul serveur).
       await this.statsService.closeDiagLeg(_id, closed.ignoreCount ?? 0);
@@ -2559,6 +2618,9 @@ export class DiService {
       STATUS_DI.InReparation.status,
     ].includes(di?.status);
     if (fromReparation) {
+      // Fin de réparation → fermer le segment de travail courant (cumul serveur),
+      // comme la sortie de diagnostic le fait via `closeDiagLeg`.
+      await this.statsService.closeRepLeg(_id, di?.ignoreCount ?? 0);
       // 1er gate de la chaîne de clôture documentaire : WAITING_BL.
       await this.assertTransitionAllowed(_id, STATUS_DI.WaitingBl.status);
       const waiting = await this.diModel.findOneAndUpdate(
@@ -2595,6 +2657,20 @@ export class DiService {
         } — réparation terminée, en attente de BL`,
         ['Coordinator', 'Manager', 'Admin_Tech', 'Admin_Manager'],
       );
+      // BL EN ATTENTE — notification PERSISTANTE (cœur qui bat + son en boucle
+      // côté front) dès l'ENTRÉE en WAITING_BL (avant : n'existait qu'au prochain
+      // passage du cron). Effacée à l'upload du BL (addBlPDF → clearByDiAndType).
+      // Émise seulement si le BL n'est pas déjà présent (ré-upload retour → la
+      // cascade documentaire la rendrait obsolète).
+      if (!(waiting as any)?.bon_de_livraison) {
+        await this.emitDiHandoff(
+          _id,
+          waiting,
+          'DI_DOC_BL_PENDING',
+          `Bon de livraison à téléverser (${(waiting as any)?._idnum ?? _id})`,
+          ['Coordinator', 'Manager', 'Admin_Tech', 'Admin_Manager'],
+        );
+      }
       // Si des documents étaient déjà présents (ex. ré-upload en retour avant la
       // fin), la chaîne cascade immédiatement (WAITING_BL → WAITING_FACTURE →
       // FINISHED) — idempotent/no-op sinon.
@@ -3785,51 +3861,78 @@ export class DiService {
     // already permits INDIAGNOSTIC → PENDING2, so no guard change is needed.
     const di: any = await this.diModel.findOne({ _id }).lean();
 
-    // ─── Raccourci RETOUR sans PDR (erreur Fixtronix) → PENDING3 ──────────────
-    // ADDITIF et volontairement ISOLÉ : ne s'active QUE pour le cas métier
-    // (retour + AUCUNE pièce + erreur Fixtronix) ; toute autre combinaison
-    // retombe sur le routage existant ci-dessous, INCHANGÉ.
-    // En RETOUR (ignoreCount>0) le diagnostic du cycle courant est écrit sur la
-    // ligne LogsDi (idIgnore=ignoreCount), PAS sur la DI live → on lit le
-    // SNAPSHOT DU CYCLE pour statuer (contain_pdr / composants / erreur
-    // Fixtronix). Magasin ET tarification sont sautés (non facturé) : la
-    // coordinatrice enverra la DI en réparation en y joignant le devis.
+    // Routage de la sortie de diagnostic vers le magasin, PAR PDR.
+    // En RETOUR (ignoreCount>0), le verdict du cycle courant vit sur le snapshot
+    // LogsDi (idIgnore=ignoreCount), PAS sur la DI live → on lit le CYCLE. En
+    // flux ORIGINAL (ignoreCount===0), on lit la DI live (inchangé).
+    //   - AVEC PDR → magasin (MagasinEstimation). Une DI AVEC PDR NON réparable
+    //     (retour) ira quand même au magasin puis sera clôturée IRREPARABLE à la
+    //     sortie magasin (magasinTech_Pending2).
+    //   - SANS PDR → PENDING2 (réparable) ou clôture IRREPARABLE (non réparable).
+    // La décision « facturer le diagnostic ? » (flag diagnosticPayant) est prise
+    // en Pricing et NE change PAS ce routage.
     const cycle = di?.ignoreCount ?? 0;
+    let hasPdr: boolean;
     if (cycle > 0) {
       const log: any = await this.logsDiService.getLogsById(cycle, _id);
-      const cycleContainPdr = log?.contain_pdr === true;
+      const cyclePdr = log?.contain_pdr === true;
       const cycleHasComposants =
         Array.isArray(log?.array_composants) && log.array_composants.length > 0;
-      const cycleFixtronixError = log?.isErrorFromFixtronix === true;
-      if (!cycleContainPdr && !cycleHasComposants && cycleFixtronixError) {
-        return this.magasinTech_Pending3(_id);
+      // « Réparable » et « erreur Fixtronix » sont lus EN PRIORITÉ sur le flag
+      // PERSISTANT de la DI, pas uniquement sur le log du cycle. Raison :
+      // `tech_startDiagnostic` réécrit le log depuis le FORMULAIRE (défauts
+      // réparable=ON / Fixtronix=OFF via `?? false`), ce qui écrasait le verdict
+      // et faisait FUIR une erreur Fixtronix vers PENDING2/Pricing. En retour le
+      // back écrit le LOG et NON la DI → `di.isErrorFromFixtronix` reste fiable.
+      const cycleReparable =
+        di?.can_be_repaired === false
+          ? false
+          : di?.can_be_repaired === true || log?.can_be_repaired === true;
+      const cycleFixtronix =
+        di?.isErrorFromFixtronix === true || log?.isErrorFromFixtronix === true;
+      // NON réparable → IRREPARABLE direct : « pas de PDR si non réparable », on
+      // SAUTE le magasin quel que soit le PDR déclaré.
+      if (!cycleReparable) {
+        const closed = await this.closeIrreparable(_id);
+        await this.statsService.closeDiagLeg(_id, closed.ignoreCount ?? 0);
+        return closed as any;
       }
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
-    const declaredPdr = di?.contain_pdr === true;
-    const hasComposants =
-      Array.isArray(di?.array_composants) && di.array_composants.length > 0;
-
-    // Garde métier AUTORITAIRE (miroir serveur du blocage UI « Suivant ») :
-    // déclarer que le DI contient des PDR SANS avoir listé le moindre composant
-    // est contradictoire → REFUS, au lieu de router silencieusement vers PENDING2.
-    // Le front bloque déjà l'étape Validation ; cette garde couvre les
-    // contournements (saut d'étape via le stepper, appel GraphQL direct) et
-    // empêche l'envoi au Magasin d'une demande de pièces VIDE.
-    if (declaredPdr && !hasComposants) {
-      throw new GraphQLError(
-        'PDR déclaré sans composant : ajoutez au moins un composant ou désactivez « le DI contient des PDR ».',
-        { extensions: { code: 'BAD_REQUEST' } },
-      );
-    }
-
-    const hasPdr = declaredPdr && hasComposants;
-    if (!hasPdr) {
-      // Pas de PDR (contain_pdr=false) → directement à la facturation (PENDING2),
-      // en sautant le Magasin. Réutilise la transition diagnostic-terminé
-      // existante (+ son embed Discord).
-      return this.magasinTech_Pending2(_id);
+      hasPdr = cyclePdr && cycleHasComposants;
+      if (!hasPdr) {
+        // Retour RÉPARABLE + SANS PDR :
+        //  - erreur FIXTRONIX (notre faute) → PENDING3 direct, JAMAIS PENDING2/
+        //    Pricing (la coordination joint le devis via needsDevisBeforeRepair).
+        //    Verdict lu sur le flag PERSISTANT de la DI (increvable au clobber du
+        //    formulaire) — c'était LE bug : le défaut « Fixtronix=OFF » écrasait le
+        //    log et faisait fuir la DI en PENDING2.
+        //  - erreur CLIENT → PENDING2 (→ Pricing, décision « facturer le diag ? »).
+        if (cycleFixtronix) {
+          return this.magasinTech_Pending3(_id);
+        }
+        return this.magasinTech_Pending2(_id);
+      }
+      // Retour RÉPARABLE + AVEC PDR → magasin (MagasinEstimation → poignée de main
+      // composants → PENDING3). Ce chemin ne passe PAS par PENDING2/Pricing (la
+      // facturation d'une erreur Fixtronix reste exclue par construction).
+    } else {
+      const declaredPdr = di?.contain_pdr === true;
+      const hasComposants =
+        Array.isArray(di?.array_composants) && di.array_composants.length > 0;
+      // Garde métier AUTORITAIRE (miroir serveur du blocage UI « Suivant ») :
+      // déclarer des PDR SANS avoir listé le moindre composant est contradictoire
+      // → REFUS, au lieu de router silencieusement vers PENDING2.
+      if (declaredPdr && !hasComposants) {
+        throw new GraphQLError(
+          'PDR déclaré sans composant : ajoutez au moins un composant ou désactivez « le DI contient des PDR ».',
+          { extensions: { code: 'BAD_REQUEST' } },
+        );
+      }
+      hasPdr = declaredPdr && hasComposants;
+      if (!hasPdr) {
+        // Pas de PDR → directement à la facturation (PENDING2), en sautant le
+        // Magasin. Réutilise la transition diagnostic-terminé existante.
+        return this.magasinTech_Pending2(_id);
+      }
     }
 
     // Has PDR → Magasin estimation, unchanged behaviour.
@@ -3889,7 +3992,93 @@ export class DiService {
     return result;
   }
 
+  /**
+   * Verdict « erreur Fixtronix » du CYCLE courant.
+   *
+   * Le flag PERSISTANT de la DI passe en PREMIER : `tech_startDiagnostic` réécrit
+   * le log du cycle depuis le FORMULAIRE (défaut Fixtronix=OFF via `?? false`), ce
+   * qui écrase le verdict ; en retour le back écrit le LOG et NON la DI, donc
+   * `di.isErrorFromFixtronix` reste increvable. Le snapshot LogsDi sert de repli
+   * (le tech vient de cocher « Erreur Fixtronix » sur ce cycle).
+   */
+  private async isFixtronixCycle(di: any, _id: string): Promise<boolean> {
+    if (di?.isErrorFromFixtronix === true) {
+      return true;
+    }
+    if ((di?.ignoreCount ?? 0) > 0) {
+      const log: any = await this.logsDiService.getLogsById(di.ignoreCount, _id);
+      return log?.isErrorFromFixtronix === true;
+    }
+    return false;
+  }
+
+  /**
+   * SORTIE MAGASIN d'un RETOUR Fixtronix : ne JAMAIS partir en PENDING2/Pricing.
+   *
+   * Un retour dont la faute est Fixtronix ET qui contient des PDR passe par le
+   * magasin (il y a des pièces à préparer). À la sortie (« Terminer l'estimation »
+   * → `changeStatusPending2` / `magasinTech_Pending2`), la garde Fixtronix de la
+   * sortie de DIAGNOSTIC ne s'applique plus — la source n'est plus un statut de
+   * diagnostic — et la DI filait en PENDING2 → PRICING_DIAG, donc FACTURÉE au
+   * client pour NOTRE erreur. On la renvoie vers la poignée de main composants
+   * (CONFIRMATION → ATTENTE_CONFIRMATION_COORDINATION → MAGASIN_FINALISATION →
+   * PENDING3), magasin conservé, tarification sautée.
+   *
+   * Borné au flux RETOUR (`ignoreCount > 0`) : le flux original est inchangé.
+   */
+  private async shouldDetourMagasinExitForFixtronix(
+    di: any,
+    _id: string,
+  ): Promise<boolean> {
+    if (di?.status !== STATUS_DI.MagasinEstimation.status) return false;
+    if ((di?.ignoreCount ?? 0) <= 0) return false;
+    if (di?.can_be_repaired === false) return false;
+    return this.isFixtronixCycle(di, _id);
+  }
+
   async changeStatusPending2(_id: string) {
+    // GARDE FIXTRONIX (règle métier autoritaire, argent) : une DI dont le cycle
+    // est une ERREUR FIXTRONIX (notre faute) ne va JAMAIS en PENDING2/Pricing.
+    // Ce chemin — bouton « Fin diagnostique retour » du modal, sortie de diag
+    // RÉPARABLE + SANS PDR (le tech a décoché PDR) — posait PENDING2 en
+    // court-circuitant TOUT routage Fixtronix (contrairement à
+    // changeStatusMagasinEstimation). On redirige vers PENDING3 (non facturé ;
+    // la coordination joint le devis via needsDevisBeforeRepair).
+    // Verdict = flag PERSISTANT de la DI OU snapshot du CYCLE (le tech peut avoir
+    // coché « Erreur Fixtronix » → écrit sur le log par tech_startDiagnostic).
+    // Increvable au clobber du formulaire (défaut bascule OFF).
+    const guardDi: any = await this.diModel.findOne({ _id }).lean();
+    const fromDiagnostic = [
+      STATUS_DI.Diagnostic.status,
+      STATUS_DI.InDiagnostic.status,
+      STATUS_DI.DiagnosticInPause.status,
+    ].includes(guardDi?.status);
+    if (fromDiagnostic && guardDi?.can_be_repaired !== false) {
+      if (await this.isFixtronixCycle(guardDi, _id)) {
+        // → PENDING3 direct (source diagnostic autorisée par MAGASIN_TECH_TO_PENDING3).
+        return this.magasinTech_Pending3(_id) as any;
+      }
+    }
+    // BACKSTOP « NON RÉPARABLE » — miroir exact de celui de
+    // `changeStatusMagasinEstimation` (`!cycleReparable → closeIrreparable`).
+    // Une DI non réparable sortant du diagnostic ne doit JAMAIS atterrir en
+    // PENDING2 (facturation) : elle se clôture en IRREPARABLE, magasin sauté.
+    // Sans ce garde, le bouton « Fin diagnostique retour » sur un retour NON
+    // réparable (FT-06 / FT-09) posait PENDING2 — c'est pour ça que l'UI devait
+    // le griser. Le garde étant ici, l'UI n'a plus à protéger le routage.
+    if (fromDiagnostic && guardDi?.can_be_repaired === false) {
+      const closed = await this.closeIrreparable(_id);
+      await this.statsService.closeDiagLeg(_id, closed.ignoreCount ?? 0);
+      return closed as any;
+    }
+    // SORTIE MAGASIN (« Terminer l'estimation ») — MÊME règle argent, autre porte.
+    if (await this.shouldDetourMagasinExitForFixtronix(guardDi, _id)) {
+      await this.diModel.updateOne(
+        { _id },
+        { $set: { needsDevisBeforeRepair: true } },
+      );
+      return this.changeStatusInMagasin(_id) as any;
+    }
     await this.assertTransitionAllowed(_id, STATUS_DI.Pending2.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
@@ -3947,6 +4136,16 @@ export class DiService {
 
   async changeStatusPricing(_id: string, pricingRequestSentBy?: string | null) {
     await this.assertTransitionAllowed(_id, STATUS_DI.Pricing.status);
+    // « Prix à fixer » ne doit sonner qu'à la VRAIE entrée en PRICING_DIAG : le
+    // guard de transition est idempotent (re-clic alors que la DI y est déjà →
+    // no-op), donc on lit le statut AVANT la bascule pour n'émettre les
+    // notifications que sur un changement RÉEL de statut.
+    const beforePricing: any = await this.diModel
+      .findOne({ _id })
+      .select('status')
+      .lean();
+    const wasAlreadyPricing =
+      beforePricing?.status === STATUS_DI.Pricing.status;
     const pricingRequestSentAt = new Date();
     const result = await this.diModel.findOneAndUpdate(
       { _id },
@@ -3974,28 +4173,32 @@ export class DiService {
       await this.statsService.updateStatus(_id, STATUS_DI.Pricing.status);
     }
 
-    // 🔔 Discord notification (Pricing stage)
-    try {
-      await this.discordHookService.sendDiPricing(result);
-    } catch (err) {
-      await this.captureDiscordFailure('discord-notification', err);
+    // Notifications « à fixer le prix » — UNIQUEMENT à la vraie entrée en
+    // PRICING_DIAG (pas sur un re-clic quand la DI y est déjà).
+    if (!wasAlreadyPricing) {
+      // 🔔 Discord notification (Pricing stage)
+      try {
+        await this.discordHookService.sendDiPricing(result);
+      } catch (err) {
+        await this.captureDiscordFailure('discord-notification', err);
+      }
+
+      // Le demandeur (`pricingRequestSentBy`) est l'ACTEUR → exclu de ses propres
+      // notifications ; l'admin qui doit fixer le prix est prévenu.
+      await this.emitDiHandoff(
+        _id,
+        result,
+        'DI_PRICING',
+        `Prix à fixer (${(result as any)?._idnum ?? _id})`,
+        ['Admin_Manager', 'Admin_Tech'],
+        { id: pricingRequestSentBy ?? null },
+      );
+
+      // existing notifications
+      this.notificationGateway.sendNotifcationToAdmins(
+        'Veuillez affecter le prix de ce DI',
+      );
     }
-
-    // Le demandeur (`pricingRequestSentBy`) est l'ACTEUR → exclu de ses propres
-    // notifications ; l'admin qui doit fixer le prix est prévenu.
-    await this.emitDiHandoff(
-      _id,
-      result,
-      'DI_PRICING',
-      `Prix à fixer (${(result as any)?._idnum ?? _id})`,
-      ['Admin_Manager', 'Admin_Tech'],
-      { id: pricingRequestSentBy ?? null },
-    );
-
-    // existing notifications
-    this.notificationGateway.sendNotifcationToAdmins(
-      'Veuillez affecter le prix de ce DI',
-    );
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
@@ -4671,6 +4874,49 @@ export class DiService {
     }
   }
 
+  /**
+   * Item 5 — « cloche qui insiste tant que le BL n'est pas téléversé ». Re-émet
+   * une relance UNIQUE (une par DI) aux rôles de coordination pour CHAQUE DI
+   * bloquée en WAITING_BL sans bon de livraison. Appelée périodiquement par le
+   * cron pendant les heures ouvrées ; elle S'ÉTEINT d'elle-même dès que le BL est
+   * uploadé (la DI quitte WAITING_BL et `addBlPDF` purge la relance).
+   * Best-effort : ne lève jamais.
+   */
+  async remindPendingBl(): Promise<number> {
+    try {
+      const pending: any[] = await this.diModel
+        .find({
+          status: STATUS_DI.WaitingBl.status,
+          isDeleted: { $ne: true },
+          $or: [
+            { bon_de_livraison: { $in: [null, ''] } },
+            { bon_de_livraison: { $exists: false } },
+          ],
+        })
+        .select('_id _idnum status')
+        .lean();
+      for (const di of pending) {
+        // Une seule relance vivante par DI : on efface l'ancienne avant de
+        // ré-émettre (re-déclenche le son sans empiler la cloche).
+        await this.notificationService.clearByDiAndType(
+          di._id,
+          'DI_DOC_BL_PENDING',
+        );
+        await this.emitDiHandoff(
+          di._id,
+          di,
+          'DI_DOC_BL_PENDING',
+          `Rappel : bon de livraison à téléverser (${di?._idnum ?? di._id})`,
+          ['Coordinator', 'Manager', 'Admin_Tech', 'Admin_Manager'],
+        );
+      }
+      return pending.length;
+    } catch (err) {
+      await this.captureDiscordFailure('remindPendingBl', err);
+      return 0;
+    }
+  }
+
   async changeToPending1(_id: string) {
     const pending1 = await this.diModel.updateOne(
       { _id },
@@ -4755,6 +5001,12 @@ export class DiService {
     if (!diStatus) {
       throw new Error('Issue in ReparationInPause');
     }
+
+    // Replier le segment de travail réparation CÔTÉ SERVEUR (miroir exact de
+    // ce que `closeDiagLeg` fait à la pause du diagnostic). Sans ça l'ancre
+    // `repRunStartedAt` restait posée indéfiniment et le front recalculait
+    // `rep_time + (now − ancre périmée)` → des centaines d'heures affichées.
+    await this.statsService.closeRepLeg(_id, diStatus.ignoreCount ?? 0);
 
     // Stat must be updated before broadcasting; tech-side queries read
     // Stat.status, so an unawaited update lets the WS-triggered refresh
@@ -4992,20 +5244,31 @@ export class DiService {
     return updated;
   }
 
-  /** Draw down `quantity_stocked` for each EnStock composant used on a DI.
-   *  Matches by the composant's unique name, floors at 0, and leaves
-   *  Interne/Externe parts (sourced per-job, not from stock) untouched. */
+  /** Draw down `quantity_stocked` for each stock-managed composant used on a DI.
+   *  Matches by the composant's unique name and floors at 0. Stock-managed
+   *  statuses are 'En stock' (+ legacy 'EnStock'), 'Interne' and 'Externe' —
+   *  the three real catalog statuses ; les lignes à statut vide/'undefined'
+   *  (non renseignées) sont ignorées. Retourne le nombre de composants
+   *  effectivement matchés dans le catalogue (0 = aucun nom trouvé). */
   private async decrementStockForComposants(
     composants: Array<{ nameComposant?: string; quantity?: number }> = [],
-  ): Promise<void> {
+  ): Promise<number> {
+    let matched = 0;
     for (const item of composants ?? []) {
       const name = item?.nameComposant;
       const qty = Number(item?.quantity) || 0;
       if (!name || qty <= 0) continue;
-      // The app stores the in-stock status as 'En stock' (frontend value);
-      // accept the legacy 'EnStock' enum spelling too.
-      await this.composantModel.updateOne(
-        { name, status_composant: { $in: ['En stock', 'EnStock'] } },
+      // Statuts « gérés en stock » : valeur front 'En stock' (+ ancien enum
+      // 'EnStock'), plus 'Interne' et 'Externe' (les pièces consommées sont
+      // taguées ainsi dans le catalogue). Les statuts vides/'undefined' ne
+      // sont PAS décrémentés (donnée non renseignée).
+      const res = await this.composantModel.updateOne(
+        {
+          name,
+          status_composant: {
+            $in: ['En stock', 'EnStock', 'Interne', 'Externe'],
+          },
+        },
         [
           {
             $set: {
@@ -5019,7 +5282,9 @@ export class DiService {
           },
         ],
       );
+      matched += res?.matchedCount ?? 0;
     }
+    return matched;
   }
 
   /**
@@ -5042,7 +5307,36 @@ export class DiService {
         { new: false }, // doc PRÉ-update → porte encore array_composants + marqueur null
       );
       if (!claimed) return; // déjà décrémenté ce cycle → idempotent
-      await this.decrementStockForComposants(claimed.array_composants);
+      const matched = await this.decrementStockForComposants(
+        claimed.array_composants,
+      );
+      // Combien de lignes attendaient réellement un décrément ?
+      const requested = (
+        Array.isArray(claimed.array_composants) ? claimed.array_composants : []
+      ).filter(
+        (x: any) => x?.nameComposant && Number(x?.quantity) > 0,
+      ).length;
+      // Aucun composant catalogue n'a matché (nom absent/typo) alors qu'on
+      // attendait un décrément → on RELÂCHE le verrou (stockDecrementedAt=null)
+      // pour ré-essayer au prochain point de commit, au lieu de marquer à tort
+      // le cycle comme décrémenté (bug historique : DI « décrémentée » sans que
+      // le stock ne bouge, sans possibilité de rattrapage).
+      if (requested > 0 && matched === 0) {
+        await this.diModel.updateOne(
+          { _id: diId },
+          { $set: { stockDecrementedAt: null } },
+        );
+        await this.operationalErrorService?.capture({
+          module: 'di',
+          submodule: 'stock',
+          method: 'commitStockDecrementOnce',
+          severity: 'MEDIUM',
+          error: 'Décrément stock sans correspondance catalogue',
+          message: `DI ${diId} : aucun composant catalogue matché (nom absent ou statut hors stock) — verrou relâché pour nouvelle tentative.`,
+          notify: false,
+          payload: { diId },
+        });
+      }
     } catch (err) {
       await this.captureDiscordFailure?.('commitStockDecrementOnce', err, {
         diId,

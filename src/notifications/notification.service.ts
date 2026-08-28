@@ -167,6 +167,35 @@ export class NotificationService {
     return (res as any)?.modifiedCount ?? 0;
   }
 
+  /**
+   * Supprime les lignes de cloche d'une DI pour un type donné (l'historique
+   * `system_events` est conservé). Sert aux rappels « nagging » (item 5) : on
+   * garde UNE seule relance vivante par DI (efface l'ancienne avant la nouvelle)
+   * et on éteint la relance dès que le document attendu est fourni.
+   */
+  async clearByDiAndType(diId: string, type: string): Promise<number> {
+    if (!diId || !type) return 0;
+    // Capture les destinataires AVANT suppression pour les prévenir en temps
+    // réel (le front retire la ligne + coupe le son immédiatement, sans attendre
+    // un re-fetch de la cloche).
+    const rows = await this.notificationModel
+      .find({ diId, type })
+      .select('userId')
+      .lean();
+    const res = await this.notificationModel.deleteMany({ diId, type });
+    const userIds = Array.from(
+      new Set(rows.map((r: any) => String(r.userId)).filter(Boolean)),
+    );
+    for (const userId of userIds) {
+      try {
+        this.gateway.emitRemovedToUser(userId, { diId, type });
+      } catch {
+        /* best-effort */
+      }
+    }
+    return (res as any)?.deletedCount ?? 0;
+  }
+
   /** Préférence son (défaut ON si le profil n'a pas encore le champ). */
   async getSoundPref(userId: string): Promise<boolean> {
     const p = await this.profileModel

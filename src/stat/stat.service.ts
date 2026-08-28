@@ -920,6 +920,40 @@ export class StatService {
   }
 
   /**
+   * Jumeau RÉPARATION de `closeDiagLeg` : `rep_time += now − repRunStartedAt`,
+   * segment journalisé dans `repSegments`, ancre vidée.
+   *
+   * Il n'existait AUCUN équivalent côté réparation : `repRunStartedAt` était
+   * posé au démarrage mais jamais effacé, ni à la pause ni à la fin. Une DI
+   * rouverte plus tard en INREPARATION recalculait donc
+   * `rep_time + (now − ancre périmée)` → des centaines d'heures affichées.
+   * Idempotent (sans segment ouvert : no-op) et sûr en concurrence grâce au
+   * re-filtre sur l'ancre lue, exactement comme le diagnostic.
+   */
+  async closeRepLeg(_idDi: string, ignoreCount = 0): Promise<string | null> {
+    const filter: Record<string, unknown> =
+      ignoreCount > 0 ? { _idDi, ignoreCount } : { _idDi };
+    const stat = await this.StatModel.findOne(filter);
+    if (!stat || !stat.repRunStartedAt) {
+      return null; // aucun segment ouvert — rien à cumuler
+    }
+    const startedAt = new Date(stat.repRunStartedAt);
+    const stoppedAt = new Date();
+    const legMs = Math.max(0, stoppedAt.getTime() - startedAt.getTime());
+    const newRepTime = StatService.msToHhmmss(
+      StatService.hhmmssToMs(stat.rep_time) + legMs,
+    );
+    const res = await this.StatModel.updateOne(
+      { _id: stat._id, repRunStartedAt: startedAt },
+      {
+        $set: { rep_time: newRepTime, repRunStartedAt: null },
+        $push: { repSegments: { startedAt, stoppedAt } },
+      },
+    );
+    return (res as any)?.modifiedCount > 0 ? newRepTime : null;
+  }
+
+  /**
    * Ferme le segment de travail diagnostic courant CÔTÉ SERVEUR :
    * `diag_time += now − diagRunStartedAt`, le segment {startedAt, stoppedAt}
    * est journalisé dans `diagSegments`, l'ancre est vidée. Le temps servant à
@@ -1056,6 +1090,17 @@ export class StatService {
   async lapTimeForReaparation(_id: string, rep_time: string) {
     // Normalize at the write boundary (see `lapTime`).
     rep_time = (rep_time ?? '').trim();
+    // VALIDER avant d'écrire : ce `$set` acceptait N'IMPORTE QUELLE chaîne du
+    // client et la stockait verbatim — c'est par là qu'une durée malformée
+    // entrait en base (on a retrouvé des `diag_time` valant « undefined »).
+    // `rep_time` reste client-autoritaire (contrairement au diagnostic), donc
+    // c'est le seul rempart. Format canonique : HH:MM:SS, HH pouvant dépasser 99.
+    if (!/^\d{2,}:\d{2}:\d{2}$/.test(rep_time)) {
+      this.logger.warn(
+        `lapTimeForReaparation refusé — stat ${_id}: rep_time malformé « ${rep_time} »`,
+      );
+      throw new Error('rep_time invalide : format attendu HH:MM:SS');
+    }
     try {
     const stat = await this.StatModel.findOne({ _id });
     if (!stat) {

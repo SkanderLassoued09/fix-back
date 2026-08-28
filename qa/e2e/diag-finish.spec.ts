@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { authFile } from '../utils/auth';
 import { withDb } from '../utils/mongo';
+import { techId } from '../utils/accounts';
 
 /**
  * M2 — diagnostic finish (`techFinishDiag`) migrated to MutationRunner.
@@ -17,8 +18,13 @@ import { withDb } from '../utils/mongo';
  * (finish), changeStatusMagasinEstimation / changeStatusPending2 (transition).
  */
 
-const TECH_ID = '69fb49a8fbdfcb7ca81bed0e';
 const TECH_LIST = '/tickets/ticket/tech-di-list';
+
+/** Compte `tech` seedé — résolu à l'exécution (l'id figé visait l'autre base). */
+let TECH_ID = '';
+test.beforeAll(async () => {
+    TECH_ID = await withDb(techId);
+});
 
 test.use({ storageState: authFile('TECH') });
 test.describe.configure({ mode: 'serial' });

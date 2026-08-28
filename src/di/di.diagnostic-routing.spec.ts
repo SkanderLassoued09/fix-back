@@ -38,6 +38,8 @@ function makeSvc(di: any) {
     // Fermeture serveur du segment de travail diagnostic (no-op si fermé).
     closeDiagLeg: jest.fn().mockResolvedValue(null),
     openDiagLeg: jest.fn().mockResolvedValue(true),
+    // Jumeau réparation : la sortie de réparation replie aussi son segment.
+    closeRepLeg: jest.fn().mockResolvedValue(null),
   };
   svc.discordHookService = {
     sendDiagnosticFinished: jest.fn().mockResolvedValue(undefined),
@@ -147,7 +149,12 @@ function makeFinishSvc(di: any) {
     // Fermeture serveur du segment de travail diagnostic (no-op si fermé).
     closeDiagLeg: jest.fn().mockResolvedValue(null),
     openDiagLeg: jest.fn().mockResolvedValue(true),
+    // Jumeau réparation : la sortie de réparation replie aussi son segment.
+    closeRepLeg: jest.fn().mockResolvedValue(null),
   };
+  // En RETOUR, `changeStatusTofinsh` lit le snapshot du CYCLE avant de router.
+  // Aucun log ici → aucun verdict Fixtronix/réparable → clôture IRREPARABLE.
+  svc.logsDiService = { getLogsById: jest.fn().mockResolvedValue(null) };
   svc.discordHookService = {
     sendDiFinished: jest.fn().mockResolvedValue(undefined),
     sendDiIrreparable: jest.fn().mockResolvedValue(undefined),

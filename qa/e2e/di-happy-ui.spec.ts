@@ -3,6 +3,7 @@ import type { Page, Request } from '@playwright/test';
 import { authFile, tokenFor } from '../utils/auth';
 import { gqlPost } from '../utils/graphql';
 import { withDb } from '../utils/mongo';
+import { techId } from '../utils/accounts';
 
 /**
  * P4 — End-to-end UI parcours: walk a single DI from CREATED → FINISHED and
@@ -27,7 +28,8 @@ import { withDb } from '../utils/mongo';
  */
 
 const TICKET_LIST = '/tickets/ticket/ticket-list';
-const TECH_ID = '69fb49a8fbdfcb7ca81bed0e';
+/** Compte `tech` seedé — résolu à l'exécution (l'id figé visait l'autre base). */
+let TECH_ID = '';
 
 // A 1×1 base64 PDF body — the backend writes this STRING to disk verbatim
 // (see fix-back DI service), so the file just needs to be non-empty + base64.
@@ -118,6 +120,7 @@ function watchNetwork(
 }
 
 test.beforeAll(async () => {
+    TECH_ID = await withDb(techId);
     token = tokenFor('ADMIN_MANAGER');
     await withDb(async (db) => {
         const client = await db

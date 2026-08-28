@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { authFile, tokenFor } from '../utils/auth';
 import { withDb } from '../utils/mongo';
+import { techId } from '../utils/accounts';
 
 /**
  * UI smoke test for the redesigned "Affectation des Fichiers" modal in
@@ -11,7 +12,8 @@ import { withDb } from '../utils/mongo';
  */
 
 const TICKET_LIST = '/tickets/ticket/ticket-list';
-const TECH_ID = '69fb49a8fbdfcb7ca81bed0e';
+/** Compte `tech` seedé — résolu à l'exécution (l'id figé visait l'autre base). */
+let TECH_ID = '';
 const tag = `af_${Date.now().toString(36)}`;
 const diId = `DI_${tag}`;
 const idnum = `AF-${tag.toUpperCase()}`;
@@ -20,6 +22,7 @@ test.use({ storageState: authFile('ADMIN_MANAGER') });
 test.describe.configure({ mode: 'serial' });
 
 test.beforeAll(async () => {
+    TECH_ID = await withDb(techId);
     void tokenFor('ADMIN_MANAGER');
     await withDb(async (db) => {
         await db.collection('dis').insertOne({

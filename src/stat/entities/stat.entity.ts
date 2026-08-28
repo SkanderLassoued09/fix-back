@@ -83,6 +83,22 @@ export class StatDocument extends Document {
   })
   diagSegments: Array<{ startedAt: Date; stoppedAt: Date }>;
 
+  // Jumeau RÉPARATION de `diagSegments` : un segment = (repRunStartedAt à
+  // l'ouverture, now à la fermeture), fermé côté serveur par `closeRepLeg`.
+  // Avant, la réparation n'avait AUCUN cumul serveur : `repRunStartedAt`
+  // n'était jamais vidé, donc une DI rouverte des jours plus tard calculait
+  // `rep_time + (now − ancre)` et affichait des centaines d'heures.
+  @Prop({
+    type: [
+      {
+        startedAt: { type: Date, required: true },
+        stoppedAt: { type: Date, required: true },
+      },
+    ],
+    default: [],
+  })
+  repSegments: Array<{ startedAt: Date; stoppedAt: Date }>;
+
   // Historique d'affectation DIAGNOSTIC (abandon → réaffectation) : une entrée
   // par technicien affecté sur ce cycle. SOURCE UNIQUE pour afficher la chaîne
   // « X → abandonné (motif) par … → Y ». `diagTimeStart` = snapshot cumulatif

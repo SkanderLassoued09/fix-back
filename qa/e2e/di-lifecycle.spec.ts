@@ -3,6 +3,7 @@ import type { APIRequestContext } from '@playwright/test';
 import { tokenFor } from '../utils/auth';
 import { gqlPost } from '../utils/graphql';
 import { withDb } from '../utils/mongo';
+import { techId } from '../utils/accounts';
 import { nextDiIdnum, anyClientId } from '../utils/di-seed';
 
 /**
@@ -18,7 +19,8 @@ import { nextDiIdnum, anyClientId } from '../utils/di-seed';
  * All seeded docs are hard-deleted in afterAll.
  */
 
-const TECH_ID = '69fb49a8fbdfcb7ca81bed0e';
+/** Compte `tech` seedé — résolu à l'exécution (l'id figé visait l'autre base). */
+let TECH_ID = '';
 const TAG = Date.now().toString(36);
 const diId = `DI_life_${TAG}`;
 const statId = `STAT_life_${TAG}`;
@@ -55,6 +57,7 @@ async function transition(
 }
 
 test.beforeAll(async () => {
+    TECH_ID = await withDb(techId);
     token = tokenFor('ADMIN_MANAGER');
     await withDb(async (db) => {
         const client = await db.collection('clients').findOne({ isDeleted: { $ne: true } });

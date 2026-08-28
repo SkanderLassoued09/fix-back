@@ -67,8 +67,15 @@ describe('DiService.changeStatusMagasinEstimation — raccourci RETOUR sans PDR 
     const svc = makeRouterSvc(
       // DI live : contain_pdr PÉRIMÉ (cycle 0), doit être IGNORÉ au profit du log.
       { _id: 'DI1', ignoreCount: 1, contain_pdr: true, array_composants: [{ x: 1 }] },
-      // Snapshot du cycle retour : aucune pièce + erreur Fixtronix.
-      { contain_pdr: false, array_composants: [], isErrorFromFixtronix: true },
+      // Snapshot du cycle retour : réparable, aucune pièce + erreur Fixtronix.
+      // `can_be_repaired` est OBLIGATOIRE : sans verdict réparable sur le cycle,
+      // le routage clôture en IRREPARABLE avant d'atteindre le raccourci.
+      {
+        can_be_repaired: true,
+        contain_pdr: false,
+        array_composants: [],
+        isErrorFromFixtronix: true,
+      },
     );
 
     await svc.changeStatusMagasinEstimation('DI1');
@@ -91,7 +98,12 @@ describe('DiService.changeStatusMagasinEstimation — raccourci RETOUR sans PDR 
   it('RETOUR + sans PDR (cycle) MAIS PAS erreur Fixtronix → routage existant (PENDING2), pas PENDING3', async () => {
     const svc = makeRouterSvc(
       { _id: 'DI1', ignoreCount: 1, contain_pdr: false, array_composants: [] },
-      { contain_pdr: false, array_composants: [], isErrorFromFixtronix: false },
+      {
+        can_be_repaired: true,
+        contain_pdr: false,
+        array_composants: [],
+        isErrorFromFixtronix: false,
+      },
     );
 
     await svc.changeStatusMagasinEstimation('DI1');
@@ -110,6 +122,7 @@ describe('DiService.changeStatusMagasinEstimation — raccourci RETOUR sans PDR 
     const svc = makeRouterSvc(
       { _id: 'DI1', ignoreCount: 2, contain_pdr: true, array_composants: [{ x: 1 }] },
       {
+        can_be_repaired: true,
         contain_pdr: true,
         array_composants: [{ nameComposant: 'Fusible', quantity: 1 }],
         isErrorFromFixtronix: true,
