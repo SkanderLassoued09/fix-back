@@ -1346,6 +1346,9 @@ export class DiService {
           current_roles: di.current_roles,
           array_composants: di.array_composants,
           isErrorFromFixtronix: di.isErrorFromFixtronix,
+          // Parité avec `getAllDi` / la projection coordination : sans ça une DI
+          // atteinte par la RECHERCHE perdait les vrais noms de fichiers.
+          documents: this.buildDocuments((di as any).driveDocs),
           // Keep `*_id` as the actual referenced _id so the frontend can
           // run lookups, drive dropdown ngModel values, and patch state
           // immutably after a reassignment. The display strings live on
@@ -1355,10 +1358,11 @@ export class DiService {
           location_id: (di.location_id as any)?._id ?? null,
           location_name: (di.location_id as any)?.location_name ?? 'N/A',
           status: di.status,
+          // `pricingRequestSentBy` / `componentsConfirmedBy` ne sont PAS repris
+          // ici : `buildDossierFields` les a déjà résolus en NOMS. Les réécrire
+          // depuis `di` y remettait des ObjectIds bruts.
           pricingRequestSentAt: di.pricingRequestSentAt,
-          pricingRequestSentBy: di.pricingRequestSentBy,
           componentsConfirmedAt: di.componentsConfirmedAt,
-          componentsConfirmedBy: di.componentsConfirmedBy,
           price: di.price ?? null,
           final_price: di.final_price ?? null,
           // Diagnostic payant + estimation prix diagnostic — nécessaires au
@@ -1367,13 +1371,16 @@ export class DiService {
           diagnosticPayant: di.diagnosticPayant ?? true,
           diagnosticEstimate: di.diagnosticEstimate ?? null,
           needsDevisBeforeRepair: di.needsDevisBeforeRepair ?? false,
+          cycle0Snapshot: di.cycle0Snapshot ?? null,
           annulationParClient: di.annulationParClient,
           annulationMotif: di.annulationMotif,
           annulationCommentaire: di.annulationCommentaire,
           annulePar: di.annulePar,
           annuleLe: di.annuleLe,
           diagAssignments: await this.resolveDiagAssignments(stat),
-          createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
+          // ISO : `'YYYY-MM-DD:HH-mm-ss'` n'est PAS parsable par `new Date()` — le
+          // dossier affichait « créé par X · — » sur toutes les DI.
+          createdAt: di.createdAt ? new Date(di.createdAt).toISOString() : null,
           image: di?.image?.length > 0 ? di.image : '-',
           client_id: di.client_id?.first_name ?? '-',
           company_id: di.company_id?.name ?? '-',
@@ -1485,10 +1492,11 @@ export class DiService {
           location_id: (di.location_id as any)?._id ?? null,
           location_name: (di.location_id as any)?.location_name ?? 'N/A',
           status: di.status,
+          // `pricingRequestSentBy` / `componentsConfirmedBy` ne sont PAS repris
+          // ici : `buildDossierFields` les a déjà résolus en NOMS. Les réécrire
+          // depuis `di` y remettait des ObjectIds bruts.
           pricingRequestSentAt: di.pricingRequestSentAt,
-          pricingRequestSentBy: di.pricingRequestSentBy,
           componentsConfirmedAt: di.componentsConfirmedAt,
-          componentsConfirmedBy: di.componentsConfirmedBy,
           price: di.price ?? null,
           final_price: di.final_price ?? null,
           // Diagnostic payant + estimation prix diagnostic — nécessaires au
@@ -1497,13 +1505,16 @@ export class DiService {
           diagnosticPayant: di.diagnosticPayant ?? true,
           diagnosticEstimate: di.diagnosticEstimate ?? null,
           needsDevisBeforeRepair: di.needsDevisBeforeRepair ?? false,
+          cycle0Snapshot: di.cycle0Snapshot ?? null,
           annulationParClient: di.annulationParClient,
           annulationMotif: di.annulationMotif,
           annulationCommentaire: di.annulationCommentaire,
           annulePar: di.annulePar,
           annuleLe: di.annuleLe,
           diagAssignments: await this.resolveDiagAssignments(stat),
-          createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
+          // ISO : `'YYYY-MM-DD:HH-mm-ss'` n'est PAS parsable par `new Date()` — le
+          // dossier affichait « créé par X · — » sur toutes les DI.
+          createdAt: di.createdAt ? new Date(di.createdAt).toISOString() : null,
           image: di?.image?.length > 0 ? di.image : '-',
           client_id: di.client_id?.first_name ?? '-',
           company_id: di.company_id?.name ?? '-',
@@ -1767,6 +1778,11 @@ export class DiService {
         return (await this.changeStatusInMagasin(_idDI)) as any;
       }
     }
+    // Filet : le détour ci-dessus n'agit QUE depuis MagasinEstimation. Depuis
+    // n'importe quelle autre source (INDIAGNOSTIC, CONFIRMATION,
+    // MAGASIN_FINALISATION — toutes acceptées par MAGASIN_TECH_TO_PENDING2),
+    // cette mutation envoyait un retour Fixtronix droit en PENDING2.
+    await this.assertNotFixtronixBillable(_idDI, 'magasinTech_Pending2');
     await this.assertTransitionAllowed(_idDI, STATUS_DI.Pending2.status);
     // Sortie de diagnostic possible (fin sans pause préalable) : ferme le
     // segment de travail courant côté serveur avant la transition. No-op si
@@ -2105,32 +2121,77 @@ export class DiService {
 
     let updatedDi;
 
-    if (didata && didata.ignoreCount && didata.ignoreCount > 0) {
+    // Verdict du diagnostic COURANT. Il est désormais écrit sur le document DI
+    // dans LES DEUX flux (original ET retour).
+    //
+    // Avant, un cycle retour n'écrivait que la ligne `logsdis` : le document DI
+    // conservait le verdict du cycle 0. Or `isFixtronixCycle` lit
+    // `di.isErrorFromFixtronix` EN PRIORITÉ, et la case « Erreur Fixtronix »
+    // n'est affichée que si `ignoreCount > 0` — donc sur un retour ce drapeau
+    // valait TOUJOURS false et le seul signal vivant était la ligne de log,
+    // elle-même réécrite à chaque pause. Résultat : la DI filait en PENDING2 →
+    // PRICING_DIAG → WAITING_DEVIS, c.-à-d. FACTURÉE au client pour notre faute.
+    //
+    // Écrire le verdict sur la DI rend correcte PAR CONSTRUCTION la priorité
+    // « DI d'abord » déjà en place, et répare du même coup tous les lecteurs qui
+    // interrogent la DI SANS branche de cycle : le filtre `contain_pdr` de la
+    // liste magasin, `exitWaitingBcOnBc`, `diHasComponents` et le
+    // `componentStepSkipped` de la coordinatrice.
+    // Verdict « erreur Fixtronix » — COLLANT sur toute la durée du cycle.
+    //
+    // Le formulaire vaut `false` par défaut et il est renvoyé À CHAQUE
+    // sauvegarde ET À CHAQUE PAUSE : autoriser un `false` à écraser un `true`
+    // déjà enregistré, c'est perdre le verdict sur une simple pause prise avant
+    // l'étape Validation — et refacturer au client une panne dont la faute est
+    // la nôtre. Une fois posé, seul le cycle suivant (`retourCycleReset`) ou une
+    // correction explicite d'admin (`adminTechUpdateDi`) le retire.
+    const effectiveFixtronix =
+      (diag.isErrorFromFixtronix ?? false) ||
+      (await this.isFixtronixCycle(didata, _idDI));
+
+    const verdict = {
+      can_be_repaired: diag.can_be_repaired,
+      contain_pdr: diag.contain_pdr,
+      remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
+      // C'est ce flag qui déclenche le raccourci « retour sans pièces →
+      // PENDING3 non facturé » (décision assumée).
+      isErrorFromFixtronix: effectiveFixtronix,
+      array_composants: diag.array_composants,
+      di_category_id: diag.di_category_id,
+    };
+
+    const isRetourCycle = !!(
+      didata &&
+      didata.ignoreCount &&
+      didata.ignoreCount > 0
+    );
+
+    updatedDi = await this.diModel.findOneAndUpdate(
+      { _id: _idDI },
+      {
+        $set: isRetourCycle
+          ? verdict
+          : {
+              ...verdict,
+              // Ré-arme le décrément de stock pour CETTE liste (le tech vient de
+              // (re)saisir array_composants) : le prochain commit décrémentera.
+              //
+              // ⚠️ CYCLE ORIGINAL UNIQUEMENT. Un cycle retour décrémente déjà par
+              // `componentConfirmedFromCoordinator` ; ré-armer ici ferait
+              // décrémenter le stock UNE SECONDE FOIS à l'entrée en PENDING3.
+              stockDecrementedAt: null,
+            },
+      },
+      { new: true },
+    );
+
+    if (isRetourCycle) {
+      // Le snapshot de cycle reste la source d'archive par retour (le dossier
+      // d'intervention le lit onglet par onglet) : on l'écrit EN PLUS de la DI.
       updatedDi = await this.logsDiService.tech_startDiagnostic(
         didata._id,
         didata.ignoreCount,
-        diag,
-      );
-    } else {
-      updatedDi = await this.diModel.findOneAndUpdate(
-        { _id: _idDI },
-        {
-          $set: {
-            can_be_repaired: diag.can_be_repaired,
-            contain_pdr: diag.contain_pdr,
-            remarque_tech_diagnostic: diag.remarque_tech_diagnostic,
-            // Verdict « erreur Fixtronix » (phase retour) saisi par le TECH dans
-            // le modal de diagnostic. C'est ce flag qui déclenche le raccourci
-            // « retour sans pièces → PENDING3 non facturé » (décision assumée).
-            isErrorFromFixtronix: diag.isErrorFromFixtronix ?? false,
-            array_composants: diag.array_composants,
-            di_category_id: diag.di_category_id,
-            // Ré-arme le décrément de stock pour CETTE liste (le tech vient de
-            // (re)saisir array_composants) : le prochain commit décrémentera.
-            stockDecrementedAt: null,
-          },
-        },
-        { new: true },
+        { ...diag, isErrorFromFixtronix: effectiveFixtronix },
       );
     }
 
@@ -3381,6 +3442,9 @@ export class DiService {
       .populate('company_id', 'name')
       .populate('createdBy', 'firstName lastName')
       .populate('location_id', 'location_name')
+      // Sans ce populate le mapper lisait `di_category_id?.category` sur un id
+      // brut → « Catégorie : — » sur toute la vue coordination.
+      .populate('di_category_id', '_id category')
       .sort({ createdAt: -1 })
       .limit(rows)
       .skip(first)
@@ -3492,6 +3556,16 @@ export class DiService {
 
     return {
       // Identification
+      // `client_id` / `company_id` portent une SENTINELLE ('-') dans les trois
+      // mappers ; `displayName()` l'accepte comme une valeur, si bien que le nom
+      // de SOCIÉTÉ n'était jamais atteint (le client est testé en premier).
+      // Ces deux champs-ci valent le vrai nom, ou `null` — jamais de sentinelle.
+      client_name:
+        [di.client_id?.first_name, di.client_id?.last_name]
+          .filter(Boolean)
+          .join(' ')
+          .trim() || null,
+      company_name: di.company_id?.name?.trim() || null,
       nSerie: di.nSerie ?? null,
       dateReception: di.dateReception ?? null,
       comment: di.comment ?? null,
@@ -3500,6 +3574,7 @@ export class DiService {
       // Verdict / drapeaux
       isErrorFromFixtronix: di.isErrorFromFixtronix ?? false,
       needsDevisBeforeRepair: di.needsDevisBeforeRepair ?? false,
+      cycle0Snapshot: di.cycle0Snapshot ?? null,
       confirmationComposant: di.confirmationComposant ?? null,
       gotComposantFromMagasin: di.gotComposantFromMagasin ?? false,
       isSentToCoordinator: di.isSentToCoordinator ?? false,
@@ -3622,6 +3697,7 @@ export class DiService {
       // Marqueur raccourci « retour sans pièces » : pilote la carte Réparation
       // (mode « joindre le devis » + blocage de l'envoi tant qu'il manque).
       needsDevisBeforeRepair: di.needsDevisBeforeRepair ?? false,
+      cycle0Snapshot: di.cycle0Snapshot ?? null,
       // Correctif : ne plus forcer `null` — surface la vraie remarque admin
       // (la valeur est déjà requêtée et déclarée sur DiTable).
       remarque_admin_manager: di.remarque_admin_manager,
@@ -3637,7 +3713,9 @@ export class DiService {
         : 'N/A',
       remarque_tech_diagnostic: di.remarque_tech_diagnostic,
       remarque_tech_repair: di.remarque_tech_repair,
-      createdAt: moment(di.createdAt).format('YYYY-MM-DD:HH-mm-ss'),
+      // ISO : `'YYYY-MM-DD:HH-mm-ss'` n'est PAS parsable par `new Date()` — le
+          // dossier affichait « créé par X · — » sur toutes les DI.
+          createdAt: di.createdAt ? new Date(di.createdAt).toISOString() : null,
       updatedAt: di.updatedAt,
       location_id: di.location_id?.location_name ?? 'N/A',
       status: di.status,
@@ -3694,6 +3772,8 @@ export class DiService {
       .populate('createdBy', 'firstName lastName')
       .populate('location_id', '_id location_name')
       .populate('company_id', 'name ')
+      // Idem `searchCoordinatorDI` : sans ce populate, « Catégorie : — ».
+      .populate('di_category_id', '_id category')
       .sort({ createdAt: -1 })
       .limit(rows)
       .skip(first);
@@ -4230,6 +4310,44 @@ export class DiService {
     return this.isFixtronixCycle(di, _id);
   }
 
+  /**
+   * GARDE ARGENT — une erreur Fixtronix n'est JAMAIS facturée au client.
+   *
+   * Partagée par les deux portes de PENDING2 (`changeStatusPending2` et
+   * `magasinTech_Pending2`) et par la porte de tarification
+   * (`changeStatusPricing`). `magasinTech_Pending2` est exposée en mutation et
+   * n'avait AUCUNE garde depuis une source autre que MagasinEstimation :
+   * n'importe quel appelant pouvait y pousser un retour Fixtronix.
+   *
+   * Lève une `GraphQLError` BAD_REQUEST et journalise la tentative, pour qu'un
+   * éventuel cas légitime remonte au lieu de passer inaperçu.
+   */
+  private async assertNotFixtronixBillable(
+    _id: string,
+    gate: string,
+  ): Promise<void> {
+    const di: any = await this.diModel.findOne({ _id }).lean();
+
+    if ((di?.ignoreCount ?? 0) <= 0) return;
+    if (!(await this.isFixtronixCycle(di, _id))) return;
+
+    await this.operationalErrorService.capture({
+      module: 'di',
+      submodule: 'workflow',
+      method: 'FIXTRONIX_BILLING_BLOCKED',
+      severity: 'MEDIUM',
+      error: 'Tentative de facturation d\'un retour erreur Fixtronix',
+      message: `${gate} refusé sur ${_id} (cycle ${di?.ignoreCount}, statut ${di?.status})`,
+      notify: false,
+      payload: { diId: _id, gate, status: di?.status, cycle: di?.ignoreCount },
+    });
+
+    throw new GraphQLError(
+      "Cette DI est un retour pour erreur Fixtronix : elle ne peut pas être facturée au client.",
+      { extensions: { code: 'BAD_REQUEST' } },
+    );
+  }
+
   async changeStatusPending2(_id: string) {
     // GARDE FIXTRONIX (règle métier autoritaire, argent) : une DI dont le cycle
     // est une ERREUR FIXTRONIX (notre faute) ne va JAMAIS en PENDING2/Pricing.
@@ -4329,6 +4447,11 @@ export class DiService {
   }
 
   async changeStatusPricing(_id: string, pricingRequestSentBy?: string | null) {
+    // POINT DE PASSAGE UNIQUE de toute facturation : quelle que soit la route
+    // ayant amené la DI en PENDING2, elle ne peut plus être tarifée si le cycle
+    // est une erreur Fixtronix. Tout le reste (gardes de diagnostic, détour de
+    // sortie magasin) devient de la défense en profondeur.
+    await this.assertNotFixtronixBillable(_id, 'changeStatusPricing');
     await this.assertTransitionAllowed(_id, STATUS_DI.Pricing.status);
     // « Prix à fixer » ne doit sonner qu'à la VRAIE entrée en PRICING_DIAG : le
     // guard de transition est idempotent (re-clic alors que la DI y est déjà →
@@ -4902,9 +5025,54 @@ export class DiService {
     isOpenedOnce: false,
     confirmationComposant: null,
     handleSendingNotificationBetweenCoordinatorAndMagasin: 'IN_COORDINATOR',
+    // Verdicts de ROUTAGE du cycle précédent : remis à zéro, sinon le nouveau
+    // cycle en hérite. `null` (et non `false`) conserve l'état « non répondu »
+    // que le snapshot de cycle modélise déjà — le tech n'a pas encore tranché.
+    //
+    // On ne touche VOLONTAIREMENT pas à `can_be_repaired`, `contain_pdr` ni
+    // `array_composants` : la liste magasin filtre sur `contain_pdr` et la
+    // poignée de main composants de la coordinatrice s'appuie dessus. Les vider
+    // laisserait le magasin en attente indéfinie. Ils sont de toute façon
+    // réécrits par le premier enregistrement du diagnostic (cf.
+    // `tech_startDiagnostic`, qui écrit désormais le verdict sur la DI).
+    isErrorFromFixtronix: null,
+    needsDevisBeforeRepair: false,
   };
 
+  /**
+   * Fige le verdict du CYCLE 0 avant que le premier retour ne l'écrase.
+   *
+   * Depuis que `tech_startDiagnostic` écrit le verdict courant sur la DI, le
+   * document ne peut plus servir d'archive du flux original — or c'est
+   * exactement ce que l'onglet « Flux original » du dossier d'intervention y
+   * lisait. On en prend donc une photo, une seule fois, au premier retour.
+   */
+  private async snapshotCycle0IfNeeded(_id: string): Promise<void> {
+    const di: any = await this.diModel.findOne({ _id }).lean();
+
+    // Seulement à l'entrée du PREMIER retour, et jamais deux fois.
+    if (!di || (di.ignoreCount ?? 0) > 0 || di.cycle0Snapshot) return;
+
+    await this.diModel.updateOne(
+      { _id },
+      {
+        $set: {
+          cycle0Snapshot: {
+            can_be_repaired: di.can_be_repaired ?? null,
+            contain_pdr: di.contain_pdr ?? null,
+            array_composants: di.array_composants ?? [],
+            isErrorFromFixtronix: di.isErrorFromFixtronix ?? null,
+            remarque_tech_diagnostic: di.remarque_tech_diagnostic ?? null,
+            capturedAt: new Date(),
+          },
+        },
+      },
+    );
+  }
+
   async changeDiRetour1(_id: string, reason?: string) {
+    // Photo du flux original AVANT que le cycle retour n'écrase le verdict.
+    await this.snapshotCycle0IfNeeded(_id);
     const updated = await this.diModel.findOneAndUpdate(
       { _id },
       {

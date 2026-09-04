@@ -166,7 +166,6 @@ export class StatService {
 
       if (di.ignoreCount > 0) {
         createStatInput.ignoreCount = di.ignoreCount;
-        await this.logsDiService.create(createStatInput._idDi, di.ignoreCount);
       }
 
       // ── Réaffectation diagnostic dans le MÊME cycle (post-abandon) ─────────
@@ -222,6 +221,17 @@ export class StatService {
           });
           return statWithStatusReassigned;
         }
+      }
+
+      // Snapshot du cycle retour — ouvert SEULEMENT ici, c.-à-d. après la
+      // branche de réaffectation (qui ressort plus haut) et après le refus
+      // MÊME-TECH. Avant, il était créé tout en haut, sans condition : une
+      // réaffectation — même REFUSÉE — laissait une 2e ligne pour le même
+      // (DI, cycle), et le routeur pouvait ensuite lire la ligne vide et croire
+      // qu'il n'y avait pas d'erreur Fixtronix. La création est désormais
+      // idempotente de toute façon (`$setOnInsert`), ceci est la 2e barrière.
+      if (di.ignoreCount > 0) {
+        await this.logsDiService.create(createStatInput._idDi, di.ignoreCount);
       }
 
       // Première affectation du cycle : ouvre la 1re entrée d'historique.
@@ -875,6 +885,10 @@ export class StatService {
           ...el.toObject(), // Convert the Mongoose document to a plain object
           id_tech_diag: techDiag, // Replace id_tech_diag with getTech() result
           id_tech_rep: techRep, // Replace id_tech_rep with getTech() result
+          // Le type GraphQL `Stat` n'expose QUE `techDiag`/`techRep` : sans ces
+          // deux clés, le récapitulatif par cycle affichait « — » partout.
+          techDiag,
+          techRep,
         };
       }),
     );
@@ -1200,17 +1214,45 @@ export class StatService {
 
   //get by ID_DI
   async getInfoStatByIdDi(_idDi: string, _idLog: number) {
-    let stat;
-    if (_idLog) {
-      stat = await this.StatModel.findOne({
-        _idDi,
-        ignoreCount: _idLog,
-      });
-    } else {
-      stat = await this.StatModel.findOne({ _idDi });
+    // Sans `ignoreCount: 0`, le « flux original » pouvait tomber sur le Stat
+    // d'un cycle de retour (findOne sans tri = ordre naturel).
+    const stat = await this.StatModel.findOne(
+      _idLog ? { _idDi, ignoreCount: _idLog } : { _idDi, ignoreCount: 0 },
+    );
+    if (!stat) return null;
+
+    // `diagAssignments[].tech` est un id de profil : brut, le front l'affiche
+    // comme un ObjectId. On le résout en nom (cache local anti-doublon).
+    const plain: any = stat.toObject();
+    const list: any[] = Array.isArray(plain.diagAssignments)
+      ? plain.diagAssignments
+      : [];
+    if (list.length) {
+      const cache = new Map<string, string>();
+      plain.diagAssignments = await Promise.all(
+        list.map(async (a: any) => {
+          const id = a?.tech;
+          if (!id) return a;
+          if (!cache.has(id)) {
+            const name = await this.profileService
+              .getTech(id)
+              .catch(() => null);
+            cache.set(id, typeof name === 'string' ? name : null);
+          }
+          return { ...a, tech: cache.get(id) ?? null };
+        }),
+      );
     }
 
-    return stat;
+    // Noms résolus aussi pour les cumuls du cycle (mêmes clés que ci-dessus).
+    plain.techDiag = plain.id_tech_diag
+      ? await this.profileService.getTech(plain.id_tech_diag).catch(() => null)
+      : null;
+    plain.techRep = plain.id_tech_rep
+      ? await this.profileService.getTech(plain.id_tech_rep).catch(() => null)
+      : null;
+
+    return plain;
   }
 
   // update status

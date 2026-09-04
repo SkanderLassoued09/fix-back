@@ -158,6 +158,13 @@ export class DiDocument extends Document {
   // l'envoyant en réparation. Posé par `magasinTech_Pending3`, retiré à l'envoi.
   @Prop({ type: Boolean, default: false })
   needsDevisBeforeRepair: boolean;
+  // Photo du verdict du CYCLE 0, prise au premier retour. Depuis que
+  // `tech_startDiagnostic` écrit le verdict COURANT sur la DI (pour que le
+  // routeur retour lise une valeur vivante), le document ne peut plus servir
+  // d'archive du flux original : l'onglet « Flux original » du dossier
+  // d'intervention lit ce sous-document à la place.
+  @Prop({ type: Object, default: null })
+  cycle0Snapshot: Record<string, any> | null;
   @Prop({
     nullable: true,
     enum: ['DEFAULT', 'IN_COORDINATOR', 'IN_MAGASIN'],
@@ -198,8 +205,20 @@ export class DiDocument extends Document {
   // recorded with no per-step date field and no call-site remembering.
   // Author is NOT stored here (the Mongoose hook has no request context) — the
   // per-phase actor is resolved from the existing *_By / tech fields.
-  @Prop({ type: [{ status: String, at: Date }], _id: false, default: [] })
-  statusHistory: Array<{ status: string; at: Date }>;
+  // `reconstructed: true` = entrée déduite après coup par la migration de
+  // backfill (011) à partir de `createdAt` / `statusUpdatedAt`, PAS observée en
+  // direct. L'UI l'indique : une timeline partielle ne doit jamais se faire
+  // passer pour un historique complet.
+  @Prop({
+    type: [{ status: String, at: Date, reconstructed: Boolean }],
+    _id: false,
+    default: [],
+  })
+  statusHistory: Array<{
+    status: string;
+    at: Date;
+    reconstructed?: boolean;
+  }>;
   // ------------------------------------------------------------------------
 
   // Retour (return) tracking — motif + timestamp of the latest retour, shown
@@ -288,9 +307,17 @@ function stampStatusUpdatedAtOnQueryUpdate(this: any, next: () => void) {
         statusHistory: { status: set.status, at },
       };
     } else {
-      // Legacy direct-field form (no operators): can't mix `$push` here, so
-      // only the timestamp is stamped. Not used by the workflow transitions.
-      update.statusUpdatedAt = at;
+      // Forme directe (sans opérateur) : elle stampait `statusUpdatedAt` mais
+      // PERDAIT l'entrée d'historique — d'où des DI au `statusUpdatedAt` à jour
+      // et au `statusHistory` vide. On la convertit en `$set` + `$push` pour
+      // qu'aucune transition ne puisse plus échapper au journal.
+      const { status, ...others } = set as Record<string, any>;
+      const converted: Record<string, any> = {
+        $set: { ...others, status, statusUpdatedAt: at },
+        $push: { statusHistory: { status, at } },
+      };
+      this.setUpdate(converted);
+      return next();
     }
     this.setUpdate(update);
   }
@@ -311,6 +338,9 @@ export class StatusHistoryEntry {
   status: string;
   @Field(() => Date, { nullable: true })
   at: Date;
+  /** Entrée DÉDUITE par le backfill (migration 011), pas observée en direct. */
+  @Field({ nullable: true })
+  reconstructed?: boolean;
 }
 
 /**
@@ -378,6 +408,26 @@ export class DiagAssignment {
   abandonedBy?: string;
   @Field({ nullable: true })
   diagTime?: string;
+}
+
+/**
+ * Verdict du CYCLE 0, figé au premier retour — voir `Di.cycle0Snapshot`.
+ * Sert l'onglet « Flux original » du dossier d'intervention.
+ */
+@ObjectType()
+export class Cycle0Snapshot {
+  @Field({ nullable: true })
+  can_be_repaired?: boolean;
+  @Field({ nullable: true })
+  contain_pdr?: boolean;
+  @Field(() => [ComposantStructure], { nullable: true })
+  array_composants?: ComposantStructure[];
+  @Field({ nullable: true })
+  isErrorFromFixtronix?: boolean;
+  @Field({ nullable: true })
+  remarque_tech_diagnostic?: string;
+  @Field({ nullable: true })
+  capturedAt?: Date;
 }
 
 @ObjectType()
@@ -545,6 +595,8 @@ export class Di {
   isErrorFromFixtronix: boolean;
   @Field({ nullable: true })
   needsDevisBeforeRepair?: boolean;
+  @Field(() => Cycle0Snapshot, { nullable: true })
+  cycle0Snapshot?: Cycle0Snapshot;
 
   // ---- Stagnation tracking ------------------------------------------------
   @Field({ nullable: true })
@@ -704,6 +756,8 @@ export class DiTable {
   isErrorFromFixtronix: boolean;
   @Field({ nullable: true })
   needsDevisBeforeRepair?: boolean;
+  @Field(() => Cycle0Snapshot, { nullable: true })
+  cycle0Snapshot?: Cycle0Snapshot;
   @Field(() => [LogsDi], { nullable: true })
   logs: LogsDi[];
   @Field({ nullable: true })
@@ -774,6 +828,13 @@ export class DiTable {
   /** Date de réception physique du matériel (renseignée par l'import .xlsx). */
   @Field({ nullable: true })
   dateReception?: Date;
+
+  /** Noms RÉELS du tiers, ou `null` — contrairement à `client_id`/`company_id`
+   *  qui portent une sentinelle `'-'` que le front prend pour une valeur. */
+  @Field({ nullable: true })
+  client_name?: string;
+  @Field({ nullable: true })
+  company_name?: string;
 
   /** Volet commercial — remise et qualification du dossier. */
   @Field({ nullable: true })

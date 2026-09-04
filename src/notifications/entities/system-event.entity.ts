@@ -64,6 +64,10 @@ export class SystemEvent {
   actorId?: string;
   @Field({ nullable: true })
   actorRole?: string;
+  /** Nom LISIBLE de l'acteur, résolu depuis `actorId`. Sans lui le journal
+   *  n'avait qu'un ObjectId — que le front filtre — et affichait « par — ». */
+  @Field({ nullable: true })
+  actorName?: string;
   @Field()
   message: string;
   @Field({ nullable: true })

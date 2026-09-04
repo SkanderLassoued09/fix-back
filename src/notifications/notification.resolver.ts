@@ -59,12 +59,18 @@ export class NotificationResolver {
       limit,
       skip,
     });
+    // Acteurs résolus en NOMS en UNE requête (le journal d'une DI répète
+    // largement les mêmes auteurs).
+    const names = await this.service.resolveActorNames(
+      (rows as any[]).map((e) => e?.actorId),
+    );
     return rows.map((e: any) => ({
       _id: String(e._id),
       type: e.type,
       diId: e.diId ?? undefined,
       actorId: e.actorId ?? undefined,
       actorRole: e.actorRole ?? undefined,
+      actorName: (e.actorId && names.get(e.actorId)) || undefined,
       message: e.message,
       payloadJson: e.payload ? JSON.stringify(e.payload) : undefined,
       createdAt: e.createdAt,

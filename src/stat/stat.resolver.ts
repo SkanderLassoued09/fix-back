@@ -209,7 +209,10 @@ export class StatResolver {
     return value;
   }
 
-  @Query(() => Stat)
+  // NULLABLE : une DI peut n'avoir aucun `Stat` pour le cycle demandé (aucun
+  // technicien affecté). Auparavant la requête retombait sur le Stat d'un autre
+  // cycle ; elle renvoie désormais `null`, ce que le type doit autoriser.
+  @Query(() => Stat, { nullable: true })
   getInfoStatByIdDi(
     @Args('_idDi') _idDi: string,
     @Args('_idLogs', { nullable: true }) _idLogs: number,

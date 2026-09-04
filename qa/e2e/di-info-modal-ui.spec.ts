@@ -29,11 +29,20 @@ async function openModal(page: Page, diId: string) {
   );
   const modal = page.locator('.di-info-modal');
   await expect(modal).toBeVisible({ timeout: 25_000 });
-  // di$ chargé → la table Finances rend ses 3 lignes (dont Total).
-  await expect(modal.locator('.di-fin-row--total')).toBeVisible({
+  // Le dossier s'ouvre sur l'onglet « Dossier » : la bande de faits est le
+  // premier rendu qui prouve que `di$` est arrivé. (Les Finances vivent
+  // désormais dans leur PROPRE onglet — les attendre ici bloquait.)
+  await expect(modal.locator('.di-facts .di-fact').first()).toBeVisible({
     timeout: 20_000,
   });
   return modal;
+}
+
+/** Bascule sur un onglet du dossier et attend qu'il devienne actif. */
+async function openTab(modal: any, label: string) {
+  const tab = modal.locator('.di-tab', { hasText: label });
+  await tab.click();
+  await expect(tab).toHaveClass(/di-tab--active/);
 }
 
 test('coque : en-tête + sélecteur + pied fixes, corps défilant (1 scrollbar), ~85vh', async ({
@@ -56,13 +65,18 @@ test('coque : en-tête + sélecteur + pied fixes, corps défilant (1 scrollbar),
   expect(cardH).toBeLessThanOrEqual(Math.round(vh * 0.86) + 4);
 
   // Bande de faits (4).
-  await expect(modal.locator('.di-facts .di-fact')).toHaveCount(4);
+  // 5 faits permanents (client, emplacement, n° série, retours, catégorie)
+  // + jusqu'à 2 conditionnels (date de réception, ancienneté dans le statut).
+  const factCount = await modal.locator('.di-facts .di-fact').count();
+  expect(factCount).toBeGreaterThanOrEqual(5);
+  expect(factCount).toBeLessThanOrEqual(7);
 });
 
 test('finances : ligne Total + écart SAIN (aucun pourcentage aberrant)', async ({
   page,
 }) => {
   const modal = await openModal(page, DI.richSteps);
+  await openTab(modal, 'Finances');
   await expect(modal.locator('.di-fin-row')).toHaveCount(3); // Diagnostic, Réparation, Total
   await expect(modal.locator('.di-fin-row--total')).toContainText('Total');
   // Plus jamais de +20 762 % : aucun pourcentage à 4 chiffres ou plus.
@@ -115,7 +129,11 @@ test('DI minimale : aucune section fantôme, aucun « undefined »', async ({
   const modal = await openModal(page, DI.minimal);
   const txt = (await modal.innerText()).toLowerCase();
   expect(txt).not.toContain('undefined');
-  await expect(modal.locator('.di-facts .di-fact')).toHaveCount(4);
+  // 5 faits permanents (client, emplacement, n° série, retours, catégorie)
+  // + jusqu'à 2 conditionnels (date de réception, ancienneté dans le statut).
+  const factCount = await modal.locator('.di-facts .di-fact').count();
+  expect(factCount).toBeGreaterThanOrEqual(5);
+  expect(factCount).toBeLessThanOrEqual(7);
   await expect(modal.locator('.di-foot')).toBeVisible();
 });
 

@@ -9,6 +9,7 @@ import {
   DiTransitionInput,
   DiTransitionResult,
 } from './di-workflow.types';
+import { GraphQLError } from 'graphql';
 
 type WorkflowLogPayload = {
   event: string;
@@ -110,8 +111,11 @@ export class DiWorkflowService {
       )}] but got '${currentStatus}' for DI ${input.diId}`;
 
       if (config.strictFrom) {
-        // TODO: replace with a domain-specific exception after strict migration.
-        throw new Error(message);
+        // Un refus `strictFrom` est une transition INTERDITE, pas une panne :
+        // en `Error` nu il remontait au client en INTERNAL_SERVER_ERROR (500).
+        throw new GraphQLError(message, {
+          extensions: { code: 'BAD_REQUEST' },
+        });
       }
 
       this.logger.warn(

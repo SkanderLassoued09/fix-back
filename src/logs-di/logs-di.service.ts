@@ -36,10 +36,25 @@ export class LogsDiService {
     return indexDIL;
   }
 
+  /**
+   * Ouvre le snapshot du cycle `idIgnore` de la DI — IDEMPOTENT.
+   *
+   * C'était un `new ... .save()` sec, appelé sans condition à chaque affectation
+   * de technicien (`stat.service.ts`). Une réaffectation créait donc une 2e ligne
+   * pour le MÊME `(_idDi, idIgnore)` : l'écriture du verdict (`findOneAndUpdate`)
+   * et sa lecture (`getLogsById`, un `findOne`) pouvaient viser des documents
+   * différents, et le routeur concluait « pas d'erreur Fixtronix » → PENDING2 →
+   * la DI partait en facturation alors que la faute était la nôtre.
+   *
+   * `$setOnInsert` (et non `$set`) est essentiel : une réaffectation ne doit
+   * JAMAIS écraser le verdict déjà saisi sur ce cycle.
+   */
   async create(_idDi: string, idIgnore: number) {
-    const index = await this.generateDiId();
-    let _id = uuidv4();
-    return await new this.logsDiModel({ _id, _idDi, idIgnore }).save();
+    return await this.logsDiModel.findOneAndUpdate(
+      { _idDi, idIgnore },
+      { $setOnInsert: { _id: uuidv4(), _idDi, idIgnore } },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
   }
 
   async getLogsById(idIgnore: number, _idDi: string) {

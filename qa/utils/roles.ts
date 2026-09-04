@@ -26,10 +26,16 @@ const PW = '123456';
 
 export const ROLE_ACCOUNTS: RoleAccount[] = [
   { key: 'ADMIN_MANAGER', username: 'skander',    password: PW, expectedRole: 'ADMIN_MANAGER', primaryTicketRoute: '/tickets/ticket/ticket-list',         hasDashboardMenu: true },
+  // ⚠️ `admin_tech` et `manager` N'EXISTENT PAS dans `fixtronixproddb` (vérifié
+  // le 2026-09-03 : aucun profil ne porte le rôle ADMIN_TECH ni MANAGER). Le
+  // projet `setup` échoue donc sur ces deux lignes. Les laisser en place — le
+  // jour où les comptes sont créés, le harnais les reprend sans modification —
+  // mais ne PAS supposer que `.auth/ADMIN_TECH.json` / `MANAGER.json` existent.
   { key: 'ADMIN_TECH',    username: 'admin_tech', password: PW, expectedRole: 'ADMIN_TECH',    primaryTicketRoute: '/tickets/ticket/ticket-list',         hasDashboardMenu: true },
   { key: 'MANAGER',       username: 'manager',    password: PW, expectedRole: 'MANAGER',       primaryTicketRoute: '/tickets/ticket/ticket-list',         hasDashboardMenu: false },
   // NOTE: expectedRole is the intentional DB misspelling "COORDIANTOR".
-  { key: 'COORDINATOR',   username: 'coo',        password: PW, expectedRole: 'COORDIANTOR',   primaryTicketRoute: '/tickets/ticket/coordinator-di-list', hasDashboardMenu: false },
+  // Le compte s'appelle `coordinateur` (et non `coo`, qui n'existe pas en base).
+  { key: 'COORDINATOR',   username: 'coordinateur', password: PW, expectedRole: 'COORDIANTOR', primaryTicketRoute: '/tickets/ticket/coordinator-di-list', hasDashboardMenu: false },
   { key: 'TECH',          username: 'tech',       password: PW, expectedRole: 'TECH',          primaryTicketRoute: '/tickets/ticket/tech-di-list',        hasDashboardMenu: false },
   { key: 'MAGASIN',       username: 'magasin',    password: PW, expectedRole: 'MAGASIN',       primaryTicketRoute: '/tickets/ticket/magasin-di-list',     hasDashboardMenu: false },
 ];

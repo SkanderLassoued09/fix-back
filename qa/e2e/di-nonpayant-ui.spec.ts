@@ -12,6 +12,15 @@ async function openModal(page: Page, diId: string) {
   });
   const modal = page.locator('.di-info-modal');
   await expect(modal).toBeVisible({ timeout: 25_000 });
+  // Le dossier s'ouvre sur l'onglet « Dossier » : on attend son premier rendu,
+  // puis on bascule sur « Finances » (les finances y vivent depuis la refonte
+  // en onglets — les attendre à l'ouverture faisait timeout).
+  await expect(modal.locator('.di-facts .di-fact').first()).toBeVisible({
+    timeout: 20_000,
+  });
+  const finTab = modal.locator('.di-tab', { hasText: 'Finances' });
+  await finTab.click();
+  await expect(finTab).toHaveClass(/di-tab--active/);
   await expect(modal.locator('.di-fin-row--total')).toBeVisible({
     timeout: 20_000,
   });

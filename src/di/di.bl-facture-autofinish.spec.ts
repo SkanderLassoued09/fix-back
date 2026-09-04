@@ -264,6 +264,7 @@ describe('DiService.changeStatusTofinsh — DI réparée → WAITING_BL', () => 
     svc.statsService = {
       updateStatus: jest.fn().mockResolvedValue(undefined),
       closeDiagLeg: jest.fn().mockResolvedValue(null),
+      closeRepLeg: jest.fn().mockResolvedValue(null),
     };
     svc.discordHookService = {
       sendDiFinished: jest.fn().mockResolvedValue(undefined),

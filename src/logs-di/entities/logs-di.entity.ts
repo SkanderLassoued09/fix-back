@@ -106,6 +106,16 @@ export class DiLogsDocument extends Document {
 }
 export const DiLogsSchema = SchemaFactory.createForClass(DiLogsDocument);
 
+// UNE seule ligne de snapshot par (DI, cycle de retour). Sans cette contrainte,
+// `logsDiService.create` — appelé à chaque affectation de technicien — insérait
+// une 2e ligne lors d'une réaffectation : l'écriture du verdict (findOneAndUpdate)
+// et sa lecture (findOne) pouvaient alors viser des documents DIFFÉRENTS, et le
+// routeur concluait « pas d'erreur Fixtronix » → PENDING2 → facturation client.
+// Effet de bord corrigé au passage : la liste des retours est indexée PAR POSITION
+// côté front (logsDi[0] = Retour 1), donc un doublon décalait tous les libellés.
+// La collection n'avait jusqu'ici AUCUN index (COLLSCAN à chaque lecture).
+DiLogsSchema.index({ _idDi: 1, idIgnore: 1 }, { unique: true });
+
 @ObjectType()
 export class LogsDi {
   @Field(() => String, { nullable: true })

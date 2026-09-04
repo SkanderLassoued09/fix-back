@@ -71,6 +71,30 @@ export class NotificationService {
     return (profiles as any[]).map((p) => String(p._id));
   }
 
+  /**
+   * `actorId` → nom affichable, en UNE requête pour tout un lot d'événements.
+   * Le journal ne doit jamais montrer un ObjectId : le front le filtre, et la
+   * ligne se lit alors « par — », pire qu'une absence.
+   */
+  async resolveActorNames(
+    ids: Array<string | null | undefined>,
+  ): Promise<Map<string, string>> {
+    const unique = [...new Set(ids.filter(Boolean) as string[])];
+    const out = new Map<string, string>();
+    if (!unique.length) return out;
+    const profiles = await this.profileModel
+      .find({ _id: { $in: unique } }, { firstName: 1, lastName: 1, username: 1 })
+      .lean();
+    for (const p of profiles as any[]) {
+      const name =
+        [p.firstName, p.lastName].filter(Boolean).join(' ').trim() ||
+        p.username ||
+        '';
+      if (name) out.set(String(p._id), name);
+    }
+    return out;
+  }
+
   async emit(input: EmitInput): Promise<SystemEventDocument> {
     // 1) Historique — toujours.
     const event = await this.eventModel.create({

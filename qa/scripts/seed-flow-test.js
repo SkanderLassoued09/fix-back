@@ -92,15 +92,28 @@ const CASES = [
     {
         key: 'ret-fix-rep-nopdr-b', idnum: 'FT-05b', flow: 'RETOUR', err: 'fixtronix', rep: true, pdr: false, via: 'tofinish', expect: 'PENDING3',
         title: 'Retour + erreur Fixtronix COCHÉE + réparable + sans PDR',
-        next: '1) Tech : laisser « Erreur Fixtronix » COCHÉE + décocher PDR → le bouton actif devient '
-            + '« Envoyer vers finir » (« Fin diagnostique retour » se grise) → PENDING3. '
-            + 'Même résultat que FT-05 par l\'autre bouton.',
+        next: '1) Tech : laisser « Erreur Fixtronix » COCHÉE + décocher PDR → « Envoyer vers finir » → PENDING3. '
+            + 'Les DEUX boutons sont cliquables et donnent le MÊME statut (le routage est serveur-autoritaire) : '
+            + 'vérifier que « Fin diagnostique retour » donne aussi PENDING3.',
+    },
+    {
+        // LE CAS SIGNALÉ (« error fixtronix et no pdr → pricing waiting for devis »).
+        // `err: 'none'` ⇒ AUCUN verdict pré-enregistré, ni sur la DI ni sur le log :
+        // c'est l'état réel d'un retour avant que le tech ne tranche. Tous les autres
+        // cas trichent en pré-remplissant le verdict, ce qui masquait le bug.
+        key: 'ret-verdict-vierge', idnum: 'FT-05c', flow: 'RETOUR', err: 'none', rep: true, pdr: false,
+        via: 'manual', expect: 'PENDING3',
+        title: 'Retour SANS verdict pré-saisi — coche « Erreur Fixtronix » toi-même',
+        next: '1) Tech : ouvrir le diagnostic, aller à l\'étape Validation, COCHER « Erreur Fixtronix », '
+            + 'décocher PDR, puis « Fin diagnostique retour » → doit donner PENDING3 (jamais PENDING2/Pricing). '
+            + '2) Bonus : mettre en PAUSE après avoir coché, rouvrir, finir → le verdict doit SURVIVRE '
+            + '(il est collant sur le cycle). 3) Coordinatrice : joindre le devis puis envoyer en réparation.',
     },
     {
         key: 'ret-fix-nr', idnum: 'FT-06', flow: 'RETOUR', err: 'fixtronix', rep: false, pdr: false, expect: 'IRREPARABLE',
         title: 'Retour + erreur Fixtronix + NON réparable',
-        next: '1) Tech : décocher « réparable » → seul « Envoyer vers finir » reste actif → IRREPARABLE. '
-            + 'Magasin sauté, aucune facturation.',
+        next: '1) Tech : décocher « réparable » → « Envoyer vers finir » → IRREPARABLE. '
+            + 'Magasin sauté, aucune facturation. Les deux boutons restent cliquables et donnent le même statut.',
     },
     {
         key: 'ret-cli-rep-pdr', idnum: 'FT-07', flow: 'RETOUR', err: 'client', rep: true, pdr: true, expect: 'MagasinEstimation',
@@ -118,8 +131,8 @@ const CASES = [
     {
         key: 'ret-cli-nr', idnum: 'FT-09', flow: 'RETOUR', err: 'client', rep: false, pdr: false, expect: 'IRREPARABLE',
         title: 'Retour + erreur client + NON réparable',
-        next: '1) Tech : décocher « réparable » → seul « Envoyer vers finir » reste actif → IRREPARABLE. '
-            + 'En retour, on ne re-facture pas.',
+        next: '1) Tech : décocher « réparable » → « Envoyer vers finir » → IRREPARABLE. '
+            + 'En retour, on ne re-facture pas. Les deux boutons donnent le même statut.',
     },
 ];
 
@@ -181,7 +194,7 @@ async function seedDoc(db, id, idnum, c, now, extraDesc) {
         isPdr: c.pdr, isReparable: c.rep,
         // Absent = payant (comportement historique) ; `false` = non facturé.
         ...(c.payant === false ? { diagnosticPayant: false } : {}),
-        ...(isRetour ? { isErrorFromFixtronix: fixtronix } : {}),
+        ...(isRetour && c.err !== 'none' ? { isErrorFromFixtronix: fixtronix } : {}),
         di_category_id: 'CAT-FLOWTEST', client_id: client?._id ?? null,
         createdBy: TECH, current_workers_ids: [TECH],
         current_roles: c.parked ? ['Magasin'] : ['Tech'],
@@ -197,7 +210,9 @@ async function seedDoc(db, id, idnum, c, now, extraDesc) {
         await db.collection('logsdis').insertOne({
             _id: `log-${id}`, _idDi: id, idIgnore: ignoreCount,
             can_be_repaired: c.rep, contain_pdr: c.pdr, array_composants: comps,
-            isErrorFromFixtronix: fixtronix, createdAt: now, updatedAt: now,
+            // `none` = verdict non tranché (l'état réel avant saisie du tech).
+            ...(c.err === 'none' ? {} : { isErrorFromFixtronix: fixtronix }),
+            createdAt: now, updatedAt: now,
         });
     }
 }
@@ -222,6 +237,14 @@ async function seedDoc(db, id, idnum, c, now, extraDesc) {
     // 2) VÉRIFICATION (DI temporaires, supprimées ensuite).
     const results = [];
     for (const c of [...CASES, ...PARKED_CASES]) {
+        // `via:'manual'` : tout l'intérêt du cas est que le TECH saisisse le
+        // verdict dans le modal. Le déclencher par l'API sans ce geste donnerait
+        // PENDING2 — ce qui est CORRECT (aucune erreur Fixtronix déclarée) mais
+        // afficherait un ❌ trompeur. Il est amorcé, pas auto-vérifié.
+        if (c.via === 'manual') {
+            results.push({ ...c, err: undefined, got: '(test manuel)', ok: null });
+            continue;
+        }
         const vid = 'DI_verify_' + c.key;
         await seedDoc(db, vid, c.idnum, c, now);
         const r = await gql(finishMutation(c, vid));
@@ -270,8 +293,8 @@ async function seedDoc(db, id, idnum, c, now, extraDesc) {
     console.log('\n════════ VÉRIFICATION DU ROUTAGE (back, chemin réel) ════════');
     let allOk = true;
     for (const r of results) {
-        const mark = r.ok ? '✅' : '❌';
-        if (!r.ok) allOk = false;
+        const mark = r.ok === null ? '✋' : r.ok ? '✅' : '❌';
+        if (r.ok === false) allOk = false;
         console.log(`  ${mark} ${r.idnum}  ${r.title.padEnd(46)} attendu=${r.expect.padEnd(18)} obtenu=${r.got}${r.err ? '  ⚠ ' + r.err : ''}`);
     }
     console.log(`\n  ${allOk ? '✅ 100% — tous les flux routent correctement.' : '❌ Des flux échouent (voir ci-dessus).'}`);

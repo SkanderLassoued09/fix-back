@@ -82,6 +82,14 @@ export const DI_TRANSITIONS = {
   MAGASIN_TECH_TO_PENDING3: {
     key: 'MAGASIN_TECH_TO_PENDING3',
     from: [
+      // `DIAGNOSTIC` manquait ici alors que les deux appelants
+      // (`changeStatusPending2` et `changeStatusTofinsh`) l'acceptent dans leur
+      // liste `fromDiagnostic` : un technicien reprenant un modal restauré sur
+      // une DI restée en DIAGNOSTIC obtenait une 500 et la DI ne bougeait pas.
+      // Ce qui décide, c'est la condition métier (retour + sans PDR +
+      // Fixtronix), pas une nuance de statut — refuser ici, c'est exactement le
+      // faux négatif qui renvoie la DI en PENDING2, donc en facturation.
+      STATUS_DI.Diagnostic.status,
       STATUS_DI.InDiagnostic.status,
       STATUS_DI.DiagnosticInPause.status,
     ],
