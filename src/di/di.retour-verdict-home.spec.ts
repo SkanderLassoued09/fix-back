@@ -46,6 +46,9 @@ function makeSvc(di: any, cycleLog: any) {
   svc.logsDiService = {
     getLogsById: jest.fn().mockResolvedValue(cycleLog),
     tech_startDiagnostic: jest.fn().mockResolvedValue({ ...cycleLog }),
+    // Chemin d'ecriture unique : la ligne de cycle ET le miroir DI.
+    upsertCycle: jest.fn().mockResolvedValue({ ...cycleLog }),
+    closeCycle: jest.fn().mockResolvedValue(null),
   };
   svc.discordHookService = {
     sendDiInMagasin: jest.fn().mockResolvedValue(undefined),
@@ -109,11 +112,19 @@ describe('FT-05 — le verdict du cycle retour doit survivre jusqu’au routeur'
       remarque_tech_diagnostic: 'RAS',
     });
 
-    const [, update] = svc.diModel.findOneAndUpdate.mock.calls[0];
-    expect(update.$set.isErrorFromFixtronix).toBe(true);
-    expect(update.$set.can_be_repaired).toBe(true);
-    // La ligne de cycle reste écrite en plus (archive par retour).
-    expect(svc.logsDiService.tech_startDiagnostic).toHaveBeenCalled();
+    // Le miroir DI porte le verdict du cycle COURANT (c'est lui que le routeur
+    // Fixtronix lit) …
+    const [, mirror] = svc.diModel.updateOne.mock.calls[0];
+    expect(mirror.$set.isErrorFromFixtronix).toBe(true);
+    expect(mirror.$set.can_be_repaired).toBe(true);
+
+    // … et la ligne du cycle 1 porte EXACTEMENT le meme verdict : c'est elle
+    // qui restera l'archive du retour une fois le cycle suivant ouvert.
+    const [diId, cycle, patch] = svc.logsDiService.upsertCycle.mock.calls[0];
+    expect(diId).toBe('DI1');
+    expect(cycle).toBe(1);
+    expect(patch.isErrorFromFixtronix).toBe(true);
+    expect(patch.can_be_repaired).toBe(true);
   });
 
   it('n’A-RÉARME PAS le décrément de stock en retour (sinon double décrément)', async () => {
@@ -128,9 +139,13 @@ describe('FT-05 — le verdict du cycle retour doit survivre jusqu’au routeur'
       remarque_tech_diagnostic: 'RAS',
     });
 
-    const [, update] = svc.diModel.findOneAndUpdate.mock.calls[0];
-    // Le cycle retour décrémente déjà via componentConfirmedFromCoordinator.
-    expect(update.$set).not.toHaveProperty('stockDecrementedAt');
+    const [, mirror] = svc.diModel.updateOne.mock.calls[0];
+    // En retour le marqueur est ré-armé à l'ouverture du cycle
+    // (RETOUR_CYCLE_RESET) ; le décrément unique passe par
+    // commitStockDecrementOnce.
+    expect(mirror.$set).not.toHaveProperty('stockDecrementedAt');
+    const [, , patch] = svc.logsDiService.upsertCycle.mock.calls[0];
+    expect(patch).not.toHaveProperty('stockDecrementedAt');
   });
 
   it('le flux ORIGINAL ré-arme toujours le décrément de stock', async () => {
@@ -148,9 +163,13 @@ describe('FT-05 — le verdict du cycle retour doit survivre jusqu’au routeur'
       remarque_tech_diagnostic: 'RAS',
     });
 
-    const [, update] = svc.diModel.findOneAndUpdate.mock.calls[0];
-    expect(update.$set.stockDecrementedAt).toBeNull();
-    expect(svc.logsDiService.tech_startDiagnostic).not.toHaveBeenCalled();
+    const [, mirror] = svc.diModel.updateOne.mock.calls[0];
+    expect(mirror.$set.stockDecrementedAt).toBeNull();
+    // Le flux original ecrit desormais LUI AUSSI sa ligne de cycle (cycle 0) :
+    // c'est ce qui donne au dossier « Flux original » un support propre, au
+    // lieu de lire la DI que les cycles suivants ecrasaient.
+    const [, cycle] = svc.logsDiService.upsertCycle.mock.calls[0];
+    expect(cycle).toBe(0);
   });
 
   it('une pause avec la case DÉCOCHÉE n’efface pas un verdict déjà posé', async () => {
@@ -171,12 +190,12 @@ describe('FT-05 — le verdict du cycle retour doit survivre jusqu’au routeur'
       remarque_tech_diagnostic: 'RAS',
     });
 
-    const [, update] = svc.diModel.findOneAndUpdate.mock.calls[0];
-    expect(update.$set.isErrorFromFixtronix).toBe(true);
-    // Le snapshot de cycle doit porter la MÊME valeur que la DI.
-    const [, , loggedDiag] =
-      svc.logsDiService.tech_startDiagnostic.mock.calls[0];
-    expect(loggedDiag.isErrorFromFixtronix).toBe(true);
+    const [, mirror] = svc.diModel.updateOne.mock.calls[0];
+    expect(mirror.$set.isErrorFromFixtronix).toBe(true);
+    // La ligne de cycle porte la MÊME valeur que le miroir — invariant du
+    // chemin d'écriture unique.
+    const [, , patch] = svc.logsDiService.upsertCycle.mock.calls[0];
+    expect(patch.isErrorFromFixtronix).toBe(true);
   });
 
   it('un retour dont la faute est CLIENT reste à false', async () => {
@@ -194,8 +213,8 @@ describe('FT-05 — le verdict du cycle retour doit survivre jusqu’au routeur'
       remarque_tech_diagnostic: 'RAS',
     });
 
-    const [, update] = svc.diModel.findOneAndUpdate.mock.calls[0];
-    expect(update.$set.isErrorFromFixtronix).toBe(false);
+    const [, mirror] = svc.diModel.updateOne.mock.calls[0];
+    expect(mirror.$set.isErrorFromFixtronix).toBe(false);
   });
 
   it('changeStatusPending2 route vers PENDING3, JAMAIS PENDING2', async () => {

@@ -5,6 +5,9 @@
   "description": "Playwright QA harness for Fixtronix ERP. Vendored under fix-back/qa so a clone has the full test suite. Runs against a dev-managed backend (:3000) + frontend (:4200).",
   "scripts": {
     "verify:auth": "playwright test --project=setup",
+    "seed": "node scripts/seed-scenarios.mjs",
+    "seed:clean": "node scripts/seed-scenarios.mjs --clean",
+    "seed:only": "node scripts/seed-scenarios.mjs --no-verify",
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",

@@ -8,7 +8,13 @@ import { LocationDocument } from 'src/location/entities/location.entity';
 export class StatDocument extends Document {
   @Prop({ unique: true })
   _id: string;
-  @Prop({ unique: true })
+  // PAS `unique` : le modele est UNE ligne PAR CYCLE, donc plusieurs lignes
+  // partagent le meme `_idDi` (jusqu'a 4 : cycle 0 + 3 retours). La contrainte
+  // ne s'etait jamais materialisee grace a `autoIndex: false` — mais un
+  // `syncIndexes()` l'aurait creee et aurait fait echouer `createStat` des le
+  // 2e cycle (E11000). L'unicite correcte est le COUPLE (_idDi, ignoreCount),
+  // declaree plus bas.
+  @Prop()
   _idDi: string;
   @Prop()
   id_tech_diag: string;
@@ -129,6 +135,12 @@ export class StatDocument extends Document {
   }>;
 }
 export const StatSchema = SchemaFactory.createForClass(StatDocument);
+// UNE seule ligne de stats par (DI, cycle) — pendant exact de l'index unique
+// `{_idDi, idIgnore}` de `logsdis`. Sert aussi de couverture d'index pour la
+// requete chaude `{_idDi, ignoreCount}` : la collection n'avait AUCUN index
+// hors `_id` (COLLSCAN a chaque lecture de temps). `autoIndex: false` reste :
+// l'index est cree explicitement par la migration 014.
+StatSchema.index({ _idDi: 1, ignoreCount: 1 }, { unique: true });
 
 @ObjectType()
 export class StatsCount {

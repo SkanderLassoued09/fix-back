@@ -169,7 +169,7 @@ _(Per brief E6 — log anything created via the app's UI/API to make a path test
 - **Note:** Real authorization must be enforced server-side; UI access ≠ data access. The genuine gate is whether the **backend** honors a forged token — tested in Area 2 (permission gap) and Area 5.
 - **Confirms documented issue?** Yes — S9.
 
-### [High] F4 — `JwtAuthGuard` does not enforce authentication (auth bypass on the "guarded" mutations)
+### ✅ [High] F4 — `JwtAuthGuard` does not enforce authentication (auth bypass on the "guarded" mutations) — **FIXED 2026-09-10**
 - **Severity:** High (Critical if the API is reachable beyond a trusted LAN)
 - **Area:** permissions/auth (backend) · **Roles:** n/a (anonymous)
 - **Description:** The four mutations decorated `@UseGuards(JwtAuthGuard)` (`createDi`, `confirmDiComponents`, `sendDiToAdminsForPricing`, `componentConfirmedFromCoordinator`) execute for callers **with no token at all**. An anonymous `confirmDiComponents(diId:"0000…")` returns a domain **404 "DI … not found"** (the resolver/service ran) instead of "Unauthorized".
@@ -178,6 +178,7 @@ _(Per brief E6 — log anything created via the app's UI/API to make a path test
 - **Root cause:** [`fix-back/src/auth/jwt-auth-guard.ts`](../fix-back/src/auth/jwt-auth-guard.ts) overrides Passport's `handleRequest` as `if (user) return user;` with **no `else throw`**. Returning `undefined` (instead of throwing) makes `canActivate` resolve truthy, so unauthenticated/invalid-token requests pass through with `req.user = undefined`.
 - **Evidence:** A2 test "FINDING: JwtAuthGuard does NOT block anonymous calls" (+ attached `A2-authguard-bypass.json`).
 - **Suggested fix:** `handleRequest(err, user) { if (err || !user) throw err || new UnauthorizedException(); return user; }`. Then add real authorization (a working role guard) on state-changing mutations.
+- **Status:** ✅ Fixed 2026-09-10 — the suggested fix was applied verbatim in [`fix-back/src/auth/jwt-auth-guard.ts`](../fix-back/src/auth/jwt-auth-guard.ts) (throws `UNAUTHENTICATED`, and no longer swallows `err`). Unit-covered by `src/auth/jwt-auth-guard.spec.ts`; the A2 exploratory test was inverted and now asserts the rejection. This also removed the recurring 500s `Cannot read properties of undefined (reading '_id')` on `unreadNotificationCount` / `getDiStatusCounts` (20 occurrences logged Jun–Aug).
 - **Confirms documented issue?** Extends/worsens **S3** — the *few* mutations that looked protected are not. Combined with S3 (most resolvers unguarded), the **entire mutation surface is effectively unauthenticated**.
 
 ### [Minor] F5 — GraphQL error responses leak server stack traces and absolute file paths
@@ -188,7 +189,7 @@ _(Per brief E6 — log anything created via the app's UI/API to make a path test
 - **Suggested fix:** Disable stacktraces in production (Apollo `includeStacktraceInErrorResponses: false` / format errors); also relates to **S6** (Playground/introspection on in prod).
 - **Confirms documented issue?** Related to S6.
 
-### [Info — confirmed gap] F6 — No role-based route guard; low-privilege roles can deep-link into admin views (S3/S4)
+### ✅ [Info] F6 — No role-based route guard — **FIXED 2026-09-10** (front only)
 - **Severity:** Info (confirms documented gap)
 - **Area:** navigation/permissions (frontend)
 - **Description:** A `TECH` session can navigate directly to `/profiles/profile/profile-list` and `/tickets/ticket/ticket-list` (admin/manager screens) — the pages load; only the menu hides them.
@@ -201,7 +202,7 @@ _(Per brief E6 — log anything created via the app's UI/API to make a path test
 - **Evidence:** A2 "TECH token can read the staff list" test.
 - **Confirms documented issue?** Yes — S3/S4.
 
-### [Minor] F8 — Dashboard route loads for every role, including those whose menu hides/omits it
+### ✅ [Minor] F8 — Dashboard route loads for every role — **FIXED 2026-09-10**
 - **Severity:** Minor (the Phase-3 item you flagged)
 - **Area:** navigation (frontend)
 - **Description:** After login the app always routes to `/`. `TECH`/`MANAGER` show a dead "Statistique" menu label (no `routerLink`) and `COORDIANTOR`/`MAGASIN` have no dashboard item at all, yet all of them can sit on the full dashboard at `/`. The page **loads without an uncaught error** for these roles (no crash observed); whether they *should* see KPI data is a product question.

@@ -3,6 +3,7 @@ import { DiCategoryService } from './di_category.service';
 import { DiCategoryResolver } from './di_category.resolver';
 import { MongooseModule } from '@nestjs/mongoose';
 import { DiCategorySchema } from './entities/di_category.entity';
+import { NotificationModule } from '../notifications/notification.module';
 
 @Module({
   providers: [DiCategoryResolver, DiCategoryService],
@@ -13,6 +14,9 @@ import { DiCategorySchema } from './entities/di_category.entity';
         schema: DiCategorySchema,
       },
     ]),
+    // Exporte `NotificationService` : le resolver s'en sert pour prévenir
+    // l'encadrement d'une nouvelle catégorie du référentiel partagé.
+    NotificationModule,
   ],
   exports: [DiCategoryService],
 })

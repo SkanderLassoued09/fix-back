@@ -24,4 +24,18 @@ export class DiCategory {
   category: string;
   @Field({ nullable: true })
   isDeleted: boolean;
+
+  /**
+   * Champ de RÉPONSE (jamais persisté — il n'existe pas sur
+   * `DiCategoryDocument`) : `true` quand `createDiCategory` a réellement
+   * inséré la catégorie, `false` quand le nom était déjà pris et que le
+   * document EXISTANT est renvoyé.
+   *
+   * Sans lui l'appelant ne peut pas distinguer les deux cas : le service
+   * renvoie le doublon en silence (pas de `ConflictException`, contrairement
+   * à `Composant_Category`). Un « Catégorie créée » et une notification
+   * partiraient alors à chaque quasi-doublon.
+   */
+  @Field({ nullable: true })
+  created?: boolean;
 }

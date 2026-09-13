@@ -13,6 +13,10 @@ import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
 import { DiArchiveModule } from 'src/di-archive/di-archive.module';
 import { ReunionPVModule } from 'src/reunion-pv/reunion-pv.module';
 import { DbBackupModule } from 'src/db-backup/db-backup.module';
+// Consommé par `triggerSessionCleanup` (minuit Africa/Tunis).
+import { SessionCleanupModule } from '../session-cleanup/session-cleanup.module';
+// Consommé par `triggerNotificationPurge` (03 h Africa/Tunis).
+import { NotificationPurgeModule } from '../notification-purge/notification-purge.module';
 
 @Module({
   imports: [
@@ -33,6 +37,8 @@ import { DbBackupModule } from 'src/db-backup/db-backup.module';
     // Exposes DbBackupService, consumed by
     // AppCronService.triggerBackupDbToDrive (BACKUP_DB_TO_DRIVE).
     DbBackupModule,
+    SessionCleanupModule,
+    NotificationPurgeModule,
     ScheduleModule.forRoot(),
   ],
   providers: [AppCronService, NotificationsGateway],

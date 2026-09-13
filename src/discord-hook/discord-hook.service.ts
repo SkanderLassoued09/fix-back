@@ -20,6 +20,14 @@ type ChannelKey =
   | 'ERROR'
   | 'APP_ALERT';
 
+/**
+ * Salon du rappel matinal du magasin (stock bas + fiches à compléter).
+ * Cible FONCTIONNELLE = `DEMANDE_PDF` (demande PDR) ; on reste sur `APP_ALERT`
+ * en attendant l'arbitrage. Bascule = cette seule ligne (les deux webhooks sont
+ * déjà renseignés dans les 3 `.env`).
+ */
+const STOCK_REMINDER_CHANNEL: ChannelKey = 'APP_ALERT';
+
 // Centralized human-readable status labels with color emoji prefix.
 // New raw enum values added to STATUS_DI MUST be added here so embeds
 // never leak the raw enum name to Discord.
@@ -39,8 +47,8 @@ const STATUS_LABELS: Record<string, string> = {
   PENDING2: '📦 En attente de facturation',
   // Renommé : PRICING → PRICING_DIAG (clé legacy conservée pour les
   // DI/logs pas encore migrés).
-  PRICING: '💰 Pricing',
-  PRICING_DIAG: '💰 Pricing',
+  PRICING: '💰 PRICING',
+  PRICING_DIAG: '💰 PRICING',
   // Phase Approval documentaire — SPLIT en WAITING_DEVIS → WAITING_BC (clés
   // legacy NEGOTIATION1/ATTENTE_BC_DEVIS conservées pour les DI pas encore migrées).
   WAITING_DEVIS: '🤝 Approval — attente devis',
@@ -90,14 +98,22 @@ interface EmbedContext {
 /**
  * 🔕 INTERRUPTEUR TEMPORAIRE DES NOTIFICATIONS DISCORD.
  *
- * `true` → seules RETOUR (1/2/3) et STAGNATION DI sont émises ; tous les autres
- * types (pending, assigned, pricing, finished, diagnostic, réparation, PV,
- * digest DiArchive…) sont coupés à la source via le gate de `postEmbed`. Aucune
- * donnée n'est supprimée ; les émetteurs restent dans le code.
+ * `true` → seules RETOUR (1/2/3), STAGNATION DI et le RAPPEL STOCK MAGASIN
+ * sont émis ; tous les autres types (pending, assigned, pricing, finished,
+ * diagnostic, réparation, PV, digest DiArchive…) sont coupés à la source via le
+ * gate de `postEmbed`. Aucune donnée n'est supprimée ; les émetteurs restent
+ * dans le code.
+ *
+ * Les trois exceptions appellent `deliverEmbed` DIRECTEMENT (hors gate). Toute
+ * nouvelle exception doit faire pareil ET être listée ici, sinon la prochaine
+ * lecture du code croira le canal muet.
  *
  * ▶️ POUR TOUT RÉACTIVER : repasser cette constante à `false` (une seule ligne).
  */
 const DISCORD_NOTIFS_DISABLED = true;
+
+/** Plafond d'attente d'un webhook Discord. Voir `deliverEmbed`. */
+const DISCORD_TIMEOUT_MS = 5000;
 
 @Injectable()
 export class DiscordHookService {
@@ -139,11 +155,20 @@ export class DiscordHookService {
     channel: ChannelKey,
     payload: object,
   ): Promise<void> {
-    // 🔕 GATE TEMPORAIRE — Discord réduit à RETOUR (1/2/3) + STAGNATION.
-    // Toutes les autres notifications (~28 types + le digest DiArchive externe)
-    // passent par ici et sont donc coupées À LA SOURCE. Retour & stagnation
-    // appellent `deliverEmbed` directement pour NE PAS être gated.
-    // ▶️ Pour tout réactiver : passer DISCORD_NOTIFS_DISABLED à false.
+    // 🔕 GATE TEMPORAIRE — Discord réduit au strict nécessaire. Toutes les
+    // notifications du FLUX DI (~28 types) passent par ici et sont coupées À
+    // LA SOURCE.
+    //
+    // EXCEPTIONS (appellent `deliverEmbed` DIRECTEMENT, donc non gated) :
+    //   - RETOUR 1/2/3, STAGNATION, RAPPEL STOCK MAGASIN, SAUVEGARDE BDD ;
+    //   - canal ERROR (`sendOperationalError`) — canal d'ALERTE, pas du bruit
+    //     DI : coupé, les pannes n'étaient plus visibles que dans un fichier
+    //     de log que personne ne surveille ;
+    //   - digest DiArchive (`sendDiArchiveDigest`) — aucun autre canal : le
+    //     cron calculait tout et ne publiait rien.
+    // ▶️ Pour réactiver le flux DI : passer DISCORD_NOTIFS_DISABLED à false.
+    //    ⚠️ Avant de le faire : il n'y a ni file d'attente ni gestion du 429
+    //    (Discord limite à ~5 req/s par webhook).
     if (DISCORD_NOTIFS_DISABLED) {
       return;
     }
@@ -151,8 +176,8 @@ export class DiscordHookService {
   }
 
   /** Envoi bas-niveau réel vers le webhook Discord (sans gate). Utilisé
-   *  directement par les seules notifications conservées (retour + stagnation)
-   *  et par `postEmbed` quand le gate est ouvert. */
+   *  directement par les seules notifications conservées (retour, stagnation,
+   *  rappel stock magasin) et par `postEmbed` quand le gate est ouvert. */
   private async deliverEmbed(
     channel: ChannelKey,
     payload: object,
@@ -168,10 +193,20 @@ export class DiscordHookService {
       return;
     }
     try {
-      await axios.post(url, payload);
+      // TIMEOUT OBLIGATOIRE : axios attend indéfiniment par défaut
+      // (`timeout: 0`). Or 31 de ces envois sont `await`és DANS des mutations
+      // DI : un webhook qui pend bloquait la mutation, donc la requête du
+      // technicien, sans limite.
+      await axios.post(url, payload, { timeout: DISCORD_TIMEOUT_MS });
     } catch (err) {
+      // Le CODE HTTP est journalisé : sans lui, un 429 (limite de débit
+      // Discord — 4 cas constatés dans les journaux) était indiscernable
+      // d'un 404 ou d'une panne réseau.
+      const status = (err as any)?.response?.status;
       this.logger.warn(
-        `Discord post to "${channel}" failed: ${(err as Error)?.message}`,
+        `Discord post to "${channel}" failed${
+          status ? ` [HTTP ${status}]` : ''
+        }: ${(err as Error)?.message}`,
       );
     }
   }
@@ -1012,7 +1047,12 @@ export class DiscordHookService {
       payloadPreview = '```json\n' + (json.length > 800 ? json.slice(0, 797) + '...' : json) + '\n```';
     }
 
-    await this.postEmbed('ERROR', {
+    // HORS GATE (`deliverEmbed`) : le gate visait le BRUIT du flux DI, pas le
+    // canal d'ALERTE. Passé par `postEmbed`, il était coupé lui aussi — les
+    // pannes opérationnelles n'étaient alors plus visibles QUE dans
+    // `logs/YYYY-MM/errors-*.log`, un fichier que personne ne surveille. Même
+    // traitement que les alertes de sauvegarde BDD.
+    await this.deliverEmbed('ERROR', {
       embeds: [
         {
           title: `${severityEmoji[entry.severity] ?? '⚠️'} FIXTRONIX · Erreur opérationnelle`,
@@ -1096,6 +1136,30 @@ export class DiscordHookService {
    * is silent by design defeats its own purpose. The whole point of the daily
    * success line is that its ABSENCE is the alarm — so it must never be gated.
    */
+  /**
+   * Digest quotidien de complétude documentaire DiArchive.
+   *
+   * HORS GATE (`deliverEmbed`) : ce digest n'a AUCUN autre canal — ni cloche ni
+   * journal. Passé par `postEmbed`, le cron de 08 h interrogeait la base,
+   * calculait tout et ne publiait rien.
+   *
+   * Sender TYPÉ : l'appelant passait `postEmbed` en direct, seul endroit du
+   * dépôt à dépendre de ce détail d'implémentation.
+   */
+  async sendDiArchiveDigest(description: string): Promise<void> {
+    await this.deliverEmbed('APP_ALERT', {
+      embeds: [
+        {
+          title: '📊 FIXTRONIX · Suivi documentaire DiArchive',
+          description,
+          color: 16289308, // amber — constant across cases per user spec
+          footer: { text: 'Fixtronix · Digest quotidien' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
   async sendDbBackupSuccess(info: {
     fileName: string;
     dbName: string;
@@ -1379,6 +1443,75 @@ export class DiscordHookService {
               ]
             : [],
           footer: { text: 'Fixtronix · Rappel stagnation quotidien' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  /**
+   * Rappel matinal du magasin — 08:00 Africa/Tunis, lun–ven. UN embed qui
+   * reprend les deux sujets : le stock bas (§1) et les fiches dont un champ clé
+   * est vide (§2). Chaque bloc n'apparaît que s'il a quelque chose à dire, et
+   * l'appelant ne poste rien quand tout est propre.
+   *
+   * Passe par `deliverEmbed` — PAS `postEmbed` — pour contourner
+   * `DISCORD_NOTIFS_DISABLED`, comme retour et stagnation : c'est un rappel
+   * quotidien demandé explicitement, il ne doit pas tomber dans la vanne.
+   */
+  async sendMagasinStockReminder(report: {
+    threshold: number;
+    rupture: { count: number; examples: string };
+    low: { count: number; examples: string };
+    incomplete: {
+      affected: number;
+      status: number;
+      price: number;
+      qty: number;
+      examples: string;
+    };
+  }): Promise<void> {
+    const when = new Intl.DateTimeFormat('fr-FR', {
+      timeZone: 'Africa/Tunis',
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(new Date());
+
+    const fields: Array<{ name: string; value: string }> = [];
+    if (report.rupture.count) {
+      fields.push({
+        name: `\u{1F534} Rupture (${report.rupture.count})`,
+        value: report.rupture.examples || '—',
+      });
+    }
+    if (report.low.count) {
+      fields.push({
+        name: `\u{1F7E0} Bientôt vide \u2264${report.threshold} (${report.low.count})`,
+        value: report.low.examples || '—',
+      });
+    }
+    if (report.incomplete.affected) {
+      fields.push({
+        name: `\u{1F4DD} Fiches à compléter (${report.incomplete.affected})`,
+        value:
+          `Statut : ${report.incomplete.status} · Prix : ${report.incomplete.price} · ` +
+          `Quantité : ${report.incomplete.qty}\n` +
+          (report.incomplete.examples || '—'),
+      });
+    }
+
+    const summary = report.incomplete.affected
+      ? `Une fiche au statut vide n'est ni décrémentée ni surveillée : la compléter la fait entrer dans le suivi de stock.`
+      : `Stock à réapprovisionner.`;
+
+    await this.deliverEmbed(STOCK_REMINDER_CHANNEL, {
+      embeds: [
+        {
+          title: '\u{1F4E6} Rappel matinal — stock magasin',
+          description: `${summary}\n${when} (Africa/Tunis).`,
+          color: 16289308, // orange (WARNING)
+          fields,
+          footer: { text: 'Fixtronix · Rappel stock magasin' },
           timestamp: new Date().toISOString(),
         },
       ],

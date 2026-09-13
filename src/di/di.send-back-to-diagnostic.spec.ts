@@ -68,9 +68,13 @@ describe('Renvoyer au diagnostic — PRICING → PENDING1', () => {
         }),
       );
       expect(res.status).toBe('PENDING1');
+      // Le CYCLE est toujours passe (0 pour le flux original). Sans lui, la
+      // requete `{_idDi}` seule tapait la ligne Stat en ordre naturel — donc
+      // celle du cycle 0 meme pour une DI en retour.
       expect(svc.statsService.updateStatus).toHaveBeenCalledWith(
         'DI1',
         'PENDING1',
+        0,
       );
     });
 

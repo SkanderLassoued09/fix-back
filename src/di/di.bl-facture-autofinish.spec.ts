@@ -35,8 +35,22 @@ function makeGateSvc(states: any[], updateResults: any[] = []) {
     sendDiStatusPending3: jest.fn().mockResolvedValue(undefined),
   };
   svc.notificationGateway = { updateTicket: jest.fn() };
+  // `broadcastDiStatusChange` (diffusion temps réel des sauts intermédiaires)
+  // enrichit le payload avec les ids technicien lus sur le Stat.
+  svc.statModel = {
+    findOne: jest.fn().mockReturnValue({
+      lean: () => ({ exec: () => Promise.resolve(null) }),
+    }),
+  };
   svc.captureDiscordFailure = jest.fn();
   return svc;
+}
+
+/** Dernier `updateTicket` diffusé — les listes du front n'utilisent que
+ *  `content.states` (cf. notification.service.ts, case 'updateTicket'). */
+function lastBroadcast(svc: any) {
+  const calls = svc.notificationGateway.updateTicket.mock.calls;
+  return calls[calls.length - 1]?.[0];
 }
 
 describe('DiService.maybeAdvanceDocGate — chaîne de clôture', () => {
@@ -86,6 +100,12 @@ describe('DiService.maybeAdvanceDocGate — chaîne de clôture', () => {
       STATUS_DI.WaitingFacture.status,
     );
     expect(svc.discordHookService.sendDiFinished).not.toHaveBeenCalled();
+    // TEMPS RÉEL — jumeau du saut devis → BC : ce palier intermédiaire doit lui
+    // aussi réveiller les listes, sans quoi la DI reste « attente BL » à l'écran.
+    expect(svc.notificationGateway.updateTicket).toHaveBeenCalledTimes(1);
+    expect(lastBroadcast(svc).content.states.status).toBe(
+      STATUS_DI.WaitingFacture.status,
+    );
   });
 
   it('CASCADE : WAITING_BL + BL + facture déjà là → WAITING_FACTURE puis FINISHED (UNE notif finale)', async () => {
@@ -113,6 +133,13 @@ describe('DiService.maybeAdvanceDocGate — chaîne de clôture', () => {
     expect(svc.diModel.findOneAndUpdate).toHaveBeenCalledTimes(2);
     // Aucune notif sur l'état intermédiaire ; UNE seule au FINISHED réel.
     expect(svc.discordHookService.sendDiFinished).toHaveBeenCalledTimes(1);
+    // La diffusion socket, elle, suit CHAQUE saut (palier + FINISHED). Les deux
+    // arrivent à quelques ms d'intervalle et le front les écrase via le
+    // debounce de TicketRefreshService → un seul rechargement de liste.
+    expect(svc.notificationGateway.updateTicket).toHaveBeenCalledTimes(2);
+    expect(lastBroadcast(svc).content.states).toMatchObject({
+      status: STATUS_DI.Finished.status,
+    });
   });
 
   it('legacy CLOSING + BL + facture → FINISHED (comportement historique conservé)', async () => {
@@ -146,17 +173,37 @@ describe('DiService.maybeAdvanceDocGate — chaîne de clôture', () => {
     expect(svc.diModel.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
-  it('retour (ignoreCount > 0) → no-op (docs en logsdis)', async () => {
-    const svc = makeGateSvc([
-      {
-        _id: 'DI1',
-        status: STATUS_DI.WaitingFacture.status,
-        ignoreCount: 2,
-        driveDocs: { BL: REF, Facture: REF },
-      },
-    ]);
+  // CONTRAT INVERSE depuis la separation par cycle. Avant, la porte sortait
+  // immediatement quand `ignoreCount > 0` (« les docs d'un retour vivent en
+  // logsdis ») : une DI de retour restait bloquee en WAITING_FACTURE meme BL
+  // ET facture deposes, alors que l'UI proposait l'upload. Le miroir portant
+  // desormais les documents du CYCLE COURANT, un retour franchit ses propres
+  // portes — et le Stat mis a jour est celui de SON cycle, jamais celui du 0.
+  it('retour (ignoreCount > 0) → la porte avance sur les docs DU CYCLE', async () => {
+    const svc = makeGateSvc(
+      [
+        {
+          _id: 'DI1',
+          status: STATUS_DI.WaitingFacture.status,
+          ignoreCount: 2,
+          driveDocs: { BL: REF, Facture: REF },
+        },
+      ],
+      [{ _id: 'DI1', status: STATUS_DI.Finished.status, ignoreCount: 2 }],
+    );
     await svc.maybeAdvanceDocGate('DI1');
-    expect(svc.diModel.findOneAndUpdate).not.toHaveBeenCalled();
+
+    expect(svc.diModel.findOneAndUpdate).toHaveBeenCalled();
+    const [, update] = svc.diModel.findOneAndUpdate.mock.calls[0];
+    expect(update.$set.status).toBe(STATUS_DI.Finished.status);
+
+    // Le cycle est passe a `updateStatus` : sans cela le statut du retour
+    // serait ecrit sur la ligne Stat du cycle 0 (temps facturable corrompu).
+    const call = svc.statsService.updateStatus.mock.calls.find(
+      (c: any[]) => c[1] === STATUS_DI.Finished.status,
+    );
+    expect(call).toBeDefined();
+    expect(call[2]).toBe(2);
   });
 
   it('concurrent : le perdant (findOneAndUpdate → null) ne re-notifie pas', async () => {
@@ -247,6 +294,12 @@ describe('DiService.maybeAdvanceDocGate — sortie WAITING_BC (routage confirm)'
     expect(svc.diModel.findOneAndUpdate.mock.calls[0][1].$set.status).toBe(
       STATUS_DI.WaitingBc.status,
     );
+    // TEMPS RÉEL — sans cette diffusion la DI passait en WAITING_BC en base et
+    // restait affichée « attente devis » sur tous les écrans jusqu'au F5.
+    expect(svc.notificationGateway.updateTicket).toHaveBeenCalledTimes(1);
+    const sent = lastBroadcast(svc);
+    expect(sent.action).toBe('updateState');
+    expect(sent.content.states.status).toBe(STATUS_DI.WaitingBc.status);
   });
 });
 

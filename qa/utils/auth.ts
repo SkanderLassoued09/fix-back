@@ -18,6 +18,26 @@ export function tokenFor(roleKey: string): string {
   return entry.value as string;
 }
 
+/**
+ * `_id` du profil dont la session est rejouée (lu dans le storageState).
+ *
+ * POURQUOI pas `profileIdByUsername` : le `username` mémorisé dans le
+ * storageState n'est pas toujours celui du profil en base (le compte
+ * coordinatrice est `Rachida`, pas `coordinateur`), alors que l'`_id` stocké au
+ * login est, lui, exact. Pour seeder une notification destinée à l'utilisateur
+ * que le test incarne, c'est CET id qu'il faut.
+ */
+export function userIdFor(roleKey: string): string {
+  const state = JSON.parse(fs.readFileSync(authFile(roleKey), 'utf-8'));
+  const entry = state.origins?.[0]?.localStorage?.find(
+    (e: { name: string }) => e.name === '_id',
+  );
+  if (!entry?.value) {
+    throw new Error(`No _id in storageState for ${roleKey} — run the setup project first.`);
+  }
+  return entry.value as string;
+}
+
 export interface LoginResult {
   /** True only if a token actually landed in localStorage. */
   ok: boolean;

@@ -59,7 +59,14 @@ describe('StatService — diagnostic work legs (server-side accumulation)', () =
     it('stamps the anchor ONLY when no leg is open (filter diagRunStartedAt: null)', async () => {
       await service.openDiagLeg('DI-1');
       const [filter, update] = statModel.updateOne.mock.calls[0];
-      expect(filter).toEqual({ _idDi: 'DI-1', diagRunStartedAt: null });
+      // Le CYCLE fait partie du filtre, 0 compris. Sans lui, une DI ayant aussi
+      // des lignes de retour laissait Mongo choisir en ordre naturel — donc
+      // potentiellement l'ancre d'un AUTRE cycle, sur un temps facturable.
+      expect(filter).toEqual({
+        _idDi: 'DI-1',
+        ignoreCount: 0,
+        diagRunStartedAt: null,
+      });
       expect(update.$set.diagRunStartedAt).toBeInstanceOf(Date);
     });
 

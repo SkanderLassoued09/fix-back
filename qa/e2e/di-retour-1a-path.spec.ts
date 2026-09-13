@@ -74,15 +74,16 @@ test('1A : retour Fixtronix+PDR+réparable atteint bien PENDING3 (via Magasin �
   // vers la poignée de main composants (CONFIRMATION), en sautant PENDING2 et
   // toute la phase tarification/approbation. Séquence serveur-autoritaire
   // complète jusqu'à PENDING3.
-  // NB : en RETOUR, les deux étapes de la poignée de main écrivent le LOG du
-  // cycle et non `di.status` — la DI reste donc en CONFIRMATION jusqu'à
-  // « Fin liste composants » (`changeStatusPending3`).
+  // En RETOUR, la poignée de main suit EXACTEMENT les statuts du flux original
+  // (CONFIRMATION → ATTENTE_CONFIRMATION_COORDINATION → MAGASIN_FINALISATION).
+  // Avant, elle n'écrivait que les drapeaux du log : la DI restait en
+  // CONFIRMATION et la coordinatrice ne pouvait jamais confirmer.
   const token = tokenFor('ADMIN_MANAGER'); // componentConfirmedFromCoordinator = JwtAuthGuard
   const steps: Array<[string, string, string]> = [
     ['changeStatusMagasinEstimation', M(`changeStatusMagasinEstimation(_id: "${ID}")`), 'MagasinEstimation'],
     ['magasinTech_Pending2 (sortie magasin, détournée)', M(`magasinTech_Pending2(_id: "${ID}") { _id status }`), 'CONFIRMATION'],
-    ['sendComponentToConMagasinForConfirmation', M(`sendComponentToConMagasinForConfirmation(_id: "${ID}") { _id status }`), 'CONFIRMATION'],
-    ['componentConfirmedFromCoordinator', M(`componentConfirmedFromCoordinator(_id: "${ID}") { _id status }`), 'CONFIRMATION'],
+    ['sendComponentToConMagasinForConfirmation', M(`sendComponentToConMagasinForConfirmation(_id: "${ID}") { _id status }`), 'ATTENTE_CONFIRMATION_COORDINATION'],
+    ['componentConfirmedFromCoordinator', M(`componentConfirmedFromCoordinator(_id: "${ID}") { _id status }`), 'MAGASIN_FINALISATION'],
     ['changeStatusPending3', M(`changeStatusPending3(_id: "${ID}")`), 'PENDING3'],
   ];
 

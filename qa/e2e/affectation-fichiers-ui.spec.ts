@@ -85,9 +85,13 @@ test('opens redesigned Affectation modal + shows the 4 status cards', async ({
     await expect(page.locator('.af-upload-cell')).toHaveCount(2);
     await expect(page.locator('.af-dropzone')).toHaveCount(2);
 
-    // Footer counter starts at "Aucun fichier en attente." (no pending file).
+    // Footer counter starts at "Aucun nouveau fichier" (no pending file).
+    // NB: l'assertion attendait « Aucun fichier en attente », un libellé qui n'a
+    // JAMAIS existé dans le template (#nothing rend « Aucun nouveau fichier ») —
+    // ce test était donc rouge depuis son écriture. Corrigé côté test : c'est
+    // l'attente qui était fausse, pas l'interface.
     await expect(page.locator('.af-modal__counter')).toContainText(
-        'Aucun fichier en attente',
+        'Aucun nouveau fichier',
     );
 
     // Close via the footer button.

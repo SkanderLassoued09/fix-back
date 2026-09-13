@@ -43,6 +43,10 @@ describe('AppCronService — TEST_DISCORD_CHANNELS', () => {
       {} as any,
       // DbBackupService — not used in TEST_DISCORD_CHANNELS specs.
       {} as any,
+      // SessionCleanupService — not used in TEST_DISCORD_CHANNELS specs.
+      {} as any,
+      // NotificationPurgeService — not used in TEST_DISCORD_CHANNELS specs.
+      {} as any,
     );
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
   });

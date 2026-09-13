@@ -15,13 +15,16 @@ import { withDb } from '../utils/mongo';
  *      ghost values from the modal's prefill logic.
  *   4. Cleanup: the test deletes the row it created so the run is idempotent.
  *
- * Run as ADMIN_TECH because the menu entry is present for that role and
- * the seeded participants/responsables resolve cleanly.
+ * Ces tests naviguent par URL (`page.goto('/tickets/reunions')`), et non par le
+ * menu : l'entrée « Réunions » a été RETIRÉE du menu pour tous les rôles, mais
+ * la route reste ouverte et les listes blanches de `role-routes.ts` inchangées
+ * (un rappel Discord poste un lien vers cette page). Le choix du rôle tient donc
+ * uniquement à la résolution des participants/responsables amorcés.
  */
 
-// ADMIN_MANAGER (seeded "skander") has the Réunions menu entry AND a real
-// profile in the current backend DB — used over ADMIN_TECH (whose seed is
-// not always present in the prod-replica fixture).
+// ADMIN_MANAGER (compte amorcé « skander ») a un vrai profil dans la base
+// courante — retenu plutôt qu'ADMIN_TECH, dont l'amorce n'est pas toujours
+// présente dans la réplique de production.
 test.use({ storageState: authFile('ADMIN_MANAGER') });
 
 const TAG = Date.now().toString(36);

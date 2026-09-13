@@ -26,7 +26,7 @@ Everything under `''` is wrapped by `AppLayoutComponent` and guarded by `authGua
 
 ## Auth & login
 
-- **Guard:** [`auth-guard.ts`](../../fix-front/src/app/demo/components/auth/auth-guard.ts) — a functional `CanActivateFn` that calls `ProfileService.checkAuth()` (token presence in `localStorage`); on failure it removes the token and redirects to `/auth/login`. **There are no role-based route guards** — role gating is purely the menu/UI.
+- **Guard:** [`auth-guard.ts`](../../fix-front/src/app/demo/components/auth/auth-guard.ts) — a functional `CanActivateFn` that calls `ProfileService.checkAuth()` (token presence in `localStorage`); on failure it removes the token and redirects to `/auth/login`. **Role-based route guards are in place since 2026-09-10** (`src/app/shared/role-routes.ts` = matrice rôle→routes, `route-access.guard.ts` posé sur la coquille ; refus ⇒ redirection vers `landingRouteForRole()`). Le rôle venant de `localStorage`, c'est un garde-fou d'ergonomie — l'autorisation réelle reste côté serveur. — role gating is purely the menu/UI.
 - **Login:** `auth/login/login.component.ts` runs the `login` GraphQL mutation (built by `profileService`), then stores in `localStorage`: `token` (the JWT), `_id`, `role`, `username`. The `role` value drives the menu.
 - **Logout:** clears `localStorage` (in the topbar/profile UI).
 

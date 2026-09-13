@@ -10,6 +10,7 @@ import { Profile, ProfileDocument } from './entities/profile.entity';
 import { ROLE } from 'src/auth/roles';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
 import * as bcrypt from 'bcrypt';
+import { GraphQLError } from 'graphql';
 // import { STATUS_TICKET } from 'src/ticket/ticket';
 
 @Injectable()
@@ -162,6 +163,61 @@ export class ProfileService {
     const user = (await this.findOneForAuth(username)) as any;
     if (!user || !user.password) return false;
     return bcrypt.compare(plain, user.password);
+  }
+
+  /**
+   * Changement de mot de passe par l'utilisateur LUI-MÊME.
+   *
+   * `username` vient du JWT — JAMAIS d'un argument client (cf.
+   * `ChangePasswordInput`). Le résultat est un booléen : ni le mot de passe, ni
+   * le hash, ni le profil ne ressortent.
+   *
+   * L'écriture passe par `document.save()` et NON par `findOneAndUpdate` : le
+   * hachage est un hook `pre('save')` (profile.entity.ts) qui ne se déclenche
+   * pas sur les mises à jour par requête. `updateProfile` utilise justement
+   * `findOneAndUpdate` — y faire transiter un mot de passe l'écrirait EN CLAIR
+   * en base. D'où cette méthode séparée.
+   *
+   * @throws GraphQLError BAD_USER_INPUT si le mot de passe actuel est faux, si
+   *   le nouveau est identique, ou si le compte est désactivé.
+   */
+  async changeOwnPassword(
+    username: string,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<boolean> {
+    const bad = (message: string) =>
+      new GraphQLError(message, {
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
+
+    // Un nouveau mot de passe identique à l'ancien est un no-op déguisé :
+    // l'utilisateur croirait l'avoir changé.
+    if (currentPassword === newPassword) {
+      throw bad("Le nouveau mot de passe doit être différent de l'actuel.");
+    }
+
+    // Vérification de l'actuel AVANT toute écriture — réutilise le primitif
+    // bcrypt déjà en place (ne lève jamais, ne divulgue rien).
+    const ok = await this.verifyPassword(username, currentPassword);
+    if (!ok) {
+      throw bad('Mot de passe actuel incorrect.');
+    }
+
+    const doc = await this.profileModel.findOne({ username });
+    if (!doc) {
+      throw bad('Compte introuvable.');
+    }
+    // Le JWT vit 365 jours et ne porte pas `isDeleted` : un compte désactivé
+    // conserve un jeton valide. On re-vérifie donc ici, comme le fait le login.
+    if ((doc as any).isDeleted === true) {
+      throw bad('Compte désactivé.');
+    }
+
+    doc.password = newPassword;
+    // `isModified('password')` est vrai → le hook hache (bcrypt, coût 10).
+    await doc.save();
+    return true;
   }
 
   async getTech(_id: string) {

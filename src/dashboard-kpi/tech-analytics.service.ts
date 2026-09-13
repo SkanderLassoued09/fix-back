@@ -6,9 +6,12 @@ import { ProfileDocument } from 'src/profile/entities/profile.entity';
 import { StatDocument } from 'src/stat/entities/stat.entity';
 import { STATUS_DI } from 'src/di/di.status';
 import { TechLeaderRow } from './entities/dashboard-kpi.entity';
+// Garde partagé avec le reste du tableau de bord : `new Date('n'importe quoi)`
+// donne `Invalid Date`, qui part tel quel au driver et échoue au niveau BSON.
 import {
   FINISHED_STATUSES,
   RETOUR_STATUSES,
+  parseDate,
 } from './dashboard-kpi.service';
 
 /**
@@ -42,14 +45,24 @@ export class TechAnalyticsService {
     endDate?: any,
     limit = 20,
   ): Promise<TechLeaderRow[]> {
-    const s = startDate ? new Date(startDate) : null;
-    const e = endDate ? new Date(endDate) : null;
+    const s = parseDate(startDate);
+    const e = parseDate(endDate);
     const dateMatch: Record<string, any> = {};
     if (s || e) {
       dateMatch.createdAt = {};
       if (s) dateMatch.createdAt.$gte = s;
       if (e) dateMatch.createdAt.$lte = e;
     }
+
+    // Condition unique, partagée par le compteur et la somme : les deux DOIVENT
+    // rester d'accord, sinon la moyenne est fausse.
+    const TAT_SAMPLE = {
+      $and: [
+        { $in: ['$status', FINISHED_STATUSES] },
+        { $ne: ['$createdAt', null] },
+        { $ne: ['$updatedAt', null] },
+      ],
+    };
 
     const pipeline: PipelineStage[] = [
       { $match: dateMatch },
@@ -95,8 +108,31 @@ export class TechAnalyticsService {
           diId: '$_id.di',
           status: '$di.status',
           canBeRepaired: '$di.can_be_repaired',
-          createdAt: '$di.createdAt',
-          updatedAt: '$di.updatedAt',
+          // `$convert … onError: null` — SANS ÇA, UNE SEULE DI FAIT TOMBER TOUT
+          // LE TABLEAU. Le schéma déclare ces champs en Date (via `timestamps`),
+          // mais des documents hérités / édités à la main portent une CHAÎNE, et
+          // `$subtract` sur une chaîne interrompt l'agrégation entière
+          // (« can't $subtract date from string », remonté en 500).
+          //
+          // Une chaîne LISIBLE (« 2026-01-05T00:21:05.543Z ») est récupérée : on
+          // ne perd pas le point de mesure. Une valeur illisible devient `null`
+          // et sera exclue du TAT des deux côtés du ratio (cf. TAT_SAMPLE).
+          createdAt: {
+            $convert: {
+              input: '$di.createdAt',
+              to: 'date',
+              onError: null,
+              onNull: null,
+            },
+          },
+          updatedAt: {
+            $convert: {
+              input: '$di.updatedAt',
+              to: 'date',
+              onError: null,
+              onNull: null,
+            },
+          },
           ignoreCount: '$di.ignoreCount',
         },
       },
@@ -137,13 +173,15 @@ export class TechAnalyticsService {
           nbIrreparables: {
             $sum: { $cond: [{ $eq: ['$canBeRepaired', false] }, 1, 0] },
           },
+          // Une DI ne pèse dans le TAT que si ses DEUX bornes sont exploitables.
+          // `nbTatSamples` est le dénominateur de la moyenne : le réflexe naïf —
+          // exclure du seul numérateur — laisserait la DI dans `nbDiClotures` et
+          // SOUS-ÉVALUERAIT le TAT moyen en silence, ce qui est pire qu'un
+          // plantage visible.
+          nbTatSamples: { $sum: { $cond: [TAT_SAMPLE, 1, 0] } },
           totalTatMs: {
             $sum: {
-              $cond: [
-                { $in: ['$status', FINISHED_STATUSES] },
-                { $subtract: ['$updatedAt', '$createdAt'] },
-                0,
-              ],
+              $cond: [TAT_SAMPLE, { $subtract: ['$updatedAt', '$createdAt'] }, 0],
             },
           },
         },
@@ -166,11 +204,13 @@ export class TechAnalyticsService {
           nbFinishedFtr: 1,
           nbRetours: 1,
           nbIrreparables: 1,
+          nbTatSamples: 1,
           totalTatMs: 1,
         },
       },
       { $sort: { nbDiTraites: -1 } },
-      { $limit: Math.min(limit, 100) },
+      // Borné des DEUX côtés : un `limit` à 0 ou négatif fait échouer $limit.
+      { $limit: Math.max(1, Math.min(limit, 100)) },
     ];
 
     const rows = await this.statModel.aggregate<{
@@ -181,6 +221,7 @@ export class TechAnalyticsService {
       nbFinishedFtr: number;
       nbRetours: number;
       nbIrreparables: number;
+      nbTatSamples: number;
       totalTatMs: number;
     }>(pipeline);
 
@@ -194,8 +235,11 @@ export class TechAnalyticsService {
       const tauxIrreparables = r.nbDiTraites
         ? (r.nbIrreparables / r.nbDiTraites) * 100
         : 0;
-      const tatMoyenJours = r.nbDiClotures
-        ? r.totalTatMs / r.nbDiClotures / (1000 * 60 * 60 * 24)
+      // Diviser par le nombre d'échantillons MESURÉS, pas par le nombre de DI
+      // clôturées : une DI aux dates illisibles n'apporte aucun temps et ne doit
+      // donc peser dans aucun des deux termes.
+      const tatMoyenJours = r.nbTatSamples
+        ? r.totalTatMs / r.nbTatSamples / (1000 * 60 * 60 * 24)
         : 0;
 
       const first = r.profile?.firstName ?? '';

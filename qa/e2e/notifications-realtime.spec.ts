@@ -42,6 +42,10 @@ const ROLE_VALUE: Record<string, string> = {
 };
 
 const roleUsers: Record<string, { _id: string; username: string }> = {};
+// Un JWT par rôle : certaines mutations lisent l'ACTEUR (@CurrentUser) et
+// `NotificationService.emit` retire l'acteur de ses propres destinataires. Jouer
+// une étape avec le mauvais token masquerait donc une exclusion mal placée.
+const roleTokens: Record<string, string> = {};
 const sockets: Record<string, { socket: any; received: any[] }> = {};
 // Broadcast `updateTicket` (rafraîchit les LISTES de tous les profils en temps
 // réel — indépendant des notifications ERP ciblées).
@@ -105,14 +109,25 @@ function waitForUpdateTicket(diId: string, ms = 6000): Promise<boolean> {
 
 test.beforeAll(async () => {
     // 1) Resolve one real user per role from the running app's DB. Roles with
-    //    NO user in this DB (e.g. ADMIN_TECH here) are skipped — their recipients
-    //    resolve to zero server-side, so there's nobody to verify; the other
-    //    concerned roles still receive the notification.
+    //    NO user in this DB are skipped — their recipients resolve to zero
+    //    server-side, so there's nobody to verify; the other concerned roles
+    //    still receive the notification.
+    //
+    //    ⚠️ `isDeleted: { $ne: true }` est OBLIGATOIRE. `NotificationService`
+    //    EXCLUT les profils supprimés de ses destinataires
+    //    (notifications/notification.service.ts). Sans ce filtre, `findOne`
+    //    renvoyait en ordre naturel un profil SOFT-SUPPRIMÉ pour COORDIANTOR
+    //    (« coordinator ») et MANAGER (« chadha ») : le serveur ne leur envoyait
+    //    rien — à juste titre — et le test échouait en masse pour une mauvaise
+    //    raison (la coordination est destinataire dans ~12 des 19 étapes).
     await withProdDb(async (db) => {
         for (const [key, role] of Object.entries(ROLE_VALUE)) {
             const p = await db
                 .collection('profiles')
-                .findOne({ role }, { projection: { _id: 1, username: 1 } });
+                .findOne(
+                    { role, isDeleted: { $ne: true } },
+                    { projection: { _id: 1, username: 1 } },
+                );
             if (!p) {
                 console.warn(`⚠ no ${role} user in ${DB} — role ${key} unverifiable (skipped)`);
                 continue;
@@ -141,6 +156,7 @@ test.beforeAll(async () => {
             SECRET,
             { expiresIn: '1d' },
         );
+        roleTokens[key] = token;
         const socket = io(BASE, {
             auth: (cb: any) => cb({ token }),
             transports: ['websocket', 'polling'],
@@ -167,6 +183,20 @@ test.afterAll(async () => {
         const statIds = seeded.map((s) => s.stat);
         await db.collection('dis').deleteMany({ _id: { $in: diIds } });
         await db.collection('stats').deleteMany({ _id: { $in: statIds } });
+        // Les étapes RETOUR produisent DEUX sortes de lignes `logsdis` : celles
+        // que le test seede (`withCycleLog`) et celles que l'APPLICATION crée
+        // elle-même (`openRetourCycle`, `_id` en UUID). Ces dernières sont
+        // écrites de façon asynchrone : un `$in` sur les ids connus, exécuté
+        // aussitôt après le dernier test, en manquait 3 par passe (constaté).
+        // D'où le REGEX sur le TAG — il attrape les deux formes — et la courte
+        // attente qui laisse retomber les écritures en vol.
+        await new Promise((r) => setTimeout(r, 1500));
+        await db.collection('logsdis').deleteMany({
+            $or: [
+                { _idDi: { $in: diIds } },
+                { _idDi: { $regex: `_ntf_${TAG}_` } },
+            ],
+        });
         await db.collection('notifications').deleteMany({ diId: { $in: diIds } });
         await db
             .collection('system_events')
@@ -188,6 +218,10 @@ type Step = {
     techRep?: boolean; // seed Stat.id_tech_rep = TECH
     canRepairFalse?: boolean; // seed can_be_repaired = false (for send-back-to-diag)
     expectBroadcast?: boolean; // also assert an updateTicket broadcast (list refresh)
+    withClosingDocs?: boolean; // seed BL + Facture (porte documentaire)
+    fixtronix?: boolean; // seed di.isErrorFromFixtronix = true (routage retour)
+    withCycleLog?: boolean; // seed la ligne logsdis du cycle (routage retour)
+    actor?: string; // rôle qui DÉCLENCHE (défaut ADMIN_MANAGER) — cf. roleTokens
     create?: boolean; // the mutation CREATES the DI (createDi) — no seed, capture _id
 };
 
@@ -208,7 +242,17 @@ const STEPS: Step[] = [
     { name: 'Magasin terminé → à affecter répa', from: 'WAITING_BC', type: 'DI_PENDING3', concerned: ['COORDINATOR'], mutation: (d) => M(`changeStatusPending3(_id: "${d}")`) },
     { name: 'Affectation RÉPARATION', from: 'PENDING3', type: 'DI_ASSIGNED_REP', concerned: ['TECH'], absent: ['MAGASIN'], techRep: true, mutation: (d) => M(`changeStatusRepaire(_id: "${d}")`) },
     { name: 'Réparation terminée → attente BL', from: 'INREPARATION', type: 'DI_REP_FINISHED', concerned: ['COORDINATOR', 'MANAGER', 'ADMIN_TECH', 'ADMIN_MANAGER'], mutation: (d) => M(`changestatusToFinishReparation(_id: "${d}") { _id status }`) },
-    { name: 'Clôture (FINISHED, retour)', from: 'INDIAGNOSTIC', type: 'DI_FINISHED', concerned: ['MANAGER', 'ADMIN_MANAGER', 'ADMIN_TECH', 'COORDINATOR', 'MAGASIN'], absent: ['TECH'], ignoreCount: 1, mutation: (d) => M(`changestatusToFinishReparation(_id: "${d}") { _id status }`) },
+    // `DI_FINISHED` n'est émis QUE par `finalizeFinished` (di.service.ts:2622),
+    // atteint par `maybeAdvanceDocGate` quand la DI est en WAITING_FACTURE ET
+    // que la facture existe. L'ancien seed (INDIAGNOSTIC + ignoreCount 1)
+    // n'atteignait donc JAMAIS FINISHED : un retour réparable sans PDR route
+    // vers PENDING2 (règle métier, vérifié) → le test échouait sur une attente
+    // périmée, pas sur une notification manquante.
+    // Seed sans Google Drive : on part d'INREPARATION avec BL + Facture DÉJÀ
+    // présents ; `changestatusToFinishReparation` pose WAITING_BL puis la porte
+    // documentaire cascade WAITING_BL → WAITING_FACTURE → FINISHED
+    // (di.service.ts:2911-2914). `isDriveDocRef` n'exige qu'un `driveFileId`.
+    { name: 'Clôture (FINISHED, porte documentaire)', from: 'INREPARATION', type: 'DI_FINISHED', concerned: ['MANAGER', 'ADMIN_MANAGER', 'ADMIN_TECH', 'COORDINATOR', 'MAGASIN'], absent: ['TECH'], withClosingDocs: true, mutation: (d) => M(`changestatusToFinishReparation(_id: "${d}") { _id status }`) },
     // PENDING1 par d'AUTRES chemins que manager_Pending1 (bugs corrigés : la
     // coordination n'était pas notifiée sur ces passages en PENDING1).
     { name: 'Passage PENDING1 (changeToPending1)', from: 'CREATED', type: 'DI_PENDING1', concerned: ['COORDINATOR'], expectBroadcast: true, mutation: (d) => M(`changeToPending1(_id: "${d}")`) },
@@ -218,8 +262,62 @@ const STEPS: Step[] = [
     // Admin_Tech (propriétaires). Le Tech (auteur) et le Magasin ne reçoivent rien.
     { name: 'ABANDON diagnostic par le tech', from: 'INDIAGNOSTIC', type: 'DI_ABANDONED', concerned: ['COORDINATOR', 'ADMIN_MANAGER', 'ADMIN_TECH'], absent: ['TECH', 'MAGASIN'], techDiag: true, expectBroadcast: true, mutation: (d) => M(`abandonDi(AbandonDiInput: { diId: "${d}", motif: "PANNE_NON_IDENTIFIABLE" }) { _id status }`) },
     { name: 'RETOUR 1', from: 'PENDING1', type: 'DI_RETOUR_1', concerned: ['MANAGER', 'COORDINATOR'], mutation: (d) => M(`changeStatusRetour1(_id: "${d}")`) },
-    { name: 'RETOUR 2', from: 'RETOUR1', type: 'DI_RETOUR_2', concerned: ['MANAGER', 'COORDINATOR'], mutation: (d) => M(`changeStatusRetour2(_id: "${d}")`) },
-    { name: 'RETOUR 3', from: 'RETOUR2', type: 'DI_RETOUR_3', concerned: ['MANAGER', 'COORDINATOR'], mutation: (d) => M(`changeStatusRetour3(_id: "${d}")`) },
+    // ⚠️ `ignoreCount` est OBLIGATOIRE ici : `openRetourCycle` dérive le NIVEAU
+    // du retour (et donc le type `DI_RETOUR_{n}`) du `ignoreCount` de la DI, pas
+    // du nom de la mutation. Sans seed, ignoreCount=0 → le serveur émettait
+    // `DI_RETOUR_1` alors que le test attendait `DI_RETOUR_2`/`_3` : échec sur
+    // une attente fausse. Vérifié : avec ignoreCount 1 puis 2, les deux types
+    // partent bien, et MANAGER les reçoit (temps réel + base).
+    { name: 'RETOUR 2', from: 'RETOUR1', type: 'DI_RETOUR_2', concerned: ['MANAGER', 'COORDINATOR'], ignoreCount: 1, mutation: (d) => M(`changeStatusRetour2(_id: "${d}")`) },
+    { name: 'RETOUR 3', from: 'RETOUR2', type: 'DI_RETOUR_3', concerned: ['MANAGER', 'COORDINATOR'], ignoreCount: 2, mutation: (d) => M(`changeStatusRetour3(_id: "${d}")`) },
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // CYCLE RETOUR (ignoreCount > 0) — la DI reparcourt tout le flux, mais la
+    // SORTIE DE DIAGNOSTIC a ses propres règles de routage, et chaque branche
+    // notifie un rôle différent. Les 4 branches sont testées ici : c'est là que
+    // vivent les régressions (cf. l'invariant Fixtronix).
+    // Les étapes 17-19 ci-dessus couvrent l'OUVERTURE des cycles ; celles-ci
+    // couvrent la VIE du cycle.
+    // ═══════════════════════════════════════════════════════════════════════
+    { name: 'RETOUR · affectation DIAGNOSTIC', from: 'PENDING1', type: 'DI_ASSIGNED_DIAG', concerned: ['TECH'], absent: ['MAGASIN'], ignoreCount: 1, techDiag: true, mutation: (d) => M(`coordinatorSendingDiDiag(_idDI: "${d}") { _id status }`) },
+    // Réparable AVEC PDR → magasin. La vraie mutation de ce bouton est
+    // `changeStatusMagasinEstimation` (c'est elle qui porte le routage PDR),
+    // PAS `changeStatusPending2`.
+    { name: 'RETOUR · fin diag — réparable + PDR → magasin', from: 'INDIAGNOSTIC', type: 'DI_MAGASIN_ESTIMATION', concerned: ['MAGASIN'], ignoreCount: 1, pdr: true, withCycleLog: true, mutation: (d) => M(`changeStatusMagasinEstimation(_id: "${d}")`) },
+    // Réparable SANS PDR + erreur CLIENT → PENDING2 (le diagnostic est facturé).
+    { name: 'RETOUR · fin diag — sans PDR, erreur client → PENDING2', from: 'INDIAGNOSTIC', type: 'DI_PENDING2', concerned: ['COORDINATOR'], ignoreCount: 1, withCycleLog: true, mutation: (d) => M(`changeStatusPending2(_id: "${d}")`) },
+    // ⚠️ INVARIANT FIXTRONIX : notre faute → PENDING3 direct, JAMAIS
+    // PENDING2/Pricing (la DI ne doit pas être facturée au client). Le type de
+    // notification est donc `DI_PENDING3`, et c'est CE test qui garde
+    // l'invariant du côté notification.
+    { name: 'RETOUR · fin diag — sans PDR, FIXTRONIX → PENDING3', from: 'INDIAGNOSTIC', type: 'DI_PENDING3', concerned: ['COORDINATOR'], ignoreCount: 1, fixtronix: true, withCycleLog: true, mutation: (d) => M(`changeStatusPending2(_id: "${d}")`) },
+    // NON réparable → clôture IRREPARABLE, quel que soit le PDR déclaré.
+    { name: 'RETOUR · fin diag — NON réparable → IRREPARABLE', from: 'INDIAGNOSTIC', type: 'DI_IRREPARABLE', concerned: ['MANAGER', 'ADMIN_MANAGER', 'ADMIN_TECH', 'COORDINATOR', 'MAGASIN'], absent: ['TECH'], ignoreCount: 1, canRepairFalse: true, withCycleLog: true, mutation: (d) => M(`changeStatusPending2(_id: "${d}")`) },
+    { name: 'RETOUR · affectation RÉPARATION', from: 'PENDING3', type: 'DI_ASSIGNED_REP', concerned: ['TECH'], absent: ['MAGASIN'], ignoreCount: 1, techRep: true, mutation: (d) => M(`changeStatusRepaire(_id: "${d}")`) },
+    { name: 'RETOUR · clôture (FINISHED)', from: 'INREPARATION', type: 'DI_FINISHED', concerned: ['MANAGER', 'ADMIN_MANAGER', 'ADMIN_TECH', 'COORDINATOR', 'MAGASIN'], absent: ['TECH'], ignoreCount: 1, withClosingDocs: true, mutation: (d) => M(`changestatusToFinishReparation(_id: "${d}") { _id status }`) },
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // POIGNÉE DE MAIN COMPOSANTS (magasin ↔ coordination)
+    //
+    // Deux particularités qui justifient de jouer ces étapes avec le VRAI
+    // acteur (`actor`) plutôt qu'avec le token admin :
+    //  1. l'ENVOI cible `['Coordinator','Magasin']` avec `actorId: null` — le
+    //     magasin voit donc passer SA PROPRE demande dans sa cloche (voulu : le
+    //     statut ATTENTE_CONFIRMATION_COORDINATION est CO-DÉTENU). Jouer avec le
+    //     token magasin garde ce point : si quelqu'un renseignait un jour
+    //     `actorId` depuis l'utilisateur courant, le magasin serait exclu en
+    //     silence et ce test tomberait ;
+    //  2. la VALIDATION lit l'acteur (`@CurrentUser`) et ne cible que
+    //     `['Magasin']` : la coordinatrice ne se notifie pas elle-même.
+    //
+    // En RETOUR (ignoreCount > 0) les deux mutations suivent EXACTEMENT les
+    // statuts du flux original (drapeaux sur la ligne de cycle + statut sur la
+    // DI) et notifient les mêmes rôles. C'est ce que gardent H3/H4.
+    // ═══════════════════════════════════════════════════════════════════════
+    { name: 'COMPOSANTS · magasin → coordination', from: 'CONFIRMATION', type: 'COMPONENTS_SENT_TO_COORDINATOR', concerned: ['COORDINATOR', 'MAGASIN'], absent: ['TECH'], pdr: true, actor: 'MAGASIN', mutation: (d) => M(`sendComponentToConMagasinForConfirmation(_id: "${d}") { _id status }`) },
+    { name: 'COMPOSANTS · coordination valide', from: 'ATTENTE_CONFIRMATION_COORDINATION', type: 'COMPONENTS_CONFIRMED_BY_COORDINATOR', concerned: ['MAGASIN'], absent: ['TECH'], pdr: true, actor: 'COORDINATOR', mutation: (d) => M(`componentConfirmedFromCoordinator(_id: "${d}") { _id status }`) },
+    { name: 'COMPOSANTS · magasin → coordination (RETOUR)', from: 'CONFIRMATION', type: 'COMPONENTS_SENT_TO_COORDINATOR', concerned: ['COORDINATOR', 'MAGASIN'], absent: ['TECH'], ignoreCount: 1, pdr: true, withCycleLog: true, actor: 'MAGASIN', mutation: (d) => M(`sendComponentToConMagasinForConfirmation(_id: "${d}") { _id status }`) },
+    { name: 'COMPOSANTS · coordination valide (RETOUR)', from: 'ATTENTE_CONFIRMATION_COORDINATION', type: 'COMPONENTS_CONFIRMED_BY_COORDINATOR', concerned: ['MAGASIN'], absent: ['TECH'], ignoreCount: 1, pdr: true, withCycleLog: true, actor: 'COORDINATOR', mutation: (d) => M(`componentConfirmedFromCoordinator(_id: "${d}") { _id status }`) },
 ];
 
 STEPS.forEach((s, i) => {
@@ -255,6 +353,27 @@ STEPS.forEach((s, i) => {
                         : [],
                     ignoreCount: s.ignoreCount ?? 0,
                     current_roles: ['Manager'],
+                    // `isDriveDocRef` ne teste QUE la présence de `driveFileId`
+                    // (di.service.ts:2507) : pas besoin de Google Drive pour
+                    // franchir la porte documentaire.
+                    ...(s.fixtronix ? { isErrorFromFixtronix: true } : {}),
+                    // `writeCurrentCycleDoc` écrit le SCALAIRE légataire
+                    // (`bon_de_livraison`) *et* `driveDocs` : on seede les DEUX.
+                    // Ne poser que `driveDocs` n'est PAS une forme que l'app
+                    // produit, et la garde `if (!waiting.bon_de_livraison)`
+                    // (di.service.ts:2902) émettait alors un `DI_DOC_BL_PENDING`
+                    // parasite — donc un faux « BL à téléverser » (cloche qui bat
+                    // + son en boucle) sur une DI déjà clôturée.
+                    ...(s.withClosingDocs
+                        ? {
+                              bon_de_livraison: 'https://example.invalid/bl',
+                              facture: 'https://example.invalid/facture',
+                              driveDocs: {
+                                  BL: { driveFileId: `qa-bl-${TAG}`, webViewLink: 'https://example.invalid/bl', name: 'bl.pdf' },
+                                  Facture: { driveFileId: `qa-fac-${TAG}`, webViewLink: 'https://example.invalid/facture', name: 'facture.pdf' },
+                              },
+                          }
+                        : {}),
                     createdAt: new Date(),
                     updatedAt: new Date(),
                 });
@@ -271,9 +390,30 @@ STEPS.forEach((s, i) => {
                     createdAt: new Date(),
                     updatedAt: new Date(),
                 });
+                // Le routage de SORTIE DE DIAGNOSTIC en retour lit le verdict sur
+                // la DI **et** sur le snapshot du cycle (di.service.ts:4255-4287).
+                if (s.withCycleLog) {
+                    await db.collection('logsdis').insertOne({
+                        _id: `LOG_ntf_${TAG}_${i}`,
+                        _idDi: di,
+                        idIgnore: s.ignoreCount ?? 0,
+                        can_be_repaired: !s.canRepairFalse,
+                        contain_pdr: !!s.pdr,
+                        array_composants: s.pdr
+                            ? [{ nameComposant: 'Fusible', quantity: 1 }]
+                            : [],
+                        isErrorFromFixtronix: !!s.fixtronix,
+                        createdAt: new Date(),
+                        updatedAt: new Date(),
+                    });
+                }
             });
 
-            const r = await gqlPost(apiCtx, s.mutation(di), adminToken);
+            const r = await gqlPost(
+                apiCtx,
+                s.mutation(di),
+                (s.actor && roleTokens[s.actor]) || adminToken,
+            );
             expect(
                 r.errors ?? [],
                 `mutation for "${s.name}" errored: ${JSON.stringify(r.errors)}`,

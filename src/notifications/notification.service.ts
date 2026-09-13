@@ -65,8 +65,14 @@ export class NotificationService {
       );
     }
     if (!resolved.length) return [];
+    // `isDeleted` EST INDISPENSABLE : sans lui, le fan-out par rôle écrit une
+    // ligne pour chaque compte supprimé portant encore le rôle. Mesuré sur la
+    // base réelle avant correctif : 364 lignes sur 781 (47 %) adressées à des
+    // comptes supprimés — un compte « coordinator » désactivé accumulait 74
+    // non-lues que personne ne lirait jamais, et chaque émission payait autant
+    // d'insertions et de pushs socket inutiles.
     const profiles = await this.profileModel
-      .find({ role: { $in: resolved } }, { _id: 1 })
+      .find({ role: { $in: resolved }, isDeleted: { $ne: true } }, { _id: 1 })
       .lean();
     return (profiles as any[]).map((p) => String(p._id));
   }
@@ -115,6 +121,20 @@ export class NotificationService {
       if (input.actorId) all.delete(String(input.actorId));
 
       const recipients = [...all].filter(Boolean);
+      if (!recipients.length) {
+        // Une notification ACTIONNABLE dont l'audience se résout à personne
+        // disparaissait sans laisser de trace : ni ligne, ni socket, ni log —
+        // seul l'événement d'historique subsistait. C'est exactement la forme
+        // qu'ont les pertes (rôle sans titulaire actif, acteur unique exclu de
+        // sa propre notification, id de destinataire nul). On la rend BRUYANTE.
+        this.logger.warn(
+          `Notification « ${input.type} » sans destinataire (diId=${
+            input.diId ?? '-'
+          }) — cible demandée : roles=[${(target.roles ?? []).join(
+            ', ',
+          )}] userIds=[${(target.userIds ?? []).join(', ')}]`,
+        );
+      }
       if (recipients.length) {
         const rows = recipients.map((userId) => ({
           eventId: String(event._id),

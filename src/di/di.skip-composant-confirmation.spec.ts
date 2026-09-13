@@ -119,8 +119,9 @@ function makeSendSvc(di: any) {
       status: STATUS_DI.ConfirmationComposants.status,
     }),
   };
-  svc.logsDiService = { isSentToCoordinator: jest.fn() };
+  svc.logsDiService = { upsertCycle: jest.fn().mockResolvedValue({}) };
   svc.statsService = { updateStatus: jest.fn().mockResolvedValue(undefined) };
+  svc.commitStockDecrementOnce = jest.fn().mockResolvedValue(undefined);
   svc.discordHookService = {
     sendComponentsSentToCoordinator: jest.fn().mockResolvedValue(undefined),
   };
@@ -151,10 +152,123 @@ describe('DiService.sendComponentToConMagasinForConfirmation — materializes th
     expect(set.handleSendingNotificationBetweenCoordinatorAndMagasin).toBe(
       'IN_MAGASIN',
     );
-    // Stat kept in lock-step (T281/T282 divergence guard).
+    // Stat kept in lock-step (T281/T282 divergence guard) — row of cycle 0.
     expect(svc.statsService.updateStatus).toHaveBeenCalledWith(
       'DI1',
       STATUS_DI.ConfirmationComposants.status,
+      0,
     );
+    expect(svc.commitStockDecrementOnce).toHaveBeenCalledWith('DI1');
+  });
+
+  it('RETOUR (ignoreCount 1) : même transition de STATUT que le flux original', async () => {
+    const svc = makeSendSvc({
+      _id: 'DI1',
+      status: STATUS_DI.InMagasin.status,
+      ignoreCount: 1,
+    });
+    await svc.sendComponentToConMagasinForConfirmation('DI1');
+    expect(svc.assertTransitionAllowed).toHaveBeenCalledWith(
+      'DI1',
+      STATUS_DI.ConfirmationComposants.status,
+    );
+    // Le miroir DI change de statut (avant : seuls les drapeaux du log bougeaient
+    // et la DI restait en CONFIRMATION → coordinatrice bloquée).
+    const set = svc.diModel.findOneAndUpdate.mock.calls[0][1].$set;
+    expect(set.status).toBe(STATUS_DI.ConfirmationComposants.status);
+    // Dossier du cycle 1 : drapeaux de la poignée de main.
+    expect(svc.logsDiService.upsertCycle).toHaveBeenCalledWith('DI1', 1, {
+      isSentToCoordinator: true,
+      handleSendingNotificationBetweenCoordinatorAndMagasin: 'IN_MAGASIN',
+    });
+    // Stat du cycle 1, pas celle du cycle 0.
+    expect(svc.statsService.updateStatus).toHaveBeenCalledWith(
+      'DI1',
+      STATUS_DI.ConfirmationComposants.status,
+      1,
+    );
+    expect(svc.commitStockDecrementOnce).toHaveBeenCalledWith('DI1');
+  });
+});
+
+function makeConfirmSvc(di: any, flipped: any) {
+  const svc: any = Object.create(DiService.prototype);
+  svc.assertTransitionAllowed = jest.fn().mockResolvedValue(undefined);
+  svc.diModel = {
+    findOne: jest.fn().mockResolvedValue(di),
+    findOneAndUpdate: jest.fn().mockResolvedValue(flipped),
+  };
+  svc.logsDiService = { upsertCycle: jest.fn().mockResolvedValue({}) };
+  svc.statsService = { updateStatus: jest.fn().mockResolvedValue(undefined) };
+  svc.commitStockDecrementOnce = jest.fn().mockResolvedValue(undefined);
+  svc.decrementStockForComposants = jest.fn().mockResolvedValue(1);
+  svc.discordHookService = {
+    sendComponentsConfirmedByCoordinator: jest.fn().mockResolvedValue(undefined),
+  };
+  svc.notificationGateway = { sendComponentToMagasinFromCoordinator: jest.fn() };
+  svc.notificationService = { emit: jest.fn().mockResolvedValue(undefined) };
+  svc.buildPayload = jest.fn().mockReturnValue({});
+  svc.captureDiscordFailure = jest.fn();
+  return svc;
+}
+
+describe('DiService.componentConfirmedFromCoordinator — même statut en retour', () => {
+  const RETOUR_DI = {
+    _id: 'DI1',
+    status: STATUS_DI.ConfirmationComposants.status,
+    ignoreCount: 1,
+    array_composants: [{ nameComposant: 'condo', quantity: 2 }],
+  };
+
+  it('RETOUR : ATTENTE_CONFIRMATION_COORDINATION → MAGASIN_FINALISATION + dossier du cycle', async () => {
+    const svc = makeConfirmSvc(RETOUR_DI, {
+      ...RETOUR_DI,
+      status: STATUS_DI.MagasinFinalisation.status,
+    });
+    await svc.componentConfirmedFromCoordinator('DI1', 'COORD1');
+
+    expect(svc.assertTransitionAllowed).toHaveBeenCalledWith(
+      'DI1',
+      STATUS_DI.MagasinFinalisation.status,
+    );
+    const [filter, update] = svc.diModel.findOneAndUpdate.mock.calls[0];
+    expect(filter).toEqual({ _id: 'DI1', componentsConfirmedAt: null });
+    expect(update.$set.status).toBe(STATUS_DI.MagasinFinalisation.status);
+    expect(update.$set.isConfirmedComponentFromCoordinator).toBe(true);
+    expect(svc.logsDiService.upsertCycle).toHaveBeenCalledWith(
+      'DI1',
+      1,
+      expect.objectContaining({
+        isConfirmedComponentFromCoordinator: true,
+        componentsConfirmedBy: 'COORD1',
+      }),
+    );
+    expect(svc.statsService.updateStatus).toHaveBeenCalledWith(
+      'DI1',
+      STATUS_DI.MagasinFinalisation.status,
+      1,
+    );
+  });
+
+  it('RETOUR : un seul chemin de décrément (plus de décrément sur la ligne de log)', async () => {
+    const svc = makeConfirmSvc(RETOUR_DI, {
+      ...RETOUR_DI,
+      status: STATUS_DI.MagasinFinalisation.status,
+    });
+    await svc.componentConfirmedFromCoordinator('DI1', 'COORD1');
+    expect(svc.commitStockDecrementOnce).toHaveBeenCalledTimes(1);
+    expect(svc.decrementStockForComposants).not.toHaveBeenCalled();
+  });
+
+  it('confirmation déjà faite (flip sans match) → aucune écriture de cycle ni décrément', async () => {
+    const svc = makeConfirmSvc(
+      { ...RETOUR_DI, status: STATUS_DI.MagasinFinalisation.status },
+      null,
+    );
+    await svc.componentConfirmedFromCoordinator('DI1', 'COORD1');
+    expect(svc.assertTransitionAllowed).not.toHaveBeenCalled();
+    expect(svc.logsDiService.upsertCycle).not.toHaveBeenCalled();
+    expect(svc.commitStockDecrementOnce).not.toHaveBeenCalled();
+    expect(svc.statsService.updateStatus).not.toHaveBeenCalled();
   });
 });

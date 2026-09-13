@@ -12,10 +12,12 @@ import {
   TokenData,
 } from './dto/create-profile.input';
 import { UpdateProfileInput } from './dto/update-profile.input';
+import { ChangePasswordInput } from './dto/change-password.input';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 import { BadRequestException, UseGuards } from '@nestjs/common';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
 import { SearchInput } from 'src/stat/dto/create-stat.input';
+import { GraphQLError } from 'graphql';
 
 @Resolver()
 export class ProfileResolver {
@@ -28,6 +30,40 @@ export class ProfileResolver {
     let data = await this.profileService.create(createProfileInput);
 
     return data;
+  }
+
+  /**
+   * Chaque utilisateur change SON PROPRE mot de passe — quel que soit son rôle.
+   *
+   * L'acteur est lu dans le JWT et nulle part ailleurs : aucun `_id` ni
+   * `username` n'est accepté en argument, sans quoi la mutation permettrait de
+   * réécrire le mot de passe d'autrui.
+   *
+   * ⚠️ `JwtAuthGuard.handleRequest` ne lève JAMAIS (il renvoie `user` ou
+   * `undefined` et laisse passer la requête) : la garde seule ne bloque donc pas
+   * un appel anonyme. D'où le contrôle explicite ci-dessous — il n'est pas
+   * redondant.
+   *
+   * Retourne un `Boolean` et non un `Profile` : `password` est actuellement un
+   * champ GraphQL public sur `Profile`, renvoyer l'entité exposerait le hash.
+   */
+  @Mutation(() => Boolean)
+  @UseGuards(JwtAuthGuard)
+  async changeMyPassword(
+    @Args('input') input: ChangePasswordInput,
+    @CurrentUser() profile: TokenData,
+  ): Promise<boolean> {
+    const username = (profile as any)?.username;
+    if (!username) {
+      throw new GraphQLError('Authentification requise.', {
+        extensions: { code: 'UNAUTHENTICATED' },
+      });
+    }
+    return this.profileService.changeOwnPassword(
+      username,
+      input.currentPassword,
+      input.newPassword,
+    );
   }
 
   @Query(() => TokenData)

@@ -47,7 +47,7 @@ export const IN_PROGRESS_EXCLUDED = [
  * Date passed by GraphQL's scalar Date or a string, both are valid in this
  * codebase.
  */
-function parseDate(input: any): Date | null {
+export function parseDate(input: any): Date | null {
   if (!input) return null;
   if (input instanceof Date) return isNaN(input.getTime()) ? null : input;
   const d = new Date(input);

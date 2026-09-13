@@ -230,9 +230,14 @@ export class StatService {
       // (DI, cycle), et le routeur pouvait ensuite lire la ligne vide et croire
       // qu'il n'y avait pas d'erreur Fixtronix. La création est désormais
       // idempotente de toute façon (`$setOnInsert`), ceci est la 2e barrière.
-      if (di.ignoreCount > 0) {
-        await this.logsDiService.create(createStatInput._idDi, di.ignoreCount);
-      }
+      // SANS CONDITION depuis la separation par cycle : le cycle 0 (flux
+      // original) a lui aussi sa ligne. C'est ce qui permet au dossier de lire
+      // « Flux original » et « Retour N » dans la MEME structure, donc sans
+      // aucun repli sur la DI — le repli etait la source du melange entre flux.
+      await this.logsDiService.create(
+        createStatInput._idDi,
+        di.ignoreCount ?? 0,
+      );
 
       // Première affectation du cycle : ouvre la 1re entrée d'historique.
       const statDoc: any = new this.StatModel(createStatInput);
@@ -459,9 +464,12 @@ export class StatService {
         );
       }
 
-      const stat = await this.StatModel.findOne(
-        di.ignoreCount > 0 ? { _idDi, ignoreCount: di.ignoreCount } : { _idDi },
-      );
+      // Cycle TOUJOURS dans le filtre (0 compris) : sans lui, Mongo rendait
+      // l'ordre naturel sur une DI multi-cycles.
+      const stat = await this.StatModel.findOne({
+        _idDi,
+        ignoreCount: di.ignoreCount ?? 0,
+      });
       const profile = await this.profileService.findProlileById(_idTech);
 
       this.notificationGateway.updateTicket({
@@ -933,10 +941,16 @@ export class StatService {
    * segment en cours serait perdu).
    */
   async openDiagLeg(_idDi: string, ignoreCount = 0): Promise<boolean> {
-    const filter: Record<string, unknown> =
-      ignoreCount > 0
-        ? { _idDi, ignoreCount, diagRunStartedAt: null }
-        : { _idDi, diagRunStartedAt: null };
+    // Le cycle est TOUJOURS dans le filtre, 0 compris. Le ternaire
+    // precedent retombait sur `{_idDi}` seul pour le flux original :
+    // sur une DI ayant aussi des lignes de retour, Mongo rendait
+    // l'ordre NATUREL — donc potentiellement la ligne d'un AUTRE
+    // cycle. Ces methodes alimentent le temps FACTURABLE.
+    const filter: Record<string, unknown> = {
+      _idDi,
+      ignoreCount,
+      diagRunStartedAt: null,
+    };
     const res = await this.StatModel.updateOne(filter, {
       $set: { diagRunStartedAt: new Date() },
     });
@@ -955,8 +969,12 @@ export class StatService {
    * re-filtre sur l'ancre lue, exactement comme le diagnostic.
    */
   async closeRepLeg(_idDi: string, ignoreCount = 0): Promise<string | null> {
-    const filter: Record<string, unknown> =
-      ignoreCount > 0 ? { _idDi, ignoreCount } : { _idDi };
+    // Le cycle est TOUJOURS dans le filtre, 0 compris. Le ternaire
+    // precedent retombait sur `{_idDi}` seul pour le flux original :
+    // sur une DI ayant aussi des lignes de retour, Mongo rendait
+    // l'ordre NATUREL — donc potentiellement la ligne d'un AUTRE
+    // cycle. Ces methodes alimentent le temps FACTURABLE.
+    const filter: Record<string, unknown> = { _idDi, ignoreCount };
     const stat = await this.StatModel.findOne(filter);
     if (!stat || !stat.repRunStartedAt) {
       return null; // aucun segment ouvert — rien à cumuler
@@ -996,8 +1014,12 @@ export class StatService {
    * qu'un appel concurrent ne cumule pas deux fois le même segment.
    */
   async closeDiagLeg(_idDi: string, ignoreCount = 0): Promise<string | null> {
-    const filter: Record<string, unknown> =
-      ignoreCount > 0 ? { _idDi, ignoreCount } : { _idDi };
+    // Le cycle est TOUJOURS dans le filtre, 0 compris. Le ternaire
+    // precedent retombait sur `{_idDi}` seul pour le flux original :
+    // sur une DI ayant aussi des lignes de retour, Mongo rendait
+    // l'ordre NATUREL — donc potentiellement la ligne d'un AUTRE
+    // cycle. Ces methodes alimentent le temps FACTURABLE.
+    const filter: Record<string, unknown> = { _idDi, ignoreCount };
     const stat = await this.StatModel.findOne(filter);
     if (!stat || !stat.diagRunStartedAt) {
       return null; // aucun segment ouvert — rien à cumuler
@@ -1046,8 +1068,7 @@ export class StatService {
     abandonedBy: string,
   ): Promise<boolean> {
     await this.closeDiagLeg(_idDi, ignoreCount); // fige diag_time (cumulatif)
-    const filter =
-      ignoreCount > 0 ? { _idDi, ignoreCount } : { _idDi };
+    const filter = { _idDi, ignoreCount };
     const stat: any = await this.StatModel.findOne(filter);
     if (!stat) return false;
 
@@ -1096,7 +1117,7 @@ export class StatService {
    * coordinatrice (le serveur re-vérifie dans `createStat`).
    */
   async abandonedTechsForDi(_idDi: string, ignoreCount = 0): Promise<string[]> {
-    const filter = ignoreCount > 0 ? { _idDi, ignoreCount } : { _idDi };
+    const filter = { _idDi, ignoreCount };
     const stat = await this.StatModel.findOne(filter).lean();
     if (!stat) return [];
     return ((stat as any).diagAssignments ?? [])

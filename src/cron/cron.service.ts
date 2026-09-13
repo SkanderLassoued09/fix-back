@@ -14,6 +14,8 @@ import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { DiArchiveDigestService } from 'src/di-archive/di-archive-digest.service';
 import { ReunionPVService } from 'src/reunion-pv/reunion-pv.service';
 import { DbBackupService } from 'src/db-backup/db-backup.service';
+import { SessionCleanupService } from '../session-cleanup/session-cleanup.service';
+import { NotificationPurgeService } from '../notification-purge/notification-purge.service';
 
 /**
  * The 5 Discord channels of an environment, mapped to the EXACT env vars read
@@ -44,6 +46,8 @@ export class AppCronService {
     private readonly diArchiveDigestService: DiArchiveDigestService,
     private readonly reunionPVService: ReunionPVService,
     private readonly dbBackupService: DbBackupService,
+    private readonly sessionCleanupService: SessionCleanupService,
+    private readonly notificationPurgeService: NotificationPurgeService,
   ) {}
 
   /**
@@ -87,6 +91,14 @@ export class AppCronService {
         break;
       case 'PENDING_BL_REMINDER':
         await this.triggerPendingBlReminder();
+        break;
+      case 'PURGE_NOTIFICATIONS':
+        await this.triggerNotificationPurge();
+        break;
+      // Simulation : compte sans rien supprimer. À lancer AVANT la première
+      // purge réelle pour vérifier les volumes.
+      case 'PURGE_NOTIFICATIONS_DRY_RUN':
+        await this.triggerNotificationPurge(true);
         break;
       default:
         this.logger.error(`Unknown ACTION: ${action}`);
@@ -339,20 +351,34 @@ export class AppCronService {
   }
 
   /**
-   * Rappel quotidien de STOCK MAGASIN — 16:00 Africa/Tunis (aussi via l'ACTION
-   * runtime `ACTION=MAGASIN_STOCK_REMINDER`). Alerte le rôle Magasin (cloche ERP)
-   * sur les composants suivis en stock EN RUPTURE (≤0) ou BIENTÔT VIDES
-   * (≤ `STOCK_LOW_THRESHOLD`, défaut 5). C'est un rappel : il re-part chaque jour
-   * tant que du stock est bas. Erreur isolée → ne casse jamais la boucle cron ;
-   * une journée « rien à signaler » n'émet aucune notification.
+   * Rappel matinal du MAGASIN — 08:00 Africa/Tunis, du LUNDI AU VENDREDI (aussi
+   * via l'ACTION runtime `ACTION=MAGASIN_STOCK_REMINDER`). Alerte le rôle
+   * Magasin — cloche ERP **et** Discord — sur deux sujets :
+   *   §1 stock bas : pièces suivies en stock EN RUPTURE (≤0) ou BIENTÔT VIDES
+   *      (≤ `STOCK_LOW_THRESHOLD`, défaut 5) ;
+   *   §2 fiches à compléter : statut, prix ou quantité vide — ce sont elles qui
+   *      rendent des pièces réellement stockées invisibles pour §1.
+   *
+   * Pas de passage le week-end : personne n'est au magasin pour agir, et une
+   * cloche non traitée le samedi ne fait qu'user le rappel du lundi.
+   *
+   * C'est un rappel : il re-part chaque matin tant qu'il reste à traiter. Erreur
+   * isolée → ne casse jamais la boucle cron ; un matin « rien à signaler »
+   * n'émet aucune notification et ne poste rien.
+   *
+   * NB : `triggerStagnationDetection` tourne aussi à 08:00 — cohabitation
+   * VOULUE (jobs et destinataires différents), pas un doublon.
    */
-  @Cron('0 16 * * *', { timeZone: 'Africa/Tunis' })
+  @Cron('0 8 * * 1-5', { timeZone: 'Africa/Tunis' })
   async triggerMagasinStockReminder() {
     try {
       const r = await this.magasinStockReminderService.run();
       this.logger.log(
         `Magasin stock reminder · seuil=${r.threshold} · rupture=${r.rupture} · ` +
-          `bientôt-vide=${r.low} · notifié=${r.notified}`,
+          `bientôt-vide=${r.low} · notifié=${r.notified} · ` +
+          `à-compléter=${r.incomplete.affected} (statut=${r.incomplete.status} ` +
+          `prix=${r.incomplete.price} quantité=${r.incomplete.qty}) · ` +
+          `notifié=${r.incompleteNotified} · discord=${r.discordSent}`,
       );
     } catch (err) {
       this.logger.error(
@@ -375,6 +401,55 @@ export class AppCronService {
     } catch (err) {
       this.logger.error(
         `Pending-BL reminder failed: ${(err as Error).stack ?? err}`,
+      );
+    }
+  }
+
+  // Libération nocturne du verrou de session unique. `isConnected` n'est remis
+  // à `false` que par le NAVIGATEUR (bouton Déconnexion, ou balise `pagehide`
+  // best-effort) : un crash, un onglet tué ou une coupure réseau verrouillent
+  // le compte définitivement — pas de TTL, pas de heartbeat, `handleDisconnect`
+  // du websocket est vide, et le JWT dure 365 jours. Ce passage de minuit est
+  // le filet qui évite d'aller éditer la base à la main.
+  //
+  // Le fuseau est EXPLICITE : rien ne fixe `TZ` dans le processus (ni .env, ni
+  // Dockerfile, ni main.ts), donc un job sans `timeZone` suivrait l'heure locale
+  // du serveur et « minuit » serait indéterminé.
+  /**
+   * Purge quotidienne de la cloche : ne conserve que les 3 derniers jours des
+   * `notifications`. Le journal ERP `system_events` n'est PAS concerné — il est
+   * conservé volontairement et alimente l'onglet « Journal » du dossier DI.
+   *
+   * Les relances « bon de livraison à téléverser » dont le document manque
+   * toujours sont ÉPARGNÉES quel que soit leur âge : le front fait battre la
+   * cloche par la présence de cette ligne, la supprimer arrêterait la relance
+   * pour de bon.
+   *
+   * 03 h : hors trafic. Fuseau EXPLICITE, pour la même raison que ci-dessous.
+   */
+  @Cron('0 3 * * *', { timeZone: 'Africa/Tunis' })
+  async triggerNotificationPurge(dryRun = false) {
+    try {
+      const { deleted, keptBlPending, recent } =
+        await this.notificationPurgeService.run(dryRun);
+      this.logger.log(
+        `Purge notifications · supprimées=${deleted} · BL épargnées=${keptBlPending} · restantes=${recent + keptBlPending}`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Notification purge failed: ${(err as Error).stack ?? err}`,
+      );
+    }
+  }
+
+  @Cron('0 0 * * *', { timeZone: 'Africa/Tunis' })
+  async triggerSessionCleanup() {
+    try {
+      const { released } = await this.sessionCleanupService.run();
+      this.logger.log(`Libération des sessions · libérées=${released}`);
+    } catch (err) {
+      this.logger.error(
+        `Session cleanup failed: ${(err as Error).stack ?? err}`,
       );
     }
   }

@@ -15,6 +15,7 @@ import {
   RepairPriceBreakdown,
   StatusCount,
   UpdateNego,
+  RetourResult,
 } from './entities/di.entity';
 import {
   AdminTechUpdateDiInput,
@@ -182,7 +183,8 @@ export class DiResolver {
   @Query(() => DiTableData)
   async searchDi(
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
-    @Args('search') search: SearchDiInput,
+    // Liste : filtres de colonnes cumulatifs (un objet seul reste accepté).
+    @Args('search', { type: () => [SearchDiInput] }) search: SearchDiInput[],
     @Args('filterConfig', { nullable: true }) filterConfig?: FilterConfigDi,
   ) {
     return await this.diService.searchDi(
@@ -321,7 +323,8 @@ export class DiResolver {
   @Query(() => DiTableData)
   async searchCoordinatorDI(
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
-    @Args('search') search: SearchDiInput,
+    // Liste : filtres de colonnes cumulatifs (un objet seul reste accepté).
+    @Args('search', { type: () => [SearchDiInput] }) search: SearchDiInput[],
   ) {
     return this.diService.searchCoordinatorDI(paginationConfig, search);
   }
@@ -342,7 +345,9 @@ export class DiResolver {
   @Query(() => DiTableData)
   async searchDiForMagasin(
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
-    @Args('search') search: SearchDiInput,
+    // Liste : filtres de colonnes cumulatifs. La coercition GraphQL accepte
+    // encore un objet seul (liste d'un élément).
+    @Args('search', { type: () => [SearchDiInput] }) search: SearchDiInput[],
   ) {
     return this.diService.searchDiForMagasin(paginationConfig, search);
   }
@@ -360,14 +365,11 @@ export class DiResolver {
     return this.diService.manager_Pending1(_id);
   }
 
-  @Mutation(() => Di)
-  addPDFFile(
-    @Args('_id') _id: string,
-    @Args('facture') facture: string,
-    @Args('bl') bl: string,
-  ) {
-    return this.diService.addPDFFile(_id, facture, bl);
-  }
+  // `addPDFFile` SUPPRIME. C'etait la seule ecriture de documents SANS aucune
+  // branche de cycle : elle posait facture + BL et `driveDocs` directement sur
+  // la DI, ecrasant donc les fichiers du cycle 0 depuis un cycle retour. Morte
+  // cote UI (`sendFilePdf()` n'avait aucun appelant) : l'interface enregistre
+  // via `addBL` + `addFacture`, qui passent par le chemin unique par cycle.
   @Mutation(() => Boolean)
   @UseGuards(JwtAuthGuard)
   async tech_startDiagnostic(
@@ -631,7 +633,27 @@ export class DiResolver {
       throw err;
     }
   }
+  /**
+   * Entree UNIQUE du retour : revendique le niveau atomiquement et applique la
+   * transition. Le front n'a plus a enchainer `countIgnore` puis
+   * `changeStatusRetourN` — c'est ce decoupage en deux mutations client qui
+   * laissait, en cas d'echec de la seconde, une DI au compteur incremente mais
+   * au statut inchange (constate en base sur 3 DI).
+   */
+  @Mutation(() => RetourResult)
+  @UseGuards(JwtAuthGuard)
+  async changeStatusRetour(
+    @Args('_id') _id: string,
+    @Args('reason', { nullable: true }) reason?: string,
+  ) {
+    return await this.diService.openRetourCycle(_id, reason);
+  }
+
+  // Compatibilite : les trois mutations historiques delegent toutes a
+  // `openRetourCycle`, qui determine le niveau lui-meme. Le suffixe 1/2/3 est
+  // ignore — un front non encore deploye reste donc correct.
   @Mutation(() => Boolean)
+  @UseGuards(JwtAuthGuard)
   async changeStatusRetour1(
     @Args('_id') _id: string,
     @Args('reason', { nullable: true }) reason?: string,
@@ -640,6 +662,7 @@ export class DiResolver {
     return !!updated;
   }
   @Mutation(() => Boolean)
+  @UseGuards(JwtAuthGuard)
   async changeStatusRetour2(
     @Args('_id') _id: string,
     @Args('reason', { nullable: true }) reason?: string,
@@ -648,6 +671,7 @@ export class DiResolver {
     return !!updated;
   }
   @Mutation(() => Boolean)
+  @UseGuards(JwtAuthGuard)
   async changeStatusRetour3(
     @Args('_id') _id: string,
     @Args('reason', { nullable: true }) reason?: string,
@@ -704,7 +728,18 @@ export class DiResolver {
 
   // ignore
 
+  /**
+   * DEPRECIE — n'incremente PLUS rien. Le compteur de cycle est desormais
+   * revendique atomiquement par `openRetourCycle`, a l'interieur de la
+   * transition de retour.
+   *
+   * On renvoie le niveau QUI SERA reclame (et non le compteur inchange) :
+   * l'ancien front lit `data.countIgnore.ignoreCount` pour choisir sa branche
+   * `changeStatusRetour1/2/3` ; avec le compteur inchange il lirait `0` sur une
+   * DI jamais retournee et n'appellerait aucune transition.
+   */
   @Mutation(() => Di)
+  @UseGuards(JwtAuthGuard)
   countIgnore(@Args('_idDI') _idDI: string) {
     return this.diService.countIgnore(_idDI);
   }

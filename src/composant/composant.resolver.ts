@@ -6,6 +6,11 @@ import {
   UpdateComposantResponse,
 } from './dto/create-composant.input';
 import { UpdateComposantInput } from './dto/update-composant.input';
+import {
+  ComposantBrowseInput,
+  ComposantCategoryNode,
+  ComposantPage,
+} from './dto/browse-composant.input';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
 import { Profile } from 'src/profile/entities/profile.entity';
 
@@ -77,5 +82,27 @@ export class ComposantResolver {
   @Query(() => [Composant])
   async searchComposants(@Args('name') name: string): Promise<any> {
     return await this.composantService.searchComposants(name);
+  }
+
+  /**
+   * Picker de composants du modal diagnostic — page filtrée + paginée.
+   * Sert AUSSI BIEN l'ouverture d'un nœud catégorie (lazy) que la recherche
+   * profonde : c'est la même requête, seuls les arguments changent.
+   */
+  @Query(() => ComposantPage)
+  async browseComposants(
+    @Args('input') input: ComposantBrowseInput,
+  ): Promise<ComposantPage> {
+    return await this.composantService.browseComposants(input);
+  }
+
+  /**
+   * Racines de l'arbre du picker : catégories + nombre de composants.
+   * Inclut le nœud synthétique « Sans catégorie » quand des composants ne
+   * pointent aucune catégorie connue.
+   */
+  @Query(() => [ComposantCategoryNode])
+  async composantCategoryTree(): Promise<ComposantCategoryNode[]> {
+    return await this.composantService.composantCategoryTree();
   }
 }

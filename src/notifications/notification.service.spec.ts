@@ -76,7 +76,7 @@ describe('NotificationService.emit — ciblage & historique', () => {
       notify: { roles: ['TECH'] },
     });
     expect(profileModel.find).toHaveBeenCalledWith(
-      { role: { $in: ['TECH'] } },
+      { role: { $in: ['TECH'] }, isDeleted: { $ne: true } },
       { _id: 1 },
     );
     const rows = notificationModel.insertMany.mock.calls[0][0];
@@ -93,7 +93,7 @@ describe('NotificationService.emit — ciblage & historique', () => {
     });
     // aligné sur les valeurs profil réelles (coquille comprise)
     expect(profileModel.find).toHaveBeenCalledWith(
-      { role: { $in: ['COORDIANTOR', 'MANAGER'] } },
+      { role: { $in: ['COORDIANTOR', 'MANAGER'] }, isDeleted: { $ne: true } },
       { _id: 1 },
     );
   });
@@ -120,6 +120,49 @@ describe('NotificationService.emit — ciblage & historique', () => {
     expect(profileModel.find).not.toHaveBeenCalled(); // rien à interroger
     expect(notificationModel.insertMany).not.toHaveBeenCalled(); // 0 cloche
     expect(warn).toHaveBeenCalled(); // JAMAIS silencieux
+  });
+
+  it('EXCLUT les comptes supprimés du ciblage par rôle', async () => {
+    const { svc, notificationModel, profileModel } = makeSvc();
+    // Le mock renvoie ce que la requête demande : on vérifie donc le FILTRE.
+    profileModel.find.mockReturnValue({ lean: async () => [{ _id: 'u1' }] });
+
+    await svc.emit({
+      type: 'DI_PENDING1',
+      message: 'm',
+      notify: { roles: ['Coordinator'] },
+    });
+
+    // Mesuré avant correctif sur la base réelle : 47 % des lignes écrites
+    // visaient des comptes supprimés qui gardaient leur rôle.
+    expect(profileModel.find).toHaveBeenCalledWith(
+      { role: { $in: ['COORDIANTOR'] }, isDeleted: { $ne: true } },
+      { _id: 1 },
+    );
+    expect(notificationModel.insertMany).toHaveBeenCalled();
+  });
+
+  it('AUDIENCE VIDE : événement écrit, 0 notification, et un AVERTISSEMENT', async () => {
+    const { svc, eventModel, notificationModel, gateway } = makeSvc();
+    const warn = jest
+      .spyOn((svc as any).logger, 'warn')
+      .mockImplementation(() => undefined);
+
+    // Rôle valide mais sans aucun titulaire actif → personne à prévenir.
+    await svc.emit({
+      type: 'DI_MAGASIN_ESTIMATION',
+      diId: 'DI_x',
+      message: 'm',
+      notify: { roles: ['Magasin'] },
+    });
+
+    expect(eventModel.create).toHaveBeenCalledTimes(1); // historique conservé
+    expect(notificationModel.insertMany).not.toHaveBeenCalled();
+    expect(gateway.emitToUser).not.toHaveBeenCalled();
+    // Le point du correctif : cette disparition ne doit plus être SILENCIEUSE.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('DI_MAGASIN_ESTIMATION');
+    expect(warn.mock.calls[0][0]).toContain('DI_x');
   });
 
   it('« acteur inconnu » honnête : actorId=null persisté tel quel', async () => {

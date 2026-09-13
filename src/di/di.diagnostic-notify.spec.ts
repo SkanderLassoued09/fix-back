@@ -53,10 +53,15 @@ describe('Diagnostic assignment — single complete Discord notification', () =>
       svc.discordHookService = { sendDiAssignedToTech: jest.fn() };
       svc.notificationGateway = { updateTicket: jest.fn() };
       svc.operationalErrorService = { capture: jest.fn() };
+      // La ligne de cycle est desormais ouverte SANS CONDITION (cycle 0
+      // compris) : le flux original a lui aussi son propre dossier.
+      svc.logsDiService = { create: jest.fn().mockResolvedValue(null) };
 
       await svc.createStat({ _idDi: 'DI1', id_tech_diag: 'u1' });
 
       expect(svc.discordHookService.sendDiAssignedToTech).not.toHaveBeenCalled();
+      // Cycle 0 : la ligne du flux original est ouverte des la 1re affectation.
+      expect(svc.logsDiService.create).toHaveBeenCalledWith('DI1', 0);
       // The realtime socket refresh is unrelated and must stay.
       expect(svc.notificationGateway.updateTicket).toHaveBeenCalledTimes(1);
     });

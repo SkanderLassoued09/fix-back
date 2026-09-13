@@ -4,6 +4,7 @@ import {
   UpdateComposantResponse,
 } from './dto/create-composant.input';
 import { UpdateComposantInput } from './dto/update-composant.input';
+import { ComposantBrowseInput } from './dto/browse-composant.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Composant } from './entities/composant.entity';
 import { Model } from 'mongoose';
@@ -418,6 +419,247 @@ export class ComposantService {
       throw error;
     }
   }
+  /**
+   * Échappe les métacaractères regex d'une saisie utilisateur.
+   *
+   * POURQUOI : `searchComposants` (plus bas, historique) injecte la saisie
+   * BRUTE dans `$regex`. Un `(` tapé par l'utilisateur lève une erreur Mongo,
+   * et `.*` force un balayage complet. Tout nouveau chemin de recherche passe
+   * par ici. Même expression que `composant_category.service.ts`.
+   */
+  private static escapeRegex(input: string): string {
+    return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  /** Sentinelle du bucket « Sans catégorie » (voir composantCategoryTree). */
+  static readonly UNCATEGORIZED_ID = '__uncategorized__';
+
+  /** En dessous, une recherche ramènerait la moitié du catalogue. */
+  private static readonly MIN_SEARCH_LENGTH = 2;
+
+  /** Normalise un libellé pour la comparaison (casse + espaces). */
+  private static normalizeLabel(value: unknown): string {
+    return String(value ?? '')
+      .trim()
+      .toLowerCase();
+  }
+
+  /**
+   * Une valeur de `category_composant_id` est-elle « vide » ?
+   * `'undefined'` / `'null'` sont des chaînes LITTÉRALES réellement présentes
+   * en base (écrites par l'ancien `updateComposant`), pas les types.
+   */
+  private static isBlankCategoryRef(value: unknown): boolean {
+    const raw = String(value ?? '').trim();
+    return raw === '' || raw === 'undefined' || raw === 'null';
+  }
+
+  /**
+   * Construit le filtre Mongo du picker.
+   *
+   * Le point délicat est `category_composant_id` : des lignes héritées y
+   * stockent le LIBELLÉ de la catégorie au lieu de son `_id` (cf. migration
+   * 002). Une catégorie doit donc matcher `{ $in: [_id, libellé] }`, sinon ses
+   * composants hérités sont invisibles dans l'arbre.
+   */
+  private async buildBrowseFilter(
+    input: ComposantBrowseInput,
+  ): Promise<Record<string, any>> {
+    // `$ne: true` et non `false` : aligné sur findOneComposant — un document
+    // hérité SANS le champ `isDeleted` ne doit pas disparaître du picker.
+    const filter: Record<string, any> = { isDeleted: { $ne: true } };
+
+    const search = (input?.search ?? '').trim();
+    if (search.length >= ComposantService.MIN_SEARCH_LENGTH) {
+      filter.name = {
+        $regex: ComposantService.escapeRegex(search),
+        $options: 'i',
+      };
+    }
+
+    const categoryId = (input?.categoryId ?? '').trim();
+    if (!categoryId) {
+      return filter;
+    }
+
+    const categories = await this.categoryModel
+      .find({ isDeleted: { $ne: true } })
+      .select('_id category_composant')
+      .lean();
+
+    if (categoryId === ComposantService.UNCATEGORIZED_ID) {
+      // Tout ce qui ne pointe AUCUNE catégorie connue — ni par _id, ni par
+      // libellé. `$nin` matche aussi les documents où le champ est ABSENT,
+      // ce qui est exactement le comportement voulu.
+      const known = categories.flatMap((c: any) => [
+        String(c._id),
+        String(c.category_composant ?? ''),
+      ]);
+      filter.category_composant_id = {
+        $nin: [...new Set([...known, '', 'undefined', 'null'])],
+      };
+      return filter;
+    }
+
+    const match = categories.find(
+      (c: any) => String(c._id) === categoryId,
+    ) as any;
+    const label = match?.category_composant
+      ? String(match.category_composant)
+      : null;
+    filter.category_composant_id = label
+      ? { $in: [categoryId, label] }
+      : categoryId;
+    return filter;
+  }
+
+  /**
+   * Page de composants pour l'arbre du modal diagnostic.
+   *
+   * Projection VOLONTAIREMENT minimale (`_id name category_composant_id`) :
+   * `findAllComposant` rapatriait 11 champs — dont `pdf` et `link` — pour un
+   * picker qui n'affiche qu'un nom.
+   *
+   * Tri alphabétique : `createdAt: -1` (tri du catalogue) n'a aucun sens dans
+   * une liste où l'utilisateur cherche un nom.
+   */
+  async browseComposants(
+    input: ComposantBrowseInput,
+  ): Promise<{ composantRecord: Composant[]; totalComposantCount: number }> {
+    try {
+      const rows = Math.min(Math.max(Number(input?.rows ?? 50) || 50, 1), 200);
+      const first = Math.max(Number(input?.first ?? 0) || 0, 0);
+      const filter = await this.buildBrowseFilter(input ?? {});
+
+      const [composantRecord, totalComposantCount] = await Promise.all([
+        this.ComposantModel.find(filter)
+          .select('_id name category_composant_id')
+          .sort({ name: 1 })
+          .skip(first)
+          .limit(rows)
+          .lean(),
+        this.ComposantModel.countDocuments(filter),
+      ]);
+
+      return {
+        composantRecord: composantRecord as unknown as Composant[],
+        totalComposantCount,
+      };
+    } catch (err) {
+      await this.operationalErrorService.capture({
+        module: 'composant',
+        submodule: 'composantService',
+        method: 'BROWSE_COMPOSANTS',
+        severity: 'MEDIUM',
+        error: 'Browse query failed',
+        message: (err as Error)?.message ?? String(err),
+        payload: {
+          categoryId: input?.categoryId,
+          hasSearch: !!input?.search,
+        },
+      });
+      // Page vide plutôt qu'une erreur GraphQL : le picker reste utilisable
+      // (la recherche plein-texte continue de fonctionner).
+      return { composantRecord: [], totalComposantCount: 0 };
+    }
+  }
+
+  /**
+   * Racines de l'arbre : les catégories + leur nombre de composants.
+   *
+   * DEUX requêtes, pas de N+1 : un `$group` sur les composants, puis
+   * réconciliation en mémoire avec la liste des catégories.
+   *
+   * Toute clé de regroupement qui ne correspond à aucune catégorie est
+   * d'abord retentée PAR LIBELLÉ (rattrape la pollution héritée), et sinon
+   * versée dans un nœud synthétique « Sans catégorie ». Sans ce repli, les
+   * composants concernés deviendraient INATTEIGNABLES dans l'arbre — une
+   * régression face au dropdown plat qui, lui, les listait tous.
+   */
+  async composantCategoryTree(): Promise<
+    Array<{ _id: string; category_composant: string; composantCount: number }>
+  > {
+    try {
+      const [categories, grouped] = await Promise.all([
+        this.categoryModel
+          .find({ isDeleted: { $ne: true } })
+          .select('_id category_composant')
+          .lean(),
+        this.ComposantModel.aggregate([
+          { $match: { isDeleted: { $ne: true } } },
+          { $group: { _id: '$category_composant_id', count: { $sum: 1 } } },
+        ]),
+      ]);
+
+      const byId = new Map<string, any>(
+        categories.map((c: any) => [String(c._id), c]),
+      );
+      const byLabel = new Map<string, any>(
+        categories.map((c: any) => [
+          ComposantService.normalizeLabel(c.category_composant),
+          c,
+        ]),
+      );
+
+      const counts = new Map<string, number>();
+      let uncategorized = 0;
+
+      for (const row of grouped as Array<{ _id: unknown; count: number }>) {
+        const count = Number(row?.count ?? 0);
+        if (count <= 0) continue;
+
+        let match: any = null;
+        if (!ComposantService.isBlankCategoryRef(row?._id)) {
+          const key = String(row._id).trim();
+          match =
+            byId.get(key) ??
+            byLabel.get(ComposantService.normalizeLabel(key)) ??
+            null;
+        }
+
+        if (match) {
+          const id = String(match._id);
+          counts.set(id, (counts.get(id) ?? 0) + count);
+        } else {
+          uncategorized += count;
+        }
+      }
+
+      const nodes = categories
+        .map((c: any) => ({
+          _id: String(c._id),
+          category_composant: String(c.category_composant ?? ''),
+          composantCount: counts.get(String(c._id)) ?? 0,
+        }))
+        .sort((a, b) =>
+          a.category_composant.localeCompare(b.category_composant, 'fr', {
+            sensitivity: 'base',
+          }),
+        );
+
+      if (uncategorized > 0) {
+        // Toujours en dernier : c'est un fourre-tout, pas une vraie catégorie.
+        nodes.push({
+          _id: ComposantService.UNCATEGORIZED_ID,
+          category_composant: 'Sans catégorie',
+          composantCount: uncategorized,
+        });
+      }
+
+      return nodes;
+    } catch (err) {
+      await this.operationalErrorService.capture({
+        module: 'composant',
+        submodule: 'composantService',
+        method: 'COMPOSANT_CATEGORY_TREE',
+        severity: 'MEDIUM',
+        error: 'Category tree query failed',
+        message: (err as Error)?.message ?? String(err),
+      });
+      return [];
+    }
+  }
+
   async searchComposants(name: string): Promise<any[]> {
     if (!name || name.trim().length < 2) {
       return [];

@@ -285,3 +285,29 @@ export const COORDINATOR_STATUS_DI_VALUES = Object.values(STATUS_DI)
   // La phase préparation magasin (InMagasin = CONFIRMATION) doit rester visible
   // côté coordinatrice.
   .concat(STATUS_DI.InMagasin.status);
+
+/**
+ * Rôles RESPONSABLES d'un statut — SOURCE UNIQUE de « qui doit être prévenu ».
+ *
+ * `STATUS_DI[*].role` porte déjà, pour chaque statut, la liste de ceux qui
+ * doivent agir ensuite : c'est elle qui est recopiée dans `current_roles`. Et
+ * son vocabulaire est EXACTEMENT celui des six clés de
+ * `HUMAN_ROLE_TO_PROFILE_ROLE` (notifications/role-mapping.ts) — le retour de
+ * cette fonction part donc tel quel dans `notify.roles`, sans traduction.
+ *
+ * POURQUOI l'extraire : l'audience était recopiée À LA MAIN dans la vingtaine
+ * d'appels d'`emitDiHandoff`. Rien ne garantissait qu'elle corresponde au
+ * statut d'arrivée, et elle avait effectivement dérivé (un retour prévenait la
+ * coordination et oubliait le technicien, pourtant responsable). Dérivée du
+ * statut, elle ne peut plus diverger.
+ *
+ * Repli sur la coordination quand le statut est inconnu (valeurs LEGACY non
+ * migrées : `CLOSING`, `ATTENTE_BC_DEVIS`, `NEGOTIATION1`…) — même règle que
+ * `reactiverDi` : une DI ne doit JAMAIS devenir invisible pour tout le monde.
+ *
+ * Renvoie une COPIE : l'appelant peut concaténer sans muter `STATUS_DI`.
+ */
+export function rolesForStatus(status?: string | null): string[] {
+  const def = Object.values(STATUS_DI).find((s) => s.status === status);
+  return [...(def?.role ?? ['Coordinator'])];
+}

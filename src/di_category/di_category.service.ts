@@ -32,8 +32,19 @@ export class DiCategoryService {
     return indexDi;
   }
 
-  // create
-  async createDiCategory(category: string): Promise<DiCategory> {
+  /**
+   * Crée la catégorie, ou renvoie celle qui porte déjà ce nom.
+   *
+   * Le résultat DIT lequel des deux s'est produit (`created`). Auparavant la
+   * méthode renvoyait le doublon exactement comme une création, sans le
+   * signaler : impossible pour l'appelant de ne pas mentir à l'utilisateur
+   * (« Catégorie créée ») ni d'éviter de notifier l'encadrement à chaque
+   * quasi-doublon. La comparaison reste celle d'origine — nom trimé,
+   * insensible à la casse, sur les catégories non supprimées.
+   */
+  async createDiCategory(
+    category: string,
+  ): Promise<{ doc: DiCategory; created: boolean }> {
     const normalizedCategory = category?.trim();
     if (!normalizedCategory) {
       throw new InternalServerErrorException('Category name is required');
@@ -48,16 +59,15 @@ export class DiCategoryService {
     });
 
     if (existing) {
-      return existing;
+      return { doc: existing, created: false };
     }
 
-    const index = await this.generateDiId();
     let dataCategory = {} as CreateDiCategoryInput;
     dataCategory._id = uuidv4();
     dataCategory.category = normalizedCategory;
 
     const result = await new this.DiCategoryModel(dataCategory).save();
-    return result;
+    return { doc: result, created: true };
   }
 
   // remove

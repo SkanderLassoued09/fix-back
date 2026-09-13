@@ -186,10 +186,24 @@ async function openDiag(page: Page, num: string) {
         .locator('button:has(.pi-search)')
         .click();
     await expect(page.locator('.sav-diag-header')).toBeVisible({ timeout: 10000 });
+    await fillDiagRemarks(page);
 }
 
 async function goStep(page: Page, label: string) {
     await page.locator('.sav-stepper__btn', { hasText: label }).click();
+}
+
+/**
+ * Les DEUX remarques de l'étape « Panne » sont OBLIGATOIRES pour clôturer un
+ * diagnostic (description de la panne + remarque technicien) : sans elles, les
+ * quatre boutons de clôture restent grisés. Les champs n'existent dans le DOM
+ * que lorsque l'étape « Panne » est active (ngSwitch), d'où le passage par le
+ * stepper.
+ */
+async function fillDiagRemarks(page: Page) {
+    await goStep(page, 'Panne');
+    await page.locator('#diag-desc').fill('Panne relevée par le test E2E.');
+    await page.locator('#diag-extra').fill('Remarque technicien E2E.');
 }
 
 /**
@@ -372,8 +386,8 @@ test('FT-04 (2e saut) — sortie magasin d’un retour Fixtronix → PENDING3 sa
     const walk: Array<[string, string, string]> = [
         // « Terminer l'estimation » du magasin — c'est CE saut qui partait en PENDING2.
         ['sortie magasin', `changeStatusPending2(_id: "${id}")`, 'CONFIRMATION'],
-        ['envoi coordination', `sendComponentToConMagasinForConfirmation(_id: "${id}") { _id status }`, 'CONFIRMATION'],
-        ['confirmation coordination', `componentConfirmedFromCoordinator(_id: "${id}") { _id status }`, 'CONFIRMATION'],
+        ['envoi coordination', `sendComponentToConMagasinForConfirmation(_id: "${id}") { _id status }`, 'ATTENTE_CONFIRMATION_COORDINATION'],
+        ['confirmation coordination', `componentConfirmedFromCoordinator(_id: "${id}") { _id status }`, 'MAGASIN_FINALISATION'],
         ['fin liste composants', `changeStatusPending3(_id: "${id}")`, 'PENDING3'],
     ];
     for (const [label, mut, _expected] of walk) {

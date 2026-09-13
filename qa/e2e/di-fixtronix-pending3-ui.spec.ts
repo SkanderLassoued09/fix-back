@@ -130,10 +130,24 @@ async function openDiag(page: Page, idnum: string) {
     await expect(page.locator('.sav-diag-header')).toBeVisible({
         timeout: 10000,
     });
+    await fillDiagRemarks(page);
 }
 
 async function goStep(page: Page, label: string) {
     await page.locator('.sav-stepper__btn', { hasText: label }).click();
+}
+
+/**
+ * Les DEUX remarques de l'étape « Panne » sont OBLIGATOIRES pour clôturer un
+ * diagnostic (description de la panne + remarque technicien) : sans elles, les
+ * quatre boutons de clôture restent grisés. Les champs n'existent dans le DOM
+ * que lorsque l'étape « Panne » est active (ngSwitch), d'où le passage par le
+ * stepper.
+ */
+async function fillDiagRemarks(page: Page) {
+    await goStep(page, 'Panne');
+    await page.locator('#diag-desc').fill('Panne relevée par le test E2E.');
+    await page.locator('#diag-extra').fill('Remarque technicien E2E.');
 }
 
 async function setToggle(page: Page, control: string, checked: boolean) {

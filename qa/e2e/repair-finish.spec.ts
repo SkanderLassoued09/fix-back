@@ -16,7 +16,8 @@ import { techId } from '../utils/accounts';
  *  B2: the used parts + repair remark persist (via updateDi) — survive in DB.
  *  B3: the form opens pre-filled — the category is pre-filled from the DI, so
  *      the finish gate is satisfied WITHOUT the test ever touching the category
- *      dropdown (the 2-step wizard only collects worksDone + the two toggles).
+ *      dropdown (the 2-step wizard only collects worksDone + testsDone + the
+ *      two toggles).
  *
  * Staged in Mongo (test DB), hard-deleted after.
  */
@@ -111,12 +112,18 @@ test('« Fin réparation » → DI WAITING_BL, parts persist, category pre-fille
 
     // The wizard now opens directly on « Travaux & tests » (step 1/2): the
     // former « Informations générales », « Plan d'intervention » and « Pièces
-    // utilisées » steps were removed. Category + parts are pre-filled from the
-    // DI (B3) and are display-only — they no longer gate closure, so the test
-    // never touches them.
+    // utilisées » steps were removed (the « Plan d'intervention » recap is gone
+    // too — no such field existed server-side). Category + parts are pre-filled
+    // from the DI (B3) and are display-only — they no longer gate closure, so
+    // the test never touches them.
     await page
         .locator('textarea[formcontrolname="worksDone"]')
         .fill('Soudure refaite, composant remplacé, nettoyage carte.');
+    // « Tests effectués » est OBLIGATOIRE (astérisque + garde de clôture) :
+    // sans lui, « Fin réparation » reste désactivé.
+    await page
+        .locator('textarea[formcontrolname="testsDone"]')
+        .fill('Mise sous tension, test de charge 1 h — conforme.');
     await page
         .locator('[aria-label="Réparation réussie"] button:has-text("Oui")')
         .click();
@@ -127,8 +134,8 @@ test('« Fin réparation » → DI WAITING_BL, parts persist, category pre-fille
     // works → summary (step 2/2)
     await next(page);
     const finishBtn = page.locator('.cta__btn');
-    // Finish is ENABLED from worksDone + the two toggles alone — the category /
-    // plan / parts are pre-filled and no longer required by the gate (B3).
+    // Finish is ENABLED from worksDone + testsDone + the two toggles — the
+    // category / parts are pre-filled, display-only, and do not gate closure (B3).
     await expect(finishBtn, 'finish enabled on the 2-step wizard').toBeEnabled({
         timeout: 8000,
     });
@@ -209,6 +216,9 @@ async function fillWorksAndGoSummary(page: Page) {
     await page
         .locator('textarea[formcontrolname="worksDone"]')
         .fill('Travaux effectués (QA).');
+    await page
+        .locator('textarea[formcontrolname="testsDone"]')
+        .fill('Tests effectués (QA).');
     await page
         .locator('[aria-label="Réparation réussie"] button:has-text("Oui")')
         .click();

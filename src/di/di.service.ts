@@ -22,11 +22,13 @@ import {
   isApprovalDocStatus,
   isClosingStatus,
   MAGASIN_STATUS_DI_VALUES,
+  rolesForStatus,
   STATUS_DI,
   TECH_STATUS_DI_VALUES,
 } from './di.status';
 import { GraphQLError } from 'graphql';
 import { assertDiTransition } from './workflow/di-transition-guard';
+import { escapeRegex } from 'src/di-archive/di-archive-filter.util';
 import { Role } from 'src/auth/roles';
 import {
   Composant,
@@ -69,6 +71,64 @@ import {
   GoogleDriveService,
   DriveDocType,
 } from 'src/google-drive/google-drive.service';
+/**
+ * Remise a zero du MIROIR de la DI a l'entree d'un cycle retour.
+ *
+ * Le miroir ne represente QUE le cycle courant : un nouveau cycle doit donc
+ * partir vierge. L'historique n'est pas perdu — il vit sur la ligne du cycle
+ * sortant (`logsdis{_idDi, idIgnore}`), close au meme instant.
+ *
+ * POURQUOI on vide desormais le verdict et les composants, contrairement au
+ * commentaire precedent qui s'y refusait « pour ne pas laisser le magasin en
+ * attente ». Cette crainte ne tient pas : `getDiForMagasin` filtre
+ * `contain_pdr: true` ET `status ∈ MAGASIN_STATUS_DI_VALUES`, or les statuts
+ * RETOUR1/2/3 n'en font pas partie. Une DI qui part en retour passe par
+ * RETOUR{n} → PENDING1 → DIAGNOSTIC : elle ne peut pas etre dans la liste
+ * magasin a cet instant, et n'y revient qu'apres que le nouveau diagnostic a
+ * reecrit le miroir. C'est ce qui debloque la separation des flux — sans quoi
+ * un retour declare SANS PDR continuait d'exposer la liste PDR du cycle 0.
+ *
+ * `contain_pdr` est remis a `false` et NON a `null` : le filtre magasin teste
+ * `true` et `diHasComponents` attend un booleen.
+ */
+const RETOUR_CYCLE_RESET = Object.freeze({
+  pricingRequestSentAt: null,
+  pricingRequestSentBy: null,
+  componentsConfirmedAt: null,
+  componentsConfirmedBy: null,
+  isConfirmedComponentFromCoordinator: false,
+  isSentToCoordinator: false,
+  gotComposantFromMagasin: false,
+  isOpenedOnce: false,
+  confirmationComposant: null,
+  handleSendingNotificationBetweenCoordinatorAndMagasin: 'IN_COORDINATOR',
+  isErrorFromFixtronix: null,
+  needsDevisBeforeRepair: false,
+
+  // ── Verdict du cycle ────────────────────────────────────────────────────
+  can_be_repaired: null,
+  contain_pdr: false,
+  array_composants: [],
+  remarque_tech_diagnostic: null,
+  remarque_tech_repair: null,
+  remarque_magasin: null,
+  remarque_coordinator: null,
+
+  // ── Documents du cycle (les clefs `driveDocs` sont retirees par $unset) ──
+  devis: null,
+  bon_de_commande: null,
+  bon_de_livraison: null,
+  facture: null,
+
+  // ── Argent du cycle ─────────────────────────────────────────────────────
+  price: null,
+  final_price: null,
+  repairEstimate: null,
+
+  // Re-arme l'idempotence du decrement de stock pour le nouveau cycle.
+  stockDecrementedAt: null,
+});
+
 @Injectable()
 export class DiService {
   constructor(
@@ -603,10 +663,39 @@ export class DiService {
       const di = await diDoc.save();
       await this.syncEmplacementStats(di.location_id as any);
 
+      // Ouvre le dossier du CYCLE 0 des la creation. Auparavant une ligne de
+      // cycle n'existait qu'a partir du 1er retour, si bien que le flux original
+      // n'avait pas de support propre : il vivait sur la DI, que les cycles
+      // suivants ecrasaient. Idempotent (`$setOnInsert`), et best-effort : une
+      // DI creee vaut mieux qu'une creation qui echoue sur sa ligne de cycle
+      // (la migration 014 et `createStat` rattrapent les lignes manquantes).
+      try {
+        await this.logsDiService.create(di._id as any, 0);
+      } catch (err) {
+        await this.operationalErrorService.capture({
+          module: 'di',
+          submodule: 'diService',
+          method: 'CREATEDI_CYCLE0',
+          severity: 'LOW',
+          error: 'Ouverture de la ligne de cycle 0 impossible',
+          message: (err as Error)?.message ?? String(err),
+          payload: { diId: di._id },
+        });
+      }
+
       // 🔔 Notify (only if pending) — skipped for bulk import to avoid one
       // Discord webhook per imported row.
       if (!opts?.skipNotify && di.status === 'PENDING1') {
-        this.discordHookService.sendDiPendingNotification(di);
+        // `await` + `try` OBLIGATOIRES : c'était le SEUL des 32 envois Discord
+        // du module à être détaché. `sendDiPendingNotification` interroge Mongo
+        // (client/société) AVANT d'atteindre le gate : une panne de base y
+        // devenait un rejet de promesse NON GÉRÉ, survenant après le retour de
+        // `createDi` — donc impossible à rattacher à quoi que ce soit.
+        try {
+          await this.discordHookService.sendDiPendingNotification(di);
+        } catch (err) {
+          await this.captureDiscordFailure('createDi', err, { diId: di._id });
+        }
         // Notif ERP : une DI créée DIRECTEMENT en PENDING1 (case cochée à la
         // création) doit prévenir la coordination — sinon la cloche ne reçoit
         // rien (seul Discord partait). Best-effort.
@@ -671,15 +760,16 @@ export class DiService {
         throw new Error(`Demande d'intervention with ID '${_id}' not found.`);
       }
 
-      // Initialize logsDi to null and only fetch if needed
-      let logsDi = null;
-      if (di.ignoreCount && di.ignoreCount > 0) {
-        logsDi = [];
-        for (let index = 1; index <= di.ignoreCount; index++) {
-          // Push each logDi to the logsDi array
-          const log = await this.logsDiService.getLogsById(index, di._id);
-          logsDi.push(log);
-        }
+      // Le cycle 0 a DESORMAIS sa propre ligne : on part de 0, plus de 1, et
+      // sans la garde `ignoreCount > 0`. Une DI jamais retournee renvoie donc
+      // une ligne (son flux original) au lieu de `null` — c'est ce qui permet
+      // au dossier de lire tous les cycles de la meme facon, sans retomber sur
+      // la DI quand la ligne manque.
+      const cycleCount = di.ignoreCount ?? 0;
+      const logsDi = [];
+      for (let index = 0; index <= cycleCount; index++) {
+        const log = await this.logsDiService.getLogsById(index, di._id);
+        if (log) logsDi.push(this.withCycleDocuments(log));
       }
 
       // Populate the linked entity so the modal can show its contacts (the `Di`
@@ -739,25 +829,15 @@ export class DiService {
       // (DI_NEGOTIATION1). Situation courante : la notif disparaît de la cloche.
       await this.notificationService.clearByDiAndType(_id, 'DI_NEGOTIATION1');
 
-      let result;
-
-      if (di.ignoreCount && di.ignoreCount > 0) {
-        result = await this.logsDiService.addDevisPDFLogs(
-          di._id,
-          di.ignoreCount,
-          webViewLink,
-        );
-      } else {
-        result = await this.diModel.updateOne(
-          { _id },
-          {
-            $set: {
-              devis: webViewLink,
-              'driveDocs.Devis': { driveFileId, webViewLink, name: fileName },
-            },
-          },
-        );
-      }
+      // Ligne du cycle courant + miroir DI, en UN seul chemin. La branche
+      // « retour → logs / original → DI » est supprimee : c'est elle qui
+      // laissait `driveDocs` fige sur les fichiers du cycle 0, donc l'onglet
+      // « Retour N » affichait le devis (et le nom de fichier) de l'original.
+      await this.writeCurrentCycleDoc(_id, 'Devis', {
+        driveFileId,
+        webViewLink,
+        name: fileName,
+      });
 
       // 🔔 Discord notification (Devis uploaded)
       try {
@@ -791,8 +871,7 @@ export class DiService {
       // WAITING_BC (atomique/idempotent ; cascade si le BC est déjà présent).
       await this.maybeAdvanceDocGate(_id);
 
-      // Return the fresh DI (the mutation is typed `() => Di`); `result` is a
-      // Mongo update/log result with no Di fields.
+      // Renvoie la DI fraiche (la mutation est typee `() => Di`).
       return await this.diModel.findOne({ _id });
     } catch (error) {
       await this.captureUploadFailure('ADD_DEVIS_PDF', error, _id);
@@ -814,84 +893,47 @@ export class DiService {
       await this.notificationService.clearByDiAndType(_id, 'DI_DOC_BL_PENDING');
       await this.notificationService.clearByDiAndType(_id, 'DI_REP_FINISHED');
 
-      if (di.ignoreCount && di.ignoreCount > 0) {
-        await this.logsDiService.addBLPDFLogs(
-          di._id,
-          di.ignoreCount,
-          webViewLink,
-        );
-        this.notificationGateway.blAddedNotification({
-          di,
-          message: `A new BL has been added for DI ${di._idnum} with ignore count ${di.ignoreCount}`,
-        });
-        // Also broadcast updateTicket so every ticket-list view triggers
-        // its standard requestRefresh/loadData pipeline. Without this, the
-        // BL flow only fires the bl-specific subject and depends solely on
-        // the in-place patchBlAddedRow patch. The server-driven refresh
-        // fetches the persisted state and lets the row's class binding
-        // pick up bon_de_livraison from the DI document.
-        this.notificationGateway.updateTicket({
-          action: 'updateState',
-          content: { result: di, states: di },
-          target: {},
-        });
+      // UN seul chemin : ligne du cycle courant + miroir DI. Les deux branches
+      // precedentes (retour → logs, original → DI) dupliquaient la meme
+      // sequence de notifications, et seule celle du cycle original ecrivait
+      // `driveDocs` — d'ou un BL de retour invisible des portes documentaires
+      // et un onglet « Retour N » montrant le BL du cycle 0.
+      await this.writeCurrentCycleDoc(_id, 'BL', {
+        driveFileId,
+        webViewLink,
+        name: fileName,
+      });
 
-        try {
-          await this.discordHookService.sendDiBLUploaded({ di, fileName });
-        } catch (err) {
-          await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
-        }
+      const updatedDi = await this.diModel.findOne({ _id });
 
-        await this.emitBlUploadedNotification(_id, di);
+      this.notificationGateway.blAddedNotification({
+        di: updatedDi,
+        message: {
+          role: 'MAGASIN',
+          content: `A new BL has been added for DI ${di._idnum}`,
+        },
+      });
+      this.notificationGateway.updateTicket({
+        action: 'updateState',
+        content: { result: updatedDi, states: updatedDi },
+        target: {},
+      });
 
-        // Return the fresh DI (mutation is typed `() => Di`); addbllogspdf is
-        // a LogsDi, not a Di.
-        return await this.diModel.findOne({ _id });
-      } else {
-        // Use findOneAndUpdate({ new: true }) so the post-update document
-        // (with bon_de_livraison populated) is what we both broadcast and
-        // return. The previous updateOne left `di` as the pre-update doc,
-        // so any consumer of the WS payload received stale data.
-        const updatedDi = await this.diModel.findOneAndUpdate(
-          { _id },
-          {
-            $set: {
-              bon_de_livraison: webViewLink,
-              'driveDocs.BL': { driveFileId, webViewLink, name: fileName },
-            },
-          },
-          { new: true },
-        );
-
-        this.notificationGateway.blAddedNotification({
+      try {
+        await this.discordHookService.sendDiBLUploaded({
           di: updatedDi,
-          message: {
-            role: 'MAGASIN',
-            content: `A new BL has been added for DI ${di._idnum}`,
-          },
+          fileName,
         });
-        this.notificationGateway.updateTicket({
-          action: 'updateState',
-          content: { result: updatedDi, states: updatedDi },
-          target: {},
-        });
-
-        try {
-          await this.discordHookService.sendDiBLUploaded({
-            di: updatedDi,
-            fileName,
-          });
-        } catch (err) {
-          await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
-        }
-
-        await this.emitBlUploadedNotification(_id, updatedDi);
-
-        // If this completes the BL + Facture pair while the DI waits in
-        // ATTENTE_BL_FACTURE, close it automatically (atomic + idempotent).
-        await this.maybeAdvanceDocGate(_id);
-        return await this.diModel.findOne({ _id });
+      } catch (err) {
+        await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
       }
+
+      await this.emitBlUploadedNotification(_id, updatedDi);
+
+      // Si le BL complete la paire BL + Facture du CYCLE COURANT, la porte
+      // documentaire avance (atomique + idempotent).
+      await this.maybeAdvanceDocGate(_id);
+      return await this.diModel.findOne({ _id });
     } catch (error) {
       await this.captureUploadFailure('ADD_BL_PDF', error, _id);
       throw error;
@@ -910,25 +952,16 @@ export class DiService {
       // (DI_DOC_BL). Situation courante : la notif disparaît de la cloche.
       await this.notificationService.clearByDiAndType(_id, 'DI_DOC_BL');
 
-      if (di.ignoreCount && di.ignoreCount > 0) {
-        await this.logsDiService.addFacturePDFLogs(
-          di._id,
-          di.ignoreCount,
-          webViewLink,
-        );
-      } else {
-        await this.diModel.updateOne(
-          { _id },
-          {
-            $set: {
-              facture: webViewLink,
-              'driveDocs.Facture': { driveFileId, webViewLink, name: fileName },
-            },
-          },
-        );
-        // Completes the BL + Facture pair? Auto-close if waiting (atomic).
-        await this.maybeAdvanceDocGate(_id);
-      }
+      // Ligne du cycle courant + miroir DI (chemin unique).
+      await this.writeCurrentCycleDoc(_id, 'Facture', {
+        driveFileId,
+        webViewLink,
+        name: fileName,
+      });
+
+      // La paire BL + Facture du CYCLE COURANT est-elle complete ? La porte
+      // documentaire avance (atomique + idempotent).
+      await this.maybeAdvanceDocGate(_id);
 
       // NB : PAS de notification ERP « facture ajoutée » ici. La facture est le
       // document de CLÔTURE : dans le chemin normal, `maybeAdvanceDocGate`
@@ -961,8 +994,11 @@ export class DiService {
       // (champ `devis` renseigné) passent ; celles SANS devis sont bloquées —
       // c'est exactement le comportement voulu (migration 008 = « devis présent »
       // → WAITING_BC, « devis absent » → WAITING_DEVIS), pas un blocage absurde.
-      // Retour (ignoreCount>0) : le devis du cycle initial reste sur la DI, donc
-      // la garde passe naturellement (les docs de retour vont en logsDi).
+      // CHANGEMENT DE COMPORTEMENT (separation par cycle) : la garde est
+      // desormais REELLE en retour. Avant, le devis du cycle initial restait sur
+      // la DI et la garde passait « naturellement » — un BC de retour pouvait
+      // donc etre depose sans devis de retour. Le miroir ne portant plus que le
+      // cycle courant, un retour exige maintenant SON propre devis.
       const hasDevis =
         this.isDriveDocRef((di as any)?.driveDocs?.Devis) ||
         !!(di as any)?.devis;
@@ -980,25 +1016,12 @@ export class DiService {
       // Situation courante : la notif disparaît de la cloche.
       await this.notificationService.clearByDiAndType(_id, 'DI_DOC_DEVIS');
 
-      let result;
-
-      if (di.ignoreCount && di.ignoreCount > 0) {
-        result = await this.logsDiService.addBCPDFLogs(
-          di._id,
-          di.ignoreCount,
-          webViewLink,
-        );
-      } else {
-        result = await this.diModel.updateOne(
-          { _id },
-          {
-            $set: {
-              bon_de_commande: webViewLink,
-              'driveDocs.BC': { driveFileId, webViewLink, name: fileName },
-            },
-          },
-        );
-      }
+      // Ligne du cycle courant + miroir DI (chemin unique).
+      await this.writeCurrentCycleDoc(_id, 'BC', {
+        driveFileId,
+        webViewLink,
+        name: fileName,
+      });
 
       // 🔔 Discord notification (BC uploaded)
       try {
@@ -1020,7 +1043,18 @@ export class DiService {
             (di as any)?._idnum ?? _id
           } — bon de commande ajouté (à vérifier)`,
           payload: { doc: 'BC' },
-          notify: { roles: ['Admin_Manager'] },
+          notify: {
+            // Le BC est attendu alors que la DI est en WAITING_BC, dont le
+            // responsable est le MANAGER — qui était absent de la liste. On
+            // conserve Admin_Manager (sur-ensemble délibéré : l'annulation et
+            // l'escalade lui reviennent).
+            roles: [
+              ...new Set([
+                ...rolesForStatus(STATUS_DI.WaitingBc.status),
+                'Admin_Manager',
+              ]),
+            ],
+          },
         });
       } catch (err) {
         await this.captureDiscordFailure('erp-notification', err);
@@ -1031,8 +1065,7 @@ export class DiService {
       // composants / PROCESSING avec composants / FINISHED non réparable).
       await this.maybeAdvanceDocGate(_id);
 
-      // Return the fresh DI (the mutation is typed `() => Di`); `result` is a
-      // Mongo update/log result with no Di fields.
+      // Renvoie la DI fraiche (la mutation est typee `() => Di`).
       return await this.diModel.findOne({ _id });
     } catch (error) {
       await this.captureUploadFailure('ADD_BC_PDF', error, _id);
@@ -1138,6 +1171,12 @@ export class DiService {
           actorRole: actor?.role ?? null,
           message: `Dossier modifié (${Object.keys(changes).join(', ')})`,
           payload: { status: updated?.status ?? null, changes },
+          // Était un événement d'HISTORIQUE SEUL : un administrateur pouvait
+          // réécrire client, emplacement ou prix pendant que la DI attendait
+          // dans la file de quelqu'un d'autre, sans que ce dernier l'apprenne.
+          // On prévient le détenteur ACTUEL du dossier (`emit` exclut déjà
+          // l'auteur de sa propre modification).
+          notify: { roles: rolesForStatus(updated?.status) },
         });
       } catch (err) {
         // Le journal ne doit JAMAIS faire échouer l'édition elle-même.
@@ -1181,128 +1220,135 @@ export class DiService {
     await Promise.all(ids.map((id) => this.syncEmplacementStats(id)));
   }
 
-  async addPDFFile(_id: string, facture: string, bl: string) {
-    const di = await this.diModel.findOne({ _id });
-    if (!di) throw new Error(`DI '${_id}' not found`);
+  /** Colonnes filtrables des listes tickets (`searchDi`) et coordination
+   *  (`searchCoordinatorDI`). La page magasin n'en expose que 3. */
+  static readonly DI_LIST_SEARCH_FIELDS: readonly string[] = [
+    '_id',
+    '_idnum',
+    'title',
+    'status',
+    'company',
+    'client',
+    'location',
+    'createdBy',
+    'techDiag',
+    'techRep',
+  ];
 
-    // Drive-only: both files renamed + uploaded to the DI's entity folder.
-    const factureRef = await this.uploadDiDocToDrive(di, facture, 'Facture');
-    const blRef = await this.uploadDiDocToDrive(di, bl, 'BL');
-
-    return await this.diModel.updateOne(
-      { _id },
-      {
-        $set: {
-          facture: factureRef.webViewLink,
-          bon_de_livraison: blRef.webViewLink,
-          'driveDocs.Facture': {
-            driveFileId: factureRef.driveFileId,
-            webViewLink: factureRef.webViewLink,
-            name: factureRef.fileName,
-          },
-          'driveDocs.BL': {
-            driveFileId: blRef.driveFileId,
-            webViewLink: blRef.webViewLink,
-            name: blRef.fileName,
-          },
-        },
-      },
+  /**
+   * Filtres de colonnes des listes DI → prédicats CUMULATIFS, à poser dans
+   * `$and`. Saisie échappée (cherchée littéralement : `(` ne fait plus lever
+   * Mongo), dès 1 caractère ; un champ hors `allowed` est ignoré.
+   *
+   * Une colonne « jointe » (société, client, emplacement, créateur, tech) qui
+   * ne trouve AUCUNE correspondance pose `$in: []` — un prédicat impossible.
+   * Avant, elle était ignorée et la liste ENTIÈRE revenait ; et deux colonnes
+   * tech s'écrasaient l'une l'autre sur `filter._id`.
+   */
+  async buildDiColumnSearchPredicates(
+    search:
+      | { field: string; value: string }
+      | { field: string; value: string }[]
+      | null
+      | undefined,
+    allowed: readonly string[],
+  ): Promise<any[]> {
+    const searches = (Array.isArray(search) ? search : [search]).filter(
+      (s) =>
+        s &&
+        allowed.includes(s.field) &&
+        typeof s.value === 'string' &&
+        s.value.trim().length > 0,
     );
-  }
-  async searchDi(
-    paginationConfig: PaginationConfigDi,
-    search: { field: string; value: string },
-  ) {
-    const { first, rows } = paginationConfig;
-    const { field, value } = search;
 
-    // Base filter
-    const filter: any = { isDeleted: false };
-
-    // Only apply search if value has 2+ characters
-    if (field && value && value.trim().length >= 2) {
-      const trimmedValue = value.trim();
-      let regex: any;
-
-      regex = { $regex: `${trimmedValue}`, $options: 'i' };
+    const predicates: any[] = [];
+    for (const { field, value } of searches) {
+      const regex = { $regex: escapeRegex(value.trim()), $options: 'i' };
+      const person = { $or: [{ firstName: regex }, { lastName: regex }] };
 
       switch (field) {
         case '_id':
         case '_idnum':
         case 'title':
-          filter[field] = regex;
-          break;
-
         case 'status':
-          filter.$and = [...(filter.$and ?? []), { status: regex }];
+          predicates.push({ [field]: regex });
           break;
 
         case 'company':
-          const companyIds = await this.companyModel
-            .find({ name: regex })
-            .distinct('_id');
-          if (companyIds.length > 0) filter.company_id = { $in: companyIds };
+          predicates.push({
+            company_id: {
+              $in: await this.companyModel
+                .find({ name: regex })
+                .distinct('_id'),
+            },
+          });
           break;
 
         case 'client':
-          const clientIds = await this.clientModel
-            .find({ $or: [{ first_name: regex }, { last_name: regex }] })
-            .distinct('_id');
-          if (clientIds.length > 0) filter.client_id = { $in: clientIds };
+          predicates.push({
+            client_id: {
+              $in: await this.clientModel
+                .find({ $or: [{ first_name: regex }, { last_name: regex }] })
+                .distinct('_id'),
+            },
+          });
           break;
 
         case 'location':
-          const locationIds = await this.locationModel
-            .find({ location_name: regex })
-            .distinct('_id');
-          if (locationIds.length > 0) filter.location_id = { $in: locationIds };
+          predicates.push({
+            location_id: {
+              $in: await this.locationModel
+                .find({ location_name: regex })
+                .distinct('_id'),
+            },
+          });
           break;
-        case 'techDiag': {
-          // 1. Find matching profiles
-          const profileIds = await this.profileModel
-            .find({ $or: [{ firstName: regex }, { lastName: regex }] })
-            .distinct('_id');
-
-          if (profileIds.length === 0) break;
-
-          // 2. Find stats where tech diag matches
-          const diIds = await this.statModel
-            .find({ id_tech_diag: { $in: profileIds } })
-            .distinct('_idDi');
-
-          if (diIds.length > 0) {
-            filter._id = { $in: diIds };
-          }
-          break;
-        }
-
-        case 'techRep': {
-          // 1. Find matching profiles
-          const profileIds = await this.profileModel
-            .find({ $or: [{ firstName: regex }, { lastName: regex }] })
-            .distinct('_id');
-
-          if (profileIds.length === 0) break;
-
-          // 2. Find stats where tech rep matches
-          const diIds = await this.statModel
-            .find({ id_tech_rep: { $in: profileIds } })
-            .distinct('_idDi');
-
-          if (diIds.length > 0) {
-            filter._id = { $in: diIds };
-          }
-          break;
-        }
 
         case 'createdBy':
-          const profileIds = await this.profileModel
-            .find({ $or: [{ firstName: regex }, { lastName: regex }] })
-            .distinct('_id');
-          if (profileIds.length > 0) filter.createdBy = { $in: profileIds };
+          predicates.push({
+            createdBy: {
+              $in: await this.profileModel.find(person).distinct('_id'),
+            },
+          });
           break;
+
+        case 'techDiag':
+        case 'techRep': {
+          const profileIds = await this.profileModel
+            .find(person)
+            .distinct('_id');
+          const statField =
+            field === 'techDiag' ? 'id_tech_diag' : 'id_tech_rep';
+          const diIds = profileIds.length
+            ? await this.statModel
+                .find({ [statField]: { $in: profileIds } })
+                .distinct('_idDi')
+            : [];
+          predicates.push({ _id: { $in: diIds } });
+          break;
+        }
       }
     }
+    return predicates;
+  }
+
+  async searchDi(
+    paginationConfig: PaginationConfigDi,
+    search:
+      | { field: string; value: string }
+      | { field: string; value: string }[],
+  ) {
+    const { first, rows } = paginationConfig;
+
+    // Base filter
+    const filter: any = { isDeleted: false };
+
+    // Filtres de colonnes cumulatifs (cf. buildDiColumnSearchPredicates)
+    const predicates = await this.buildDiColumnSearchPredicates(
+      search,
+      DiService.DI_LIST_SEARCH_FIELDS,
+    );
+    if (predicates.length) filter.$and = predicates;
 
     // COUNT
     const totalDiCount = await this.diModel.countDocuments(filter);
@@ -1393,7 +1439,7 @@ export class DiService {
           techRep: stat?.id_tech_rep
             ? await this.profileService.getTech(stat.id_tech_rep)
             : 'N/A',
-          logs: logsDi.length > 0 ? logsDi : [],
+          logs: (logsDi ?? []).map((l) => this.withCycleDocuments(l)),
         };
       }),
     );
@@ -1419,6 +1465,83 @@ export class DiService {
         name: d[type]?.name ?? null,
         webViewLink: d[type]?.webViewLink ?? null,
       }));
+  }
+
+  /**
+   * Attache a une ligne de CYCLE ses propres `documents[]`, derives de SON
+   * `driveDocs` — jamais de celui de la DI.
+   *
+   * C'est le point exact ou le melange entre flux se produisait : `documents[]`
+   * n'etait construit que depuis `di.driveDocs`, que le flux retour n'ecrivait
+   * jamais. L'onglet « Retour N » affichait donc eternellement les fichiers du
+   * cycle 0 — y compris leurs NOMS. Chaque cycle expose desormais les siens, et
+   * un cycle sans document renvoie une liste VIDE (affichee « non renseigne
+   * pour ce cycle »), plutot qu'un heritage silencieux.
+   */
+  /**
+   * ECRITURE METIER : la ligne du CYCLE COURANT, puis le miroir de la DI.
+   *
+   * Regle unique du modele par cycle. `logsdis{_idDi, idIgnore}` est le dossier
+   * du cycle (source d'historique) ; `Di.*` n'en est que le MIROIR du cycle
+   * courant, conserve pour les lecteurs aveugles au cycle — filtre magasin
+   * (`contain_pdr` + statut), routeurs Fixtronix, handshake coordination — qui
+   * continuent donc de fonctionner sans modification.
+   *
+   * Ce qu'on remplace : ~13 sites portaient chacun leur
+   * `if (ignoreCount > 0) { …Logs } else { …DI }`. Toute branche manquante
+   * (`addPDFFile` n'en avait aucune, `driveDocs` n'etait jamais ecrit en
+   * retour) faisait ecrire le cycle retour sur les donnees du cycle original.
+   *
+   * @param mirror `false` pour une donnee qui n'appartient qu'au cycle et n'a
+   *               aucun lecteur aveugle au cycle.
+   */
+  private async writeCurrentCycle(
+    _id: string,
+    patch: Record<string, any>,
+    opts: { mirror?: boolean; cycle?: number } = {},
+  ): Promise<number> {
+    const cycle =
+      opts.cycle ??
+      (
+        ((await this.diModel
+          .findOne({ _id })
+          .select('ignoreCount')
+          .lean()) as any)?.ignoreCount ?? 0
+      );
+
+    await this.logsDiService.upsertCycle(_id, cycle, patch);
+
+    if (opts.mirror !== false) {
+      await this.diModel.updateOne({ _id }, { $set: patch });
+    }
+    return cycle;
+  }
+
+  /**
+   * Enregistre un document du cycle COURANT : ligne de cycle + miroir DI,
+   * lien scalaire + reference structuree `driveDocs.<type>`.
+   */
+  private async writeCurrentCycleDoc(
+    _id: string,
+    type: 'Devis' | 'BC' | 'BL' | 'Facture',
+    ref: { driveFileId: string; webViewLink: string; name: string },
+  ): Promise<number> {
+    const SCALAR: Record<string, string> = {
+      Devis: 'devis',
+      BC: 'bon_de_commande',
+      BL: 'bon_de_livraison',
+      Facture: 'facture',
+    };
+    return this.writeCurrentCycle(_id, {
+      [SCALAR[type]]: ref.webViewLink,
+      [`driveDocs.${type}`]: ref,
+    });
+  }
+
+  private withCycleDocuments(log: any): any {
+    if (!log) return log;
+    const row = typeof log.toObject === 'function' ? log.toObject() : log;
+    return { ...row, documents: this.buildDocuments(row.driveDocs) };
   }
 
   async getAllDi(
@@ -1531,7 +1654,7 @@ export class DiService {
           // Real uploaded documents (name + Drive link) for the detail modal.
           documents: this.buildDocuments((di as any).driveDocs),
           // Include logs related to this DI
-          logs: logsDi.length > 0 ? logsDi : [],
+          logs: (logsDi ?? []).map((l) => this.withCycleDocuments(l)),
         };
       }),
     );
@@ -1915,6 +2038,18 @@ export class DiService {
     // manager/admin → PENDING3. No-op si déjà fait ou sans composants.
     await this.commitStockDecrementOnce(_idDI);
 
+    // Notif ERP — cette mutation est VIVANTE (di.resolver.ts) et n'émettait
+    // rien : la DI arrivait chez la coordination sans un mot, contrairement
+    // aux trois autres chemins vers PENDING3. Audience dérivée du statut.
+    await this.emitDiHandoff(
+      _idDI,
+      result.di,
+      'DI_PENDING3',
+      `DI prête pour envoi en réparation (${
+        (result.di as any)?._idnum ?? _idDI
+      })`,
+    );
+
     return result.di;
   }
   //New flow Nego1 & Nego2 sending DI to the INMagasin
@@ -1971,15 +2106,11 @@ export class DiService {
       throw new Error('error in changing status to diagnostic ');
     }
 
-    if (diagnostic.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _idDI,
-        STATUS_DI.Diagnostic.status,
-        diagnostic.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(_idDI, STATUS_DI.Diagnostic.status);
-    }
+    await this.statsService.updateStatus(
+      _idDI,
+      STATUS_DI.Diagnostic.status,
+      diagnostic.ignoreCount ?? 0,
+    );
 
     // Resolve the assigned diagnostic technician (stored on the Stat created
     // just before by `createStat`) — sert au Discord ET à la notif ERP ciblée.
@@ -2003,21 +2134,25 @@ export class DiService {
     // seul la reçoit, cloche + socket). Acteur = null : `coordinator_ToDiag`
     // n'est pas authentifié → on affiche honnêtement « acteur inconnu » plutôt
     // que de deviner (passe auth v1.1). Best-effort : n'échoue jamais la transition.
-    if (techId) {
-      try {
-        await this.notificationService.emit({
-          type: 'DI_ASSIGNED_DIAG',
-          diId: _idDI,
-          actorId: null,
-          message: `Nouvelle DI affectée en diagnostic (${
-            (diagnostic as any)?._idnum ?? _idDI
-          })`,
-          payload: { status: STATUS_DI.Diagnostic.status },
-          notify: { userIds: [techId] },
-        });
-      } catch (err) {
-        await this.captureDiscordFailure('erp-notification', err);
-      }
+    // L'événement est écrit INCONDITIONNELLEMENT. Avant, tout l'`emit` était
+    // sous `if (techId)` : quand la lecture du Stat échouait (catch muet
+    // ci-dessus) ou que l'affectation n'avait pas encore atterri, il ne restait
+    // AUCUNE trace — ni cloche, ni journal, ni avertissement. On ne conditionne
+    // plus que le `notify` ; l'absence de destinataire est désormais signalée
+    // par `NotificationService` (log « sans destinataire »).
+    try {
+      await this.notificationService.emit({
+        type: 'DI_ASSIGNED_DIAG',
+        diId: _idDI,
+        actorId: null,
+        message: `Nouvelle DI affectée en diagnostic (${
+          (diagnostic as any)?._idnum ?? _idDI
+        })`,
+        payload: { status: STATUS_DI.Diagnostic.status, techId },
+        notify: techId ? { userIds: [techId] } : undefined,
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('erp-notification', err);
     }
 
     return diagnostic;
@@ -2043,15 +2178,15 @@ export class DiService {
       throw new Error('Issue in changing status to rep');
     }
 
-    if (reparation.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _idDI,
-        STATUS_DI.Reparation.status,
-        reparation.ignoreCount,
-      );
-    }
-
-    await this.statsService.updateStatus(_idDI, STATUS_DI.Reparation.status);
+    // Le cycle est TOUJOURS passe (0 inclus). Avant, un 2e appel sans
+    // cycle suivait le premier : sa requete `{_idDi}` seule tapait la
+    // ligne Stat du cycle 0 et y ecrivait le statut du cycle RETOUR —
+    // `closeDiagLeg(_id, 0)` pouvait meme y fabriquer un segment facturable.
+    await this.statsService.updateStatus(
+      _idDI,
+      STATUS_DI.Reparation.status,
+      reparation.ignoreCount ?? 0,
+    );
 
     // Discord event — tech assigned to REPARATION. Mirrors the diagnostic
     // counterpart `sendDiagnosticAssigned` (already fired in `coordinator_ToDiag`)
@@ -2160,40 +2295,21 @@ export class DiService {
       di_category_id: diag.di_category_id,
     };
 
-    const isRetourCycle = !!(
-      didata &&
-      didata.ignoreCount &&
-      didata.ignoreCount > 0
+    const cycle = didata?.ignoreCount ?? 0;
+
+    // Verdict du cycle : ligne de cycle + miroir DI, par le chemin unique.
+    // Le `stockDecrementedAt: null` reste reserve au CYCLE ORIGINAL : en retour,
+    // le marqueur est deja re-arme a l'ouverture du cycle (`RETOUR_CYCLE_RESET`)
+    // et le decrement unique passe par `commitStockDecrementOnce` (envoi au
+    // coordinateur, sinon PENDING3). Le re-armer ici, a chaque sauvegarde ou
+    // pause du diagnostic, n'apporterait rien et rouvrirait un second decrement.
+    await this.writeCurrentCycle(
+      _idDI,
+      cycle > 0 ? verdict : { ...verdict, stockDecrementedAt: null },
+      { cycle },
     );
 
-    updatedDi = await this.diModel.findOneAndUpdate(
-      { _id: _idDI },
-      {
-        $set: isRetourCycle
-          ? verdict
-          : {
-              ...verdict,
-              // Ré-arme le décrément de stock pour CETTE liste (le tech vient de
-              // (re)saisir array_composants) : le prochain commit décrémentera.
-              //
-              // ⚠️ CYCLE ORIGINAL UNIQUEMENT. Un cycle retour décrémente déjà par
-              // `componentConfirmedFromCoordinator` ; ré-armer ici ferait
-              // décrémenter le stock UNE SECONDE FOIS à l'entrée en PENDING3.
-              stockDecrementedAt: null,
-            },
-      },
-      { new: true },
-    );
-
-    if (isRetourCycle) {
-      // Le snapshot de cycle reste la source d'archive par retour (le dossier
-      // d'intervention le lit onglet par onglet) : on l'écrit EN PLUS de la DI.
-      updatedDi = await this.logsDiService.tech_startDiagnostic(
-        didata._id,
-        didata.ignoreCount,
-        { ...diag, isErrorFromFixtronix: effectiveFixtronix },
-      );
-    }
+    updatedDi = await this.diModel.findOne({ _id: _idDI });
 
     // Note: this method only persists the diagnostic form values; it is
     // also invoked by the pause flow on the frontend, so firing
@@ -2270,14 +2386,15 @@ export class DiService {
       throw new Error('Issue in changing state tech_stopDiagnostic');
     }
 
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _idDI,
-        STATUS_DI.Diagnostic.status,
-        result.ignoreCount,
-      );
-    }
-    await this.statsService.updateStatus(_idDI, STATUS_DI.Diagnostic.status);
+    // Le cycle est TOUJOURS passe (0 inclus). Avant, un 2e appel sans
+    // cycle suivait le premier : sa requete `{_idDi}` seule tapait la
+    // ligne Stat du cycle 0 et y ecrivait le statut du cycle RETOUR —
+    // `closeDiagLeg(_id, 0)` pouvait meme y fabriquer un segment facturable.
+    await this.statsService.updateStatus(
+      _idDI,
+      STATUS_DI.Diagnostic.status,
+      result.ignoreCount ?? 0,
+    );
     return result;
   }
   //Tech finsih diagnostic
@@ -2300,14 +2417,15 @@ export class DiService {
     if (!result) {
       throw new Error('Issue in changing state tech_finishDiagnostic');
     }
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _idDI,
-        STATUS_DI.Diagnostic.status,
-        result.ignoreCount,
-      );
-    }
-    await this.statsService.updateStatus(_idDI, STATUS_DI.Diagnostic.status);
+    // Le cycle est TOUJOURS passe (0 inclus). Avant, un 2e appel sans
+    // cycle suivait le premier : sa requete `{_idDi}` seule tapait la
+    // ligne Stat du cycle 0 et y ecrivait le statut du cycle RETOUR —
+    // `closeDiagLeg(_id, 0)` pouvait meme y fabriquer un segment facturable.
+    await this.statsService.updateStatus(
+      _idDI,
+      STATUS_DI.Diagnostic.status,
+      result.ignoreCount ?? 0,
+    );
     return result;
   }
   //Tech starting Reperation
@@ -2325,14 +2443,15 @@ export class DiService {
       throw new Error('Issue in changing state tech_startReperation');
     }
 
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _idDI,
-        STATUS_DI.InReparation.status,
-        result.ignoreCount,
-      );
-    }
-    await this.statsService.updateStatus(_idDI, STATUS_DI.InReparation.status);
+    // Le cycle est TOUJOURS passe (0 inclus). Avant, un 2e appel sans
+    // cycle suivait le premier : sa requete `{_idDi}` seule tapait la
+    // ligne Stat du cycle 0 et y ecrivait le statut du cycle RETOUR —
+    // `closeDiagLeg(_id, 0)` pouvait meme y fabriquer un segment facturable.
+    await this.statsService.updateStatus(
+      _idDI,
+      STATUS_DI.InReparation.status,
+      result.ignoreCount ?? 0,
+    );
     return result;
   }
 
@@ -2352,14 +2471,15 @@ export class DiService {
       throw new Error('Issue in changing state tech_stopReperation');
     }
 
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _idDI,
-        STATUS_DI.Reparation.status,
-        result.ignoreCount,
-      );
-    }
-    await this.statsService.updateStatus(_idDI, STATUS_DI.Reparation.status);
+    // Le cycle est TOUJOURS passe (0 inclus). Avant, un 2e appel sans
+    // cycle suivait le premier : sa requete `{_idDi}` seule tapait la
+    // ligne Stat du cycle 0 et y ecrivait le statut du cycle RETOUR —
+    // `closeDiagLeg(_id, 0)` pouvait meme y fabriquer un segment facturable.
+    await this.statsService.updateStatus(
+      _idDI,
+      STATUS_DI.Reparation.status,
+      result.ignoreCount ?? 0,
+    );
     return result;
   }
   //Tech finsih Reperation
@@ -2444,15 +2564,29 @@ export class DiService {
    *     déjà présent (facture déjà là quand le BL arrive → WAITING_FACTURE puis
    *     FINISHED immédiatement). AUCUN bruit Discord sur les états intermédiaires
    *     traversés ; `sendDiFinished` UNIQUEMENT au FINISHED réel.
-   *   - `ignoreCount === 0` UNIQUEMENT : les DI en retour stockent leurs documents
-   *     dans `logsdis`, pas sur `driveDocs` → ne jamais les avancer ici.
+   *   - TEMPS RÉEL : CHAQUE saut diffuse `updateTicket` — les sauts terminaux via
+   *     leur `finalize*`/`exitWaitingBcOnBc`, les sauts intermédiaires via
+   *     `broadcastDiStatusChange`. C'est ce signal (et lui seul) qui fait
+   *     recharger les listes du front ; sans lui la DI change de statut en base
+   *     et reste affichée dans l'ancien sur tous les écrans. La cloche
+   *     persistante, elle, est émise par l'appelant (`addDevisPDF`
+   *     → `DI_DOC_DEVIS`, `addBlPDF` → BL) : NE PAS la doubler ici.
+   *   - TOUS LES CYCLES : le miroir DI porte les documents du cycle courant, et
+   *     chaque `updateStatus` d'ici passe le cycle → un retour franchit ses
+   *     propres portes documentaires, sans jamais toucher au Stat du cycle 0.
    */
   private async maybeAdvanceDocGate(_id: string): Promise<void> {
     // Borne dure = garde-fou anti-boucle (il n'y a jamais plus de ~4 sauts).
     for (let hops = 0; hops < 6; hops++) {
       const di: any = await this.diModel.findOne({ _id }).lean();
       if (!di) return;
-      if (di.ignoreCount && di.ignoreCount > 0) return; // retour → docs en logsdis
+      // Les cycles RETOUR franchissent desormais leurs PROPRES portes. Le
+      // bail-out `if (ignoreCount > 0) return` datait de l'epoque ou les
+      // documents d'un retour n'existaient qu'en `logsdis` : une DI de retour
+      // restait bloquee en WAITING_BL meme BL + facture deposes, alors que
+      // l'UI proposait l'upload. Le miroir DI portant maintenant les documents
+      // du cycle courant, tous les predicats ci-dessous sont justes par cycle.
+      // PREALABLE (fait) : les `updateStatus` de cette methode passent le cycle.
 
       const hasDevis = this.isDriveDocRef(di?.driveDocs?.Devis);
       const hasBC = this.isDriveDocRef(di?.driveDocs?.BC);
@@ -2488,7 +2622,21 @@ export class DiService {
         await this.statsService.updateStatus(
           _id,
           STATUS_DI.WaitingFacture.status,
+          moved.ignoreCount ?? 0,
         );
+        // Les sauts TERMINAUX de cette méthode diffusent déjà leur nouvel état
+        // (`finalizeFinished`, `finalizeIrreparable`, `exitWaitingBcOnBc`) ; les
+        // sauts INTERMÉDIAIRES, eux, ne diffusaient RIEN. La DI changeait donc de
+        // statut sans qu'aucune liste ne l'apprenne : elle restait affichée dans
+        // son ancien état sur TOUS les postes — y compris celui qui venait de
+        // déposer le document — jusqu'au prochain F5. Best-effort : la
+        // transition est déjà écrite en base, une notification ne doit jamais
+        // la faire échouer.
+        try {
+          await this.broadcastDiStatusChange(_id, moved);
+        } catch (err) {
+          await this.captureDiscordFailure('erp-notification', err);
+        }
         continue; // cascade : la facture est peut-être déjà présente
       }
       if (status === STATUS_DI.WaitingFacture.status && hasFacture) {
@@ -2510,7 +2658,24 @@ export class DiService {
           { new: true },
         );
         if (!moved) return;
-        await this.statsService.updateStatus(_id, STATUS_DI.WaitingBc.status);
+        await this.statsService.updateStatus(
+          _id,
+          STATUS_DI.WaitingBc.status,
+          moved.ignoreCount ?? 0,
+        );
+        // Les sauts TERMINAUX de cette méthode diffusent déjà leur nouvel état
+        // (`finalizeFinished`, `finalizeIrreparable`, `exitWaitingBcOnBc`) ; les
+        // sauts INTERMÉDIAIRES, eux, ne diffusaient RIEN. La DI changeait donc de
+        // statut sans qu'aucune liste ne l'apprenne : elle restait affichée dans
+        // son ancien état sur TOUS les postes — y compris celui qui venait de
+        // déposer le document — jusqu'au prochain F5. Best-effort : la
+        // transition est déjà écrite en base, une notification ne doit jamais
+        // la faire échouer.
+        try {
+          await this.broadcastDiStatusChange(_id, moved);
+        } catch (err) {
+          await this.captureDiscordFailure('erp-notification', err);
+        }
         continue; // cascade : le BC est peut-être déjà présent
       }
       if (status === STATUS_DI.WaitingBc.status && hasBC) {
@@ -2525,7 +2690,11 @@ export class DiService {
   /** Effets de bord communs d'un passage à FINISHED (stat + Discord unique +
    *  socket). `sendDiFinished` ne fire QU'ICI = au FINISHED réel. */
   private async finalizeFinished(finished: any): Promise<void> {
-    await this.statsService.updateStatus(finished._id, STATUS_DI.Finished.status);
+    await this.statsService.updateStatus(
+      finished._id,
+      STATUS_DI.Finished.status,
+      finished.ignoreCount ?? 0,
+    );
     try {
       await this.discordHookService.sendDiFinished(finished);
     } catch (err) {
@@ -2652,6 +2821,23 @@ export class DiService {
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
+
+    // Notif ERP — le dépôt du BC DÉPLACE la DI vers un autre service (magasin
+    // si elle a des pièces, coordination sinon). Sans ce point, la DI arrivait
+    // sur leur bureau SANS que personne ne soit prévenu : le BC était déposé,
+    // la DI changeait de mains, et elle stagnait jusqu'à ce que quelqu'un
+    // rafraîchisse sa liste par hasard. Audience DÉRIVÉE de `moved.status` :
+    // Magasin pour CONFIRMATION, Coordination pour PENDING3. On réemploie les
+    // types existants pour garder les liens profonds de la cloche.
+    await this.emitDiHandoff(
+      _id,
+      moved,
+      target === STATUS_DI.InMagasin.status ? 'DI_IN_MAGASIN' : 'DI_PENDING3',
+      target === STATUS_DI.InMagasin.status
+        ? `BC reçu — pièces à préparer (${moved?._idnum ?? _id})`
+        : `BC reçu — DI prête pour envoi en réparation (${moved?._idnum ?? _id})`,
+    );
+
     this.notificationGateway.updateTicket({
       action: 'updateState',
       content: { result: moved, states: moved },
@@ -2756,15 +2942,11 @@ export class DiService {
       if (!waiting) {
         throw new Error('Issue moving to WAITING_BL');
       }
-      if (waiting.ignoreCount > 0) {
-        await this.statsService.updateStatus(
-          _id,
-          STATUS_DI.WaitingBl.status,
-          waiting.ignoreCount,
-        );
-      } else {
-        await this.statsService.updateStatus(_id, STATUS_DI.WaitingBl.status);
-      }
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.WaitingBl.status,
+      waiting.ignoreCount ?? 0,
+    );
       this.notificationGateway.updateTicket({
         action: 'updateState',
         content: { result: waiting, states: waiting },
@@ -2843,15 +3025,11 @@ export class DiService {
     if (!result) {
       throw new Error('Issue in sendDiBackToDiagnostic');
     }
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.Pending1.status,
-        result.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.Pending1.status);
-    }
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.Pending1.status,
+      result.ignoreCount ?? 0,
+    );
     // Notif ERP : « Renvoyer au diagnostic » (PRICING → PENDING1) renvoie la DI
     // à la coordination pour ré-affecter un tech → elle doit être notifiée.
     await this.emitDiHandoff(
@@ -2883,13 +3061,14 @@ export class DiService {
       throw new Error('Issue in changing state coordinator_ToPricing');
     }
 
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _idDI,
-        STATUS_DI.Pricing.status,
-        result.ignoreCount,
-      );
-    }
+    // Auparavant garde `if (ignoreCount > 0)` SANS else : sur le flux original
+    // le Stat n'etait jamais synchronise sur PRICING_DIAG. Le cycle est
+    // desormais toujours passe, 0 compris.
+    await this.statsService.updateStatus(
+      _idDI,
+      STATUS_DI.Pricing.status,
+      result.ignoreCount ?? 0,
+    );
   }
 
   //from admins to manager to give the first price
@@ -2990,6 +3169,19 @@ export class DiService {
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
+
+    // Notif ERP — l'annulation ne partait QUE sur Discord, canal aujourd'hui
+    // coupé pour le flux DI : plus personne n'était prévenu qu'une DI sortait
+    // du circuit. Audience dérivée d'ANNULER (Manager, Admin_Tech,
+    // Admin_Manager) — les mêmes que `current_roles` écrit juste au-dessus.
+    await this.emitDiHandoff(
+      _idDI,
+      updated,
+      'DI_ANNULEE',
+      `DI annulée par ${data.annulePar ?? 'un utilisateur'} (${
+        updated?._idnum ?? _idDI
+      }) — motif : ${motifFinal}`,
+    );
 
     return updated;
   }
@@ -3135,6 +3327,26 @@ export class DiService {
         payload: { diId: _idDI, previousStatus },
       });
     }
+
+    // Notif ERP — une réactivation remet la DI dans un statut ARBITRAIRE : elle
+    // peut réapparaître chez le magasin, un technicien ou la facturation. Sans
+    // ce point, elle ressurgissait dans une file sans que son nouveau
+    // détenteur en sache rien. `restoredRoles` est déjà dérivé du statut
+    // restauré (plus haut) : on réutilise exactement la même audience que
+    // celle écrite dans `current_roles`.
+    await this.emitDiHandoff(
+      _idDI,
+      updated,
+      'DI_REACTIVATED',
+      `DI réactivée par ${actor?.username ?? 'un utilisateur'} (${
+        updated?._idnum ?? _idDI
+      }) — de nouveau à traiter`,
+      restoredRoles,
+      // Pas d'acteur : le resolver ne fournit qu'un `username`, jamais un
+      // `_id`. Un username ne correspondrait à aucun `userId` et n'exclurait
+      // personne — on le met donc dans le MESSAGE, pas dans `actorId` (même
+      // convention que `DI_ABANDONED`).
+    );
 
     this.notificationGateway.updateTicket({
       action: 'updateState',
@@ -3300,63 +3512,19 @@ export class DiService {
   }
   //Retour DI from finished to RETOUR 1
   //send by manager to coordinator so he can chose who gonna repair it
-  async di_Retour1(_idDI: string) {
-    const result = await this.diModel.findOneAndUpdate(
-      { _id: _idDI },
-      {
-        $set: {
-          current_roles: Role.COORDINATOR,
-          status: STATUS_DI.Retour1.status,
-        },
-      },
-      { new: true },
-    );
-
-    if (!result) {
-      throw new Error('Issue in di_Retour1');
-    }
-
-    return result;
-  }
-  async di_Retour2(_idDI: string) {
-    const result = await this.diModel.findOneAndUpdate(
-      { _id: _idDI },
-      {
-        $set: {
-          current_roles: Role.COORDINATOR,
-          status: STATUS_DI.Retour2.status,
-        },
-      },
-      { new: true },
-    );
-    if (!result) {
-      throw new Error('Issue di_Retour2');
-    }
-
-    return result;
-  }
-  async di_Retour3(_idDI: string) {
-    const result = await this.diModel.updateOne(
-      { _id: _idDI },
-      {
-        $set: {
-          current_roles: Role.COORDINATOR,
-          status: STATUS_DI.Retour3.status,
-        },
-      },
-    );
-    if (!result) {
-      throw new Error('Issue in di_Retour3 ');
-    }
-
-    return result;
-  }
+  // `di_Retour1/2/3` SUPPRIMES : doublons morts (aucun resolveur, aucun appel
+  // front) qui posaient le statut RETOUR sans remise a zero du miroir, sans
+  // cloture du cycle sortant et sans notification. Les noms etaient plus
+  // « trouvables » que `openRetourCycle` : les cabler aurait casse en silence
+  // tous les invariants de la separation par cycle. Entree unique :
+  // `openRetourCycle`.
   async searchCoordinatorDI(
     paginationConfig: PaginationConfigDi,
-    search: { field: string; value: string },
+    search:
+      | { field: string; value: string }
+      | { field: string; value: string }[],
   ) {
     const { first, rows } = paginationConfig;
-    const { field, value } = search;
 
     // ✅ Coordinator base filter — full visibility (no status restriction).
     //    Action-gating still happens per-mutation; this only widens the read.
@@ -3364,73 +3532,12 @@ export class DiService {
       isDeleted: false,
     };
 
-    // ✅ Apply search only if valid
-    if (field && value && value.trim().length >= 2) {
-      const regex = { $regex: value.trim(), $options: 'i' };
-
-      switch (field) {
-        case '_id':
-        case '_idnum':
-        case 'title':
-          filter[field] = regex;
-          break;
-
-        case 'status':
-          filter.$and = [...(filter.$and ?? []), { status: regex }];
-          break;
-
-        case 'company': {
-          const ids = await this.companyModel
-            .find({ name: regex })
-            .distinct('_id');
-          if (ids.length) filter.company_id = { $in: ids };
-          break;
-        }
-
-        case 'client': {
-          const ids = await this.clientModel
-            .find({ $or: [{ first_name: regex }, { last_name: regex }] })
-            .distinct('_id');
-          if (ids.length) filter.client_id = { $in: ids };
-          break;
-        }
-
-        case 'location': {
-          const ids = await this.locationModel
-            .find({ location_name: regex })
-            .distinct('_id');
-          if (ids.length) filter.location_id = { $in: ids };
-          break;
-        }
-
-        case 'createdBy': {
-          const ids = await this.profileModel
-            .find({ $or: [{ firstName: regex }, { lastName: regex }] })
-            .distinct('_id');
-          if (ids.length) filter.createdBy = { $in: ids };
-          break;
-        }
-
-        case 'techDiag':
-        case 'techRep': {
-          const profileIds = await this.profileModel
-            .find({ $or: [{ firstName: regex }, { lastName: regex }] })
-            .distinct('_id');
-
-          if (!profileIds.length) break;
-
-          const statField =
-            field === 'techDiag' ? 'id_tech_diag' : 'id_tech_rep';
-
-          const diIds = await this.statModel
-            .find({ [statField]: { $in: profileIds } })
-            .distinct('_idDi');
-
-          if (diIds.length) filter._id = { $in: diIds };
-          break;
-        }
-      }
-    }
+    // ✅ Filtres de colonnes cumulatifs (cf. buildDiColumnSearchPredicates)
+    const predicates = await this.buildDiColumnSearchPredicates(
+      search,
+      DiService.DI_LIST_SEARCH_FIELDS,
+    );
+    if (predicates.length) filter.$and = predicates;
 
     // 🔢 Count
     const totalDiCount = await this.diModel.countDocuments(filter);
@@ -3743,7 +3850,7 @@ export class DiService {
       image: di.image,
       handleSendingNotificationBetweenCoordinatorAndMagasin:
         di.handleSendingNotificationBetweenCoordinatorAndMagasin,
-      logs: logsDi,
+      logs: (logsDi ?? []).map((l) => this.withCycleDocuments(l)),
       isSentToCoordinator: di.isSentToCoordinator,
       isConfirmedComponentFromCoordinator:
         di.isConfirmedComponentFromCoordinator,
@@ -3828,34 +3935,30 @@ export class DiService {
 
   async searchDiForMagasin(
     paginationConfig: PaginationConfigDi,
-    search: { field: string; value: string },
+    search:
+      | { field: string; value: string }
+      | { field: string; value: string }[],
   ) {
     const { first, rows } = paginationConfig;
-    const { field, value } = search;
 
-    // ✅ Base filter
+    // ✅ Base filter — IDENTIQUE à getDiForMagasin : une recherche ne peut
+    //    que restreindre la liste du magasin, jamais l'élargir.
     const filter: any = {
       contain_pdr: true,
       status: { $in: MAGASIN_STATUS_DI_VALUES },
       isDeleted: false,
     };
 
-    // ✅ Search ONLY title & status
-    if (
-      value &&
-      value.trim().length >= 2 &&
-      ['title', 'status'].includes(field)
-    ) {
-      const regex = {
-        $regex: value.trim(),
-        $options: 'i',
-      };
-
-      if (field === 'status') {
-        filter.$and = [...(filter.$and ?? []), { status: regex }];
-      } else {
-        filter[field] = regex;
-      }
+    // ✅ Filtres de colonnes CUMULATIFS ($and) — même moteur que les listes
+    //    tickets/coordination (échappé, dès 1 caractère), restreint aux 3
+    //    colonnes de la page magasin.
+    const predicates = await this.buildDiColumnSearchPredicates(search, [
+      '_idnum',
+      'title',
+      'status',
+    ]);
+    if (predicates.length) {
+      filter.$and = predicates;
     }
 
     // 🔢 Count
@@ -3956,37 +4059,45 @@ export class DiService {
 
     return updatedDi;
   }
+  /**
+   * DEPRECIE — n'ecrit plus rien.
+   *
+   * Le compteur de cycle est desormais revendique ATOMIQUEMENT par
+   * `openRetourCycle`, a l'interieur de la transition. Laisser cette mutation
+   * incrementer de son cote produirait un DOUBLE comptage avec un front deja
+   * deploye (qui appelle `countIgnore` puis `changeStatusRetourN`).
+   *
+   * On renvoie le niveau QUI SERA reclame (`min(n+1, 3)`) sans le persister :
+   * l'ancien front lit `data.countIgnore.ignoreCount` pour choisir sa branche
+   * 1/2/3 ; avec le compteur inchange il lirait `0` sur une DI jamais retournee
+   * et n'appellerait aucune transition. Le retour serait alors silencieusement
+   * perdu.
+   *
+   * Une trace LOW est posee pour voir qui l'appelle encore avant suppression.
+   */
   async countIgnore(_id: string) {
-    const di = await this.diModel.findOne({ _id });
+    const di = await this.diModel.findOne({ _id }).lean();
 
     if (!di) {
       throw new Error('DI not found');
     }
 
-    let newIgnoreCount = di.ignoreCount || 0;
+    const current = (di as any).ignoreCount ?? 0;
+    const prospective = Math.min(current + 1, 3);
 
-    if (newIgnoreCount < 3) {
-      newIgnoreCount++;
-    }
+    await this.operationalErrorService.capture({
+      module: 'di',
+      submodule: 'diService',
+      method: 'COUNT_IGNORE_DEPRECATED',
+      severity: 'LOW',
+      error: 'Appel a countIgnore (deprecie, sans effet)',
+      message:
+        'Le compteur de cycle est revendique par openRetourCycle. ' +
+        'Cet appel ne persiste rien.',
+      payload: { diId: _id, current, prospective },
+    });
 
-    const updated = await this.diModel.findOneAndUpdate(
-      { _id },
-      {
-        $set: {
-          ignoreCount: newIgnoreCount,
-        },
-      },
-      { new: true },
-    );
-
-    // 🔔 Discord notification (ignore incremented)
-    try {
-      await this.discordHookService.sendDiIgnored(updated);
-    } catch (err) {
-      await this.captureDiscordFailure('discord-notification', err);
-    }
-
-    return updated;
+    return { ...(di as any), ignoreCount: prospective };
   }
   async getAllRemarque(_idDI: string) {
     return await this.diModel.findOne({ _id: _idDI }).exec();
@@ -4092,15 +4203,11 @@ export class DiService {
       throw new Error('Issue in changeStatusInMagasin');
     }
 
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.InMagasin.status,
-        result.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.InMagasin.status);
-    }
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.InMagasin.status,
+      result.ignoreCount ?? 0,
+    );
 
     // Discord notification
     try {
@@ -4229,18 +4336,11 @@ export class DiService {
     // (cumul serveur). No-op si déjà fermé par une pause.
     await this.statsService.closeDiagLeg(_id, result.ignoreCount ?? 0);
 
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.MagasinEstimation.status,
-        result.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.MagasinEstimation.status,
-      );
-    }
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.MagasinEstimation.status,
+      result.ignoreCount ?? 0,
+    );
 
     // C'EST ICI que la DI arrive au Magasin après un diagnostic AVEC PDR : le
     // magasin doit estimer les composants. C'est le PREMIER contact du magasin
@@ -4411,15 +4511,11 @@ export class DiService {
     // diagnostic y est déjà nulle).
     await this.statsService.closeDiagLeg(_id, result.ignoreCount ?? 0);
 
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.Pending2.status,
-        result.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.Pending2.status);
-    }
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.Pending2.status,
+      result.ignoreCount ?? 0,
+    );
 
     // 🔔 Discord notification (status changed to Pending2)
     try {
@@ -4480,15 +4576,11 @@ export class DiService {
       throw new Error('Issue in changeStatusPricing');
     }
 
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.Pricing.status,
-        result.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.Pricing.status);
-    }
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.Pricing.status,
+      result.ignoreCount ?? 0,
+    );
 
     // Notifications « à fixer le prix » — UNIQUEMENT à la vraie entrée en
     // PRICING_DIAG (pas sur un re-clic quand la DI y est déjà).
@@ -4581,15 +4673,11 @@ export class DiService {
       throw new Error('Issue in changeStatusNegociate1');
     }
 
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.WaitingDevis.status,
-        result.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.WaitingDevis.status);
-    }
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.WaitingDevis.status,
+      result.ignoreCount ?? 0,
+    );
 
     try {
       await this.discordHookService.sendDiNegotiation1(result);
@@ -4629,15 +4717,11 @@ export class DiService {
       throw new Error('Issue in changeStatusNegociate2');
     }
 
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.Negotiation2.status,
-        result.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.Negotiation2.status);
-    }
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.Negotiation2.status,
+      result.ignoreCount ?? 0,
+    );
 
     try {
       await this.discordHookService.sendDiNegotiation2(result);
@@ -4725,15 +4809,11 @@ export class DiService {
     // l'envoi (marqueur), et si la DI n'a pas de composants (liste vide).
     await this.commitStockDecrementOnce(_id);
 
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.Pending3.status,
-        result.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.Pending3.status);
-    }
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.Pending3.status,
+      result.ignoreCount ?? 0,
+    );
 
     // 🔔 Discord notification (Pending3)
     try {
@@ -4776,15 +4856,11 @@ export class DiService {
       throw new Error('Issue in changeStatusRepaire');
     }
 
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.Reparation.status,
-        result.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.Reparation.status);
-    }
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.Reparation.status,
+      result.ignoreCount ?? 0,
+    );
 
     // 🔔 Discord notification (Reparation started)
     try {
@@ -4806,21 +4882,22 @@ export class DiService {
     } catch {
       /* tech = contexte best-effort — n'échoue jamais la transition */
     }
-    if (repTechId) {
-      try {
-        await this.notificationService.emit({
-          type: 'DI_ASSIGNED_REP',
-          diId: _id,
-          actorId: null,
-          message: `Nouvelle DI affectée en réparation (${
-            (result as any)?._idnum ?? _id
-          })`,
-          payload: { status: STATUS_DI.Reparation.status },
-          notify: { userIds: [repTechId] },
-        });
-      } catch (err) {
-        await this.captureDiscordFailure('erp-notification', err);
-      }
+    // Événement écrit INCONDITIONNELLEMENT (cf. DI_ASSIGNED_DIAG) : si la
+    // lecture du Stat échoue, l'affectation laissait zéro trace et le
+    // technicien n'apprenait jamais qu'une réparation lui revenait.
+    try {
+      await this.notificationService.emit({
+        type: 'DI_ASSIGNED_REP',
+        diId: _id,
+        actorId: null,
+        message: `Nouvelle DI affectée en réparation (${
+          (result as any)?._idnum ?? _id
+        })`,
+        payload: { status: STATUS_DI.Reparation.status, techId: repTechId },
+        notify: repTechId ? { userIds: [repTechId] } : undefined,
+      });
+    } catch (err) {
+      await this.captureDiscordFailure('erp-notification', err);
     }
 
     this.notificationGateway.updateTicket({
@@ -4979,15 +5056,11 @@ export class DiService {
       throw new Error('Issue in changeStatusFinished');
     }
 
-    if (result.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.Finished.status,
-        result.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(_id, STATUS_DI.Finished.status);
-    }
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.Finished.status,
+      result.ignoreCount ?? 0,
+    );
 
     try {
       // Mongoose returns the pre-update doc when {new:true} is omitted, so
@@ -5010,84 +5083,96 @@ export class DiService {
     return result;
   }
 
-  /** Per-cycle workflow flags cleared whenever a DI is returned, so every
-   *  retour cycle re-runs the FULL original flow with no phase showing as
-   *  "already done" (e.g. "Envoyé aux admins" / "Composants confirmés").
-   *  Cycle history is preserved separately in LogsDi (keyed by ignoreCount). */
-  private readonly retourCycleReset = {
-    pricingRequestSentAt: null,
-    pricingRequestSentBy: null,
-    componentsConfirmedAt: null,
-    componentsConfirmedBy: null,
-    isConfirmedComponentFromCoordinator: false,
-    isSentToCoordinator: false,
-    gotComposantFromMagasin: false,
-    isOpenedOnce: false,
-    confirmationComposant: null,
-    handleSendingNotificationBetweenCoordinatorAndMagasin: 'IN_COORDINATOR',
-    // Verdicts de ROUTAGE du cycle précédent : remis à zéro, sinon le nouveau
-    // cycle en hérite. `null` (et non `false`) conserve l'état « non répondu »
-    // que le snapshot de cycle modélise déjà — le tech n'a pas encore tranché.
-    //
-    // On ne touche VOLONTAIREMENT pas à `can_be_repaired`, `contain_pdr` ni
-    // `array_composants` : la liste magasin filtre sur `contain_pdr` et la
-    // poignée de main composants de la coordinatrice s'appuie dessus. Les vider
-    // laisserait le magasin en attente indéfinie. Ils sont de toute façon
-    // réécrits par le premier enregistrement du diagnostic (cf.
-    // `tech_startDiagnostic`, qui écrit désormais le verdict sur la DI).
-    isErrorFromFixtronix: null,
-    needsDevisBeforeRepair: false,
-  };
 
   /**
-   * Fige le verdict du CYCLE 0 avant que le premier retour ne l'écrase.
+   * Ouvre un cycle RETOUR — transition ATOMIQUE et serveur-autoritaire.
    *
-   * Depuis que `tech_startDiagnostic` écrit le verdict courant sur la DI, le
-   * document ne peut plus servir d'archive du flux original — or c'est
-   * exactement ce que l'onglet « Flux original » du dossier d'intervention y
-   * lisait. On en prend donc une photo, une seule fois, au premier retour.
+   * Remplace le couple `countIgnore` + `changeStatusRetourN` que le FRONT
+   * enchainait en deux mutations. Consequences observees en base de ce
+   * decoupage : 3 DI portaient `retourDate` avec `ignoreCount = 0` (la 2e
+   * mutation n'avait pas abouti, ou le retour venait d'un autre chemin), si
+   * bien que tout le cycle retour ecrivait sur les donnees du cycle 0.
+   *
+   * Sequence :
+   *   1. REVENDICATION atomique du niveau (`$inc` sous garde `< 3`). Un
+   *      read-modify-write laissait deux clics concurrents lire `n` et ecrire
+   *      tous deux `n+1` ; le plafond de 3 est desormais dans le filtre.
+   *   2. Cloture de la ligne du cycle sortant (plus rien ne l'ecrit ensuite).
+   *   3. Remise a zero du MIROIR : le nouveau cycle demarre vierge.
+   *   4. Statut RETOUR{n} + motif/date.
+   *   5. Ouverture de la ligne du nouveau cycle, qui porte son motif.
    */
-  private async snapshotCycle0IfNeeded(_id: string): Promise<void> {
-    const di: any = await this.diModel.findOne({ _id }).lean();
-
-    // Seulement à l'entrée du PREMIER retour, et jamais deux fois.
-    if (!di || (di.ignoreCount ?? 0) > 0 || di.cycle0Snapshot) return;
-
-    await this.diModel.updateOne(
-      { _id },
-      {
-        $set: {
-          cycle0Snapshot: {
-            can_be_repaired: di.can_be_repaired ?? null,
-            contain_pdr: di.contain_pdr ?? null,
-            array_composants: di.array_composants ?? [],
-            isErrorFromFixtronix: di.isErrorFromFixtronix ?? null,
-            remarque_tech_diagnostic: di.remarque_tech_diagnostic ?? null,
-            capturedAt: new Date(),
-          },
-        },
-      },
+  async openRetourCycle(_id: string, reason?: string) {
+    const claimed = await this.diModel.findOneAndUpdate(
+      { _id, ignoreCount: { $lt: 3 } },
+      { $inc: { ignoreCount: 1 } },
+      { new: true },
     );
-  }
 
-  async changeDiRetour1(_id: string, reason?: string) {
-    // Photo du flux original AVANT que le cycle retour n'écrase le verdict.
-    await this.snapshotCycle0IfNeeded(_id);
+    if (!claimed) {
+      const existing = await this.diModel
+        .findOne({ _id })
+        .select('_id ignoreCount')
+        .lean();
+      if (!existing) throw new Error(`DI '${_id}' not found`);
+      throw new GraphQLError(
+        'Retour refuse : cette DI a deja atteint le maximum de 3 retours.',
+        { extensions: { code: 'RETOUR_LIMIT_REACHED' } },
+      );
+    }
+
+    const level = (claimed.ignoreCount as number) as 1 | 2 | 3;
+    const at = new Date();
+
+    // L'argent du cycle sortant doit rejoindre SA ligne AVANT que
+    // RETOUR_CYCLE_RESET ne vide le miroir : au cycle 0, `affectinitialPrice` /
+    // `setRepairFinalPrice` n'ecrivent que la DI, et `setRepairEstimate` n'ecrit
+    // jamais la ligne. Sans ce report, le prix du flux original etait efface
+    // pour de bon et « Avant Retour » affichait 0,000.
+    await this.carryCycleMoneyToLog(_id, level - 1, claimed);
+
+    // Le cycle sortant est fige : son dossier ne bougera plus.
+    await this.logsDiService.closeCycle(_id, level - 1, at);
+
+    const statusByLevel: Record<number, string> = {
+      1: STATUS_DI.Retour1.status,
+      2: STATUS_DI.Retour2.status,
+      3: STATUS_DI.Retour3.status,
+    };
+
     const updated = await this.diModel.findOneAndUpdate(
       { _id },
       {
         $set: {
-          ...this.retourCycleReset,
-          status: STATUS_DI.Retour1.status,
+          ...RETOUR_CYCLE_RESET,
+          status: statusByLevel[level],
           retourReason: reason ?? null,
-          retourDate: new Date(),
+          retourDate: at,
+        },
+        // `driveDocs.Image` est la PHOTO DE CREATION, au niveau DI : on retire
+        // les 4 documents de cycle un par un, jamais `driveDocs: {}` (qui
+        // casserait `GET /di/:id/image`).
+        $unset: {
+          'driveDocs.Devis': 1,
+          'driveDocs.BC': 1,
+          'driveDocs.BL': 1,
+          'driveDocs.Facture': 1,
         },
       },
       { new: true },
     );
 
+    // Ouvre le dossier du nouveau cycle, porteur de SON motif de retour (sur
+    // la DI, `retourReason`/`retourDate` sont ecrases a chaque retour : le
+    // motif du retour 1 y etait perdu des le retour 2).
+    await this.logsDiService.upsertCycle(_id, level, {
+      openedAt: at,
+      retourReason: reason ?? null,
+      retourDate: at,
+    });
+
     try {
-      if (updated) await this.discordHookService.sendDiRetour(updated, 1);
+      if (updated) await this.discordHookService.sendDiRetour(updated, level);
     } catch (err) {
       await this.captureDiscordFailure('discord-notification', err);
     }
@@ -5098,66 +5183,48 @@ export class DiService {
       target: {},
     });
 
-    await this.emitRetourNotification(_id, updated, 1, reason);
-    return updated;
+    await this.emitRetourNotification(_id, updated, level, reason);
+    return { level, di: updated };
+  }
+
+  /**
+   * Reporte sur la ligne du cycle SORTANT les montants que seul le miroir DI
+   * porte, juste avant son vidage. Ne comble que les champs ABSENTS de la
+   * ligne : en retour, `savePricing` a deja ecrit la ligne et le miroir y vaut
+   * null — il ne doit jamais l'ecraser. `0` est un montant (diagnostic non
+   * payant), pas une absence : il est reporte.
+   */
+  private async carryCycleMoneyToLog(
+    _id: string,
+    cycle: number,
+    di: any,
+  ): Promise<void> {
+    const isSet = (v: unknown) => v !== null && v !== undefined;
+    const row: any = await this.logsDiService.getLogsById(cycle, _id);
+    const patch: Record<string, number> = {};
+    for (const key of ['price', 'final_price', 'repairEstimate']) {
+      if (isSet(di?.[key]) && !isSet(row?.[key])) {
+        patch[key] = di[key];
+      }
+    }
+    if (Object.keys(patch).length > 0) {
+      await this.logsDiService.upsertCycle(_id, cycle, patch);
+    }
+  }
+
+  // Les trois entrees historiques delegent a `openRetourCycle` et IGNORENT leur
+  // suffixe : le niveau vient de la revendication atomique, pas du nom de la
+  // mutation. Un front non encore deploye (qui appelle `countIgnore` puis
+  // `changeStatusRetourN`) reste donc correct — le compteur n'est incremente
+  // qu'ICI, une seule fois.
+  async changeDiRetour1(_id: string, reason?: string) {
+    return (await this.openRetourCycle(_id, reason)).di;
   }
   async changeDiRetour2(_id: string, reason?: string) {
-    const updated = await this.diModel.findOneAndUpdate(
-      { _id },
-      {
-        $set: {
-          ...this.retourCycleReset,
-          status: STATUS_DI.Retour2.status,
-          retourReason: reason ?? null,
-          retourDate: new Date(),
-        },
-      },
-      { new: true },
-    );
-
-    try {
-      if (updated) await this.discordHookService.sendDiRetour(updated, 2);
-    } catch (err) {
-      await this.captureDiscordFailure('discord-notification', err);
-    }
-
-    this.notificationGateway.updateTicket({
-      action: 'updateState',
-      content: { di: updated, states: updated },
-      target: {},
-    });
-
-    await this.emitRetourNotification(_id, updated, 2, reason);
-    return updated;
+    return (await this.openRetourCycle(_id, reason)).di;
   }
   async changeDiRetour3(_id: string, reason?: string) {
-    const updated = await this.diModel.findOneAndUpdate(
-      { _id },
-      {
-        $set: {
-          ...this.retourCycleReset,
-          status: STATUS_DI.Retour3.status,
-          retourReason: reason ?? null,
-          retourDate: new Date(),
-        },
-      },
-      { new: true },
-    );
-
-    try {
-      if (updated) await this.discordHookService.sendDiRetour(updated, 3);
-    } catch (err) {
-      await this.captureDiscordFailure('discord-notification', err);
-    }
-
-    this.notificationGateway.updateTicket({
-      action: 'updateState',
-      content: { di: updated, states: updated },
-      target: {},
-    });
-
-    await this.emitRetourNotification(_id, updated, 3, reason);
-    return updated;
+    return (await this.openRetourCycle(_id, reason)).di;
   }
 
   /** Notification ERP : bon de livraison attendu ARRIVÉ → coordination.
@@ -5176,7 +5243,17 @@ export class DiService {
         } — bon de livraison ajouté, en attente de facture`,
         payload: { doc: 'BL' },
         notify: {
-          roles: ['Coordinator', 'Manager', 'Admin_Tech', 'Admin_Manager'],
+          // Le BL arrivé fait passer la DI en WAITING_FACTURE : les
+          // responsables sont donc ceux de CE statut — dont le TECHNICIEN, qui
+          // était absent de la liste écrite à la main. On y ajoute la
+          // coordination, qui suit les documents sans en être responsable
+          // (sur-ensemble DÉLIBÉRÉ, déclaré dans di.notification-audience.spec).
+          roles: [
+            ...new Set([
+              ...rolesForStatus(STATUS_DI.WaitingFacture.status),
+              'Coordinator',
+            ]),
+          ],
         },
       });
     } catch (err) {
@@ -5201,7 +5278,19 @@ export class DiService {
           reason ? ' — ' + reason : ''
         }`,
         payload: { level, reason: reason ?? null, status: updated?.status },
-        notify: { roles: ['Manager', 'Coordinator'] },
+        notify: {
+          // RETOUR{1,2,3}.role = Manager, Admin_Tech, Admin_Manager ET Tech.
+          // La liste écrite à la main n'en citait qu'un seul et ajoutait la
+          // coordination : trois responsables sur quatre — dont le technicien
+          // qui va reprendre la pièce — n'apprenaient jamais le retour.
+          // Audience dérivée du statut + la coordination conservée.
+          roles: [
+            ...new Set([
+              ...rolesForStatus(updated?.status),
+              'Coordinator',
+            ]),
+          ],
+        },
       });
     } catch (err) {
       await this.captureDiscordFailure('erp-notification', err);
@@ -5213,14 +5302,31 @@ export class DiService {
    * point central), mapping de rôles centralisé, acteur exclu de ses propres
    * notifications (géré par `emit`). Best-effort — n'échoue jamais la transition.
    */
+  /**
+   * Notification ERP d'une passation de DI.
+   *
+   * `roles` est FACULTATIF : omis, l'audience est dérivée du statut d'arrivée
+   * via `rolesForStatus(di.status)` — c'est-à-dire exactement ceux que
+   * `STATUS_DI` désigne comme responsables de ce statut. C'est le mode à
+   * préférer : une audience recopiée à la main peut diverger du statut, une
+   * audience dérivée ne le peut pas.
+   *
+   * Ne le renseigner QUE pour élargir délibérément (clôtures qui informent
+   * au-delà des responsables) — et alors dire pourquoi sur place.
+   *
+   * ⚠️ `di` doit être le document APRÈS écriture (le retour de
+   * `findOneAndUpdate({ new: true })`). Passé le document d'AVANT, l'audience
+   * serait celle du statut qu'on vient de quitter.
+   */
   private async emitDiHandoff(
     _id: string,
     di: any,
     type: string,
     message: string,
-    roles: string[],
+    roles?: string[],
     actor?: { id?: string | null; role?: string | null },
   ): Promise<void> {
+    const audience = roles ?? rolesForStatus(di?.status);
     try {
       await this.notificationService.emit({
         type,
@@ -5229,7 +5335,7 @@ export class DiService {
         actorRole: actor?.role ?? null,
         message,
         payload: { status: di?.status ?? null },
-        notify: { roles },
+        notify: { roles: audience },
       });
     } catch (err) {
       await this.captureDiscordFailure('erp-notification', err);
@@ -5373,18 +5479,11 @@ export class DiService {
     // Stat must be updated before broadcasting; tech-side queries read
     // Stat.status, so an unawaited update lets the WS-triggered refresh
     // observe stale INREPARATION while the new value is still in flight.
-    if (diStatus.ignoreCount > 0) {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.ReparationInPause.status,
-        diStatus.ignoreCount,
-      );
-    } else {
-      await this.statsService.updateStatus(
-        _id,
-        STATUS_DI.ReparationInPause.status,
-      );
-    }
+    await this.statsService.updateStatus(
+      _id,
+      STATUS_DI.ReparationInPause.status,
+      diStatus.ignoreCount ?? 0,
+    );
 
     try {
       await this.discordHookService.sendReparationPaused(diStatus);
@@ -5528,47 +5627,50 @@ export class DiService {
   async sendComponentToConMagasinForConfirmation(_id: string) {
     const di = await this.diModel.findOne({ _id });
     if (!di) return null;
+    const cycle = di.ignoreCount ?? 0;
 
-    let updated;
-
-    if (di.ignoreCount && di.ignoreCount > 0) {
-      updated = await this.logsDiService.isSentToCoordinator(
-        _id,
-        di.ignoreCount,
-      );
-    } else {
-      // NEW FLOW: the magasin sending the DI for confirmation now materializes
-      // the dedicated phase as a real status (INMAGASIN → CONFIRMATION_COMPOSANTS)
-      // instead of only flipping flags. `assertDiTransition` allows the
-      // idempotent re-apply (already CONFIRMATION_COMPOSANTS) and refuses a send
-      // from any non-INMAGASIN state. The flags are kept for backward compat and
-      // the existing coordinator confirm/UI wiring.
-      await this.assertTransitionAllowed(
+    // MÊME poignée de main dans TOUS les cycles (original ET retour) : l'envoi
+    // matérialise la phase par un vrai statut (CONFIRMATION →
+    // ATTENTE_CONFIRMATION_COORDINATION). L'ancienne branche retour
+    // (`ignoreCount > 0`) ne posait que des drapeaux sur la ligne du cycle : la
+    // DI restait en CONFIRMATION, le bouton « Confirmer les composants » de la
+    // coordinatrice (piloté par le statut) ne s'activait jamais et le retour
+    // restait bloqué. `assertDiTransition` accepte le ré-envoi idempotent et
+    // refuse un envoi depuis tout autre statut que CONFIRMATION.
+    await this.assertTransitionAllowed(
+      _id,
+      STATUS_DI.ConfirmationComposants.status,
+    );
+    const handshake = {
+      isSentToCoordinator: true,
+      handleSendingNotificationBetweenCoordinatorAndMagasin: 'IN_MAGASIN',
+    };
+    // Dossier du cycle (drapeaux) puis miroir DI (statut + drapeaux) — le
+    // statut passe par `findOneAndUpdate` pour alimenter `statusHistory`.
+    await this.logsDiService.upsertCycle(_id, cycle, handshake);
+    const updated = await this.diModel.findOneAndUpdate(
+      { _id },
+      {
+        $set: {
+          status: STATUS_DI.ConfirmationComposants.status,
+          ...handshake,
+        },
+      },
+      { new: true },
+    );
+    // Keep Stat.status in lock-step with Di.status (tech/magasin/coordinator
+    // views read different sources — the T281/T282 divergence guard). La ligne
+    // Stat est PAR CYCLE : on vise celle du cycle courant.
+    if (updated) {
+      await this.statsService.updateStatus(
         _id,
         STATUS_DI.ConfirmationComposants.status,
+        cycle,
       );
-      updated = await this.diModel.findOneAndUpdate(
-        { _id },
-        {
-          $set: {
-            status: STATUS_DI.ConfirmationComposants.status,
-            isSentToCoordinator: true,
-            handleSendingNotificationBetweenCoordinatorAndMagasin: 'IN_MAGASIN',
-          },
-        },
-        { new: true },
-      );
-      // Keep Stat.status in lock-step with Di.status (tech/magasin/coordinator
-      // views read different sources — the T281/T282 divergence guard).
-      if (updated) {
-        await this.statsService.updateStatus(
-          _id,
-          STATUS_DI.ConfirmationComposants.status,
-        );
-        // 📦 DÉCRÉMENT DE STOCK — déclencheur PRINCIPAL : le magasin envoie la
-        // liste au coordinateur. Une seule fois par cycle (marqueur atomique).
-        await this.commitStockDecrementOnce(_id);
-      }
+      // 📦 DÉCRÉMENT DE STOCK — déclencheur PRINCIPAL : le magasin envoie la
+      // liste au coordinateur. Une seule fois par cycle : le marqueur est
+      // ré-armé à l'ouverture d'un retour (`RETOUR_CYCLE_RESET`).
+      await this.commitStockDecrementOnce(_id);
     }
 
     if (!updated) return null;
@@ -5597,7 +5699,14 @@ export class DiService {
         actorId: null, // non authentifié → acteur inconnu
         message: `Composants à valider (${(updated as any)?._idnum ?? _id})`,
         payload: { status: STATUS_DI.ConfirmationComposants.status },
-        notify: { roles: ['Coordinator'] },
+        // ATTENTE_CONFIRMATION_COORDINATION est CO-DÉTENU
+        // (`role: ['Coordinator', 'Magasin']`) : le magasin reste responsable
+        // du dossier pendant l'attente. Il était absent de la liste écrite à
+        // la main et ne voyait donc pas passer sa propre demande dans sa
+        // cloche. Audience dérivée du statut.
+        notify: {
+          roles: rolesForStatus(STATUS_DI.ConfirmationComposants.status),
+        },
       });
     } catch (err) {
       await this.captureDiscordFailure('erp-notification', err);
@@ -5658,8 +5767,10 @@ export class DiService {
    * entrée en réparation (PENDING3) — pour que le stock soit réel quel que soit le
    * chemin. Ré-armé à chaque nouveau diagnostic (cf. `tech_startDiagnostic`).
    * Best-effort : un échec de décrément ne casse jamais la transition appelante.
-   * Ne concerne QUE le cycle normal (`ignoreCount === 0`) ; les cycles Retour
-   * gardent leur décrément par ligne de log dans `componentConfirmedFromCoordinator`.
+   * Vaut pour TOUS les cycles : `RETOUR_CYCLE_RESET` ré-arme le marqueur à
+   * l'ouverture d'un retour, et `array_composants` (miroir) porte la liste du
+   * cycle courant. C'est désormais le SEUL chemin de décrément (l'ancien
+   * décrément retour sur la ligne de log doublait celui de PENDING3).
    */
   private async commitStockDecrementOnce(diId: string): Promise<void> {
     try {
@@ -5712,92 +5823,70 @@ export class DiService {
   ) {
     const di = await this.diModel.findOne({ _id });
     if (!di) return null;
+    const cycle = di.ignoreCount ?? 0;
 
     let updated;
     const componentsConfirmedAt = new Date();
 
-    if (di.ignoreCount && di.ignoreCount > 0) {
-      // Pre-update log row (no {new:true}) → use its old confirm flag for
-      // per-cycle idempotency and its parts for the stock draw-down.
-      const logRow: any =
-        await this.logsDiService.componentConfirmedFromCoordinator(
-          _id,
-          di.ignoreCount,
-        );
-      if (logRow && !logRow.isConfirmedComponentFromCoordinator) {
-        try {
-          await this.decrementStockForComposants(logRow.array_composants);
-        } catch (err) {
-          await this.captureDiscordFailure?.(
-            'decrementStockForComposants',
-            err,
-            { diId: _id },
-          );
-        }
-      }
-      updated = await this.diModel.findOneAndUpdate(
-        { _id },
-        {
-          $set: {
-            componentsConfirmedAt,
-            componentsConfirmedBy: componentsConfirmedBy ?? null,
-          },
-        },
-        { new: true },
+    // MÊME poignée de main dans TOUS les cycles (original ET retour) : la
+    // confirmation coordinatrice FAIT AVANCER LE STATUT
+    // (ATTENTE_CONFIRMATION_COORDINATION → MAGASIN_FINALISATION). L'ancienne
+    // branche retour ne posait que des drapeaux sur la ligne du cycle : la DI
+    // restait en CONFIRMATION. Garde de transition = refus propre en API directe
+    // depuis un mauvais statut.
+    // Atomic single-winner: only the request that flips componentsConfirmedAt
+    // from unset → now advances the status and draws down stock. The
+    // `componentsConfirmedAt: null` guard (matches null OR missing — remis à
+    // null à chaque retour par RETOUR_CYCLE_RESET) makes concurrent /
+    // double-clicked confirms idempotent: a 2nd « Confirmer » (DI déjà en
+    // MAGASIN_FINALISATION) skips the guard, matches nothing → no-op.
+    if (di.status !== STATUS_DI.MagasinFinalisation.status) {
+      await this.assertTransitionAllowed(
+        _id,
+        STATUS_DI.MagasinFinalisation.status,
       );
-    } else {
-      // Atomic single-winner: only the request that flips componentsConfirmedAt
-      // from unset → now draws down stock. The `componentsConfirmedAt: null`
-      // guard (matches null OR missing) makes concurrent / double-clicked
-      // confirms idempotent — a second call matches nothing, so it never
-      // decrements the same parts twice.
-      // v2 handshake — la confirmation coordinatrice FAIT AVANCER LE STATUT
-      // (ATTENTE_CONFIRMATION_COORDINATION → MAGASIN_FINALISATION) au lieu de ne
-      // flipper que des flags. Garde de transition = refus propre en API directe
-      // depuis un mauvais statut. Idempotence : un 2e « Confirmer » (DI déjà en
-      // MAGASIN_FINALISATION) saute la garde, puis le flip atomique
-      // (`componentsConfirmedAt` déjà set) ne matche rien → no-op, pas de 2e
-      // décrément de stock.
-      if (di.status !== STATUS_DI.MagasinFinalisation.status) {
-        await this.assertTransitionAllowed(
+    }
+    const confirmation = {
+      isConfirmedComponentFromCoordinator: true,
+      handleSendingNotificationBetweenCoordinatorAndMagasin: 'DEFAULT',
+      componentsConfirmedAt,
+      componentsConfirmedBy: componentsConfirmedBy ?? null,
+    };
+    const flipped = await this.diModel.findOneAndUpdate(
+      { _id, componentsConfirmedAt: null },
+      {
+        $set: {
+          status: STATUS_DI.MagasinFinalisation.status,
+          ...confirmation,
+        },
+      },
+      { new: true },
+    );
+    if (flipped) {
+      updated = flipped;
+      // Dossier du cycle : mêmes drapeaux que le miroir.
+      await this.logsDiService.upsertCycle(_id, cycle, confirmation);
+      // Décrément via le marqueur idempotent : normalement DÉJÀ fait à l'envoi
+      // de la liste (no-op ici) ; sinon (envoi court-circuité) c'est ce point
+      // qui décrémente. UN SEUL chemin pour tous les cycles : l'ancien décrément
+      // retour sur la ligne de log s'AJOUTAIT à celui de l'entrée en PENDING3
+      // (marqueur ré-armé par RETOUR_CYCLE_RESET) → double décrément.
+      await this.commitStockDecrementOnce(_id);
+      // Stat.status en lock-step avec Di.status (ligne du cycle courant) —
+      // BEST-EFFORT : une DI sans ligne Stat ne doit pas faire échouer la
+      // confirmation (le statut Di est déjà avancé, le stock déjà décrémenté).
+      try {
+        await this.statsService.updateStatus(
           _id,
           STATUS_DI.MagasinFinalisation.status,
+          cycle,
         );
+      } catch {
+        /* ligne Stat absente → ignore ; la transition Di a réussi */
       }
-      const flipped = await this.diModel.findOneAndUpdate(
-        { _id, componentsConfirmedAt: null },
-        {
-          $set: {
-            status: STATUS_DI.MagasinFinalisation.status,
-            isConfirmedComponentFromCoordinator: true,
-            handleSendingNotificationBetweenCoordinatorAndMagasin: 'DEFAULT',
-            componentsConfirmedAt,
-            componentsConfirmedBy: componentsConfirmedBy ?? null,
-          },
-        },
-        { new: true },
-      );
-      if (flipped) {
-        updated = flipped;
-        // Décrément via le marqueur idempotent : normalement DÉJÀ fait à l'envoi
-        // de la liste (no-op ici) ; sinon (envoi court-circuité) c'est ce point
-        // qui décrémente. Cycle normal uniquement (le Retour garde sa branche).
-        await this.commitStockDecrementOnce(_id);
-        // Stat.status en lock-step avec Di.status — BEST-EFFORT : une DI sans
-        // ligne Stat ne doit pas faire échouer la confirmation (le statut Di est
-        // déjà avancé, et le stock déjà décrémenté au-dessus).
-        try {
-          await this.statsService.updateStatus(
-            _id,
-            STATUS_DI.MagasinFinalisation.status,
-          );
-        } catch {
-          /* ligne Stat absente → ignore ; la transition Di a réussi */
-        }
-      } else {
-        // Already confirmed earlier (idempotent retry) — no second draw-down.
-        updated = await this.diModel.findOne({ _id });
-      }
+    } else {
+      // Already confirmed earlier (idempotent retry) — no second draw-down.
+      updated = await this.diModel.findOne({ _id });
     }
 
     if (!updated) return null;

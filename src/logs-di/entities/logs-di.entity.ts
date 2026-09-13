@@ -2,6 +2,7 @@ import { ObjectType, Field, Int } from '@nestjs/graphql';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 import { DiCategory } from 'src/di_category/entities/di_category.entity';
+import { DriveDoc } from 'src/common/graphql/drive-doc.type';
 @Schema({ timestamps: true })
 export class DiLogsDocument extends Document {
   @Prop()
@@ -101,6 +102,62 @@ export class DiLogsDocument extends Document {
 
   @Prop({ nullable: true, default: false })
   isErrorFromFixtronix: boolean;
+
+  // ─── Le cycle possede ses propres donnees ────────────────────────────────
+  // Cette ligne n'est plus une simple trace : c'est LE dossier du cycle. Tout
+  // ce qui appartient a un cycle (verdict, composants, documents, prix,
+  // remarques) vit ici ; la DI n'en garde qu'un MIROIR du cycle courant, pour
+  // les lecteurs aveugles au cycle (filtre magasin, routeurs, handshake).
+
+  // References Drive du cycle, memes clefs que `Di.driveDocs`
+  // (BC/Devis/BL/Facture) : { driveFileId, webViewLink, name }. Sans elles la
+  // ligne ne portait qu'une URL nue, donc ni le vrai nom de fichier ni de quoi
+  // satisfaire `isDriveDocRef` — et les portes documentaires ne voyaient rien.
+  // `Image` reste au niveau DI (photo de creation, pas un livrable de cycle).
+  @Prop({ type: Object, default: {} })
+  driveDocs: Record<
+    string,
+    { driveFileId: string; webViewLink: string; name: string }
+  >;
+
+  // Bornes du cycle. `closedAt` est pose a l'ouverture du cycle SUIVANT : il
+  // rend verifiable l'invariant « on n'ecrit jamais dans un cycle clos ».
+  @Prop({ default: null })
+  openedAt: Date | null;
+  @Prop({ default: null })
+  closedAt: Date | null;
+
+  // Motif/date du retour qui a OUVERT ce cycle (donc jamais sur le cycle 0).
+  // Sur la DI ces deux champs sont ecrases a chaque retour : le motif du
+  // retour 1 y etait perdu des le retour 2. Ici il est conserve par cycle.
+  @Prop({ default: null })
+  retourReason: string | null;
+  @Prop({ default: null })
+  retourDate: Date | null;
+
+  // Ligne DEDUITE apres coup par la migration 014, PAS observee en direct.
+  // Meme convention que `Di.statusHistory[].reconstructed` : une donnee
+  // reconstituee ne doit jamais se faire passer pour une donnee mesuree.
+  @Prop({ type: Boolean, default: false })
+  reconstructed: boolean;
+  @Prop({ default: null })
+  reconstructedReason: string | null;
+
+  @Prop({ type: Number, default: null })
+  repairEstimate: number;
+  @Prop({ type: Boolean, default: false })
+  needsDevisBeforeRepair: boolean;
+  @Prop({ default: null })
+  pricingRequestSentAt: Date | null;
+  @Prop({ type: String, ref: 'Profile', default: null })
+  pricingRequestSentBy: string | null;
+  @Prop({ default: null })
+  componentsConfirmedAt: Date | null;
+  @Prop({ type: String, ref: 'Profile', default: null })
+  componentsConfirmedBy: string | null;
+  @Prop({ default: null })
+  stockDecrementedAt: Date | null;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -225,6 +282,37 @@ export class LogsDi {
 
   @Field(() => String, { nullable: true })
   confirmationComposant?: string;
+
+  /** Documents REELS du cycle (nom + lien Drive), derives de `driveDocs`.
+   *  Meme forme que `Di.documents` : l'onglet d'un cycle lit CETTE liste, et
+   *  n'a donc plus aucune raison de retomber sur les fichiers de la DI. */
+  @Field(() => [DriveDoc], { nullable: true })
+  documents?: DriveDoc[];
+
+  @Field(() => Date, { nullable: true })
+  openedAt?: Date;
+  @Field(() => Date, { nullable: true })
+  closedAt?: Date;
+  @Field(() => String, { nullable: true })
+  retourReason?: string;
+  @Field(() => Date, { nullable: true })
+  retourDate?: Date;
+  @Field(() => Boolean, { nullable: true })
+  reconstructed?: boolean;
+  @Field(() => String, { nullable: true })
+  reconstructedReason?: string;
+  @Field(() => Number, { nullable: true })
+  repairEstimate?: number;
+  @Field(() => Boolean, { nullable: true })
+  needsDevisBeforeRepair?: boolean;
+  @Field(() => Date, { nullable: true })
+  pricingRequestSentAt?: Date;
+  @Field(() => String, { nullable: true })
+  pricingRequestSentBy?: string;
+  @Field(() => Date, { nullable: true })
+  componentsConfirmedAt?: Date;
+  @Field(() => String, { nullable: true })
+  componentsConfirmedBy?: string;
 
   @Field(() => Date, { nullable: true })
   createdAt?: Date;

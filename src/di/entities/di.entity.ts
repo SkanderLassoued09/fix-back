@@ -1,4 +1,4 @@
-import { ObjectType, Field, Float } from '@nestjs/graphql';
+import { ObjectType, Field, Float, Int } from '@nestjs/graphql';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 import { Client } from 'src/clients/entities/client.entity';
@@ -6,6 +6,7 @@ import { Company } from 'src/company/entities/company.entity';
 import { DiCategory } from 'src/di_category/entities/di_category.entity';
 import { Location } from 'src/location/entities/location.entity';
 import { LogsDi } from 'src/logs-di/entities/logs-di.entity';
+import { DriveDoc } from 'src/common/graphql/drive-doc.type';
 import { Profile } from 'src/profile/entities/profile.entity';
 
 @Schema({ timestamps: true })
@@ -343,20 +344,12 @@ export class StatusHistoryEntry {
   reconstructed?: boolean;
 }
 
-/**
- * Read-only GraphQL projection of one `driveDocs` entry (BC/Devis/BL/Facture/
- * Image). Exposes the REAL uploaded file name so the UI can show it instead of
- * a generic type label. Derived from the Mongo `driveDocs` map — never written.
- */
-@ObjectType()
-export class DriveDoc {
-  @Field()
-  type: string;
-  @Field({ nullable: true })
-  name: string;
-  @Field({ nullable: true })
-  webViewLink: string;
-}
+// `DriveDoc` vit desormais dans `src/common/graphql/drive-doc.type.ts` : la ligne
+// de cycle (`LogsDi`) expose elle aussi ses `documents`, et comme ce fichier
+// importe deja `LogsDi`, le garder ici creerait un cycle d'imports entre entites
+// (invisible a la compilation, `undefined` a l'evaluation des decorateurs).
+// Re-exporte pour que les imports existants depuis `di.entity` continuent.
+export { DriveDoc } from 'src/common/graphql/drive-doc.type';
 
 /**
  * Contacts du tiers (client OU société) rattaché à la DI — projection PLATE et
@@ -871,6 +864,19 @@ export class DiTableData {
 
   @Field()
   totalDiCount: number;
+}
+
+/**
+ * Resultat d'une ouverture de cycle retour. `level` est le niveau REELLEMENT
+ * revendique par le serveur (1..3) — le front s'en sert pour ouvrir le PV de
+ * reunion au bon niveau, sans avoir a le deduire d'un compteur lu avant coup.
+ */
+@ObjectType()
+export class RetourResult {
+  @Field(() => Int)
+  level: number;
+  @Field(() => Di, { nullable: true })
+  di: Di;
 }
 
 @ObjectType()

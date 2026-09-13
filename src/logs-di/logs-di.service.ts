@@ -57,6 +57,84 @@ export class LogsDiService {
     );
   }
 
+  /**
+   * Ecrit un patch metier sur la ligne du cycle `idIgnore` — UPSERT.
+   *
+   * C'est le point d'entree UNIQUE des ecritures par cycle. Avant, chaque
+   * mutation portait sa propre branche `if (ignoreCount > 0) { …Logs } else
+   * { …DI }`, et il suffisait qu'une seule branche manque (`addPDFFile`,
+   * `driveDocs`, `pricingRequestSentAt`…) pour que le cycle retour ecrive sur
+   * les donnees du cycle original. Un seul chemin = plus de branche oubliable.
+   *
+   * L'upsert couvre les DI anterieures a la separation par cycle, dont la ligne
+   * de cycle 0 n'existe pas encore (la migration 014 les cree, ceci est le
+   * filet de securite a l'execution).
+   */
+  async upsertCycle(
+    _idDi: string,
+    idIgnore: number,
+    patch: Record<string, any>,
+  ) {
+    if (!patch || Object.keys(patch).length === 0) return null;
+    try {
+      return await this.logsDiModel.findOneAndUpdate(
+        { _idDi, idIgnore },
+        { $set: patch, $setOnInsert: { _id: uuidv4(), _idDi, idIgnore } },
+        { upsert: true, new: true, setDefaultsOnInsert: true },
+      );
+    } catch (error) {
+      await this.operationalErrorService.capture({
+        module: 'logs-di',
+        submodule: 'logsDiService',
+        method: 'UPSERT_CYCLE',
+        severity: 'HIGH',
+        error: 'Failed to persist cycle row',
+        message: (error as Error)?.message ?? String(error),
+        payload: { _idDi, idIgnore, fields: Object.keys(patch) },
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Enregistre UN document (Devis/BC/BL/Facture) sur la ligne du cycle :
+   * le lien scalaire ET la reference structuree `driveDocs.<type>`.
+   *
+   * Les anciennes methodes `add*PDFLogs` ne posaient que l'URL nue. Sans
+   * `driveFileId`, `isDriveDocRef` considere le document comme absent : les
+   * portes documentaires ne voyaient jamais les fichiers d'un retour, et l'UI
+   * n'avait pas le vrai nom de fichier a afficher (elle allait le chercher sur
+   * la DI — c'est-a-dire sur le cycle 0).
+   */
+  async setCycleDoc(
+    _idDi: string,
+    idIgnore: number,
+    type: 'Devis' | 'BC' | 'BL' | 'Facture',
+    ref: { driveFileId: string; webViewLink: string; name: string },
+  ) {
+    const SCALAR: Record<string, string> = {
+      Devis: 'devis',
+      BC: 'bon_de_commande',
+      BL: 'bon_de_livraison',
+      Facture: 'facture',
+    };
+    return this.upsertCycle(_idDi, idIgnore, {
+      [SCALAR[type]]: ref.webViewLink,
+      [`driveDocs.${type}`]: ref,
+    });
+  }
+
+  /** Fige la ligne d'un cycle a l'ouverture du suivant. Idempotent : un cycle
+   *  deja clos garde sa premiere date de cloture. */
+  async closeCycle(_idDi: string, idIgnore: number, at: Date = new Date()) {
+    if (idIgnore < 0) return null;
+    return await this.logsDiModel.findOneAndUpdate(
+      { _idDi, idIgnore, closedAt: null },
+      { $set: { closedAt: at } },
+      { new: true },
+    );
+  }
+
   async getLogsById(idIgnore: number, _idDi: string) {
     try {
       const logsDi = await this.logsDiModel.findOne({ _idDi, idIgnore });
@@ -257,29 +335,6 @@ export class LogsDiService {
     return totalPrice.reduce((acc, curr) => acc + curr, 0);
   }
 
-  async isSentToCoordinator(_idDi: string, idIgnore: number) {
-    return await this.logsDiModel.findOneAndUpdate(
-      { _idDi, idIgnore },
-      {
-        $set: {
-          isSentToCoordinator: true,
-          handleSendingNotificationBetweenCoordinatorAndMagasin: 'IN_MAGASIN',
-        },
-      },
-      { new: true },
-    );
-  }
-  async componentConfirmedFromCoordinator(_idDi: string, idIgnore: number) {
-    return await this.logsDiModel.findOneAndUpdate(
-      { _idDi, idIgnore },
-      {
-        $set: {
-          isConfirmedComponentFromCoordinator: true,
-          handleSendingNotificationBetweenCoordinatorAndMagasin: 'DEFAULT',
-        },
-      },
-    );
-  }
 
   async tech_finishReperationLogs(
     _idDi: string,
@@ -339,7 +394,13 @@ export class LogsDiService {
 
   async getAllLogsByDi(_idDi: string) {
     try {
-      const logs = await this.logsDiModel.find({ _idDi });
+      // TRI par cycle : la liste est indexee PAR POSITION a plusieurs endroits
+      // du front (le popup « Details » lit logsDi[0..2] comme retour 1..3).
+      // Sans ordre garanti, Mongo rend l'ordre naturel et les libelles se
+      // decalent. Le cycle 0 etant desormais dans la liste, l'index positionnel
+      // coincide avec `idIgnore` — mais on trie quand meme : l'invariant doit
+      // venir de la requete, pas d'un hasard d'insertion.
+      const logs = await this.logsDiModel.find({ _idDi }).sort({ idIgnore: 1 });
 
       if (logs.length === 0) {
         return [];

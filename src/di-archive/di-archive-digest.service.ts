@@ -134,17 +134,10 @@ export class DiArchiveDigestService {
       trendWeek,
     });
 
-    await this.discord.postEmbed('APP_ALERT', {
-      embeds: [
-        {
-          title: '📊 FIXTRONIX · Suivi documentaire DiArchive',
-          description,
-          color: 16289308, // amber — constant across cases per user spec
-          footer: { text: 'Fixtronix · Digest quotidien' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    // Sender TYPÉ et HORS GATE : ce digest n'a aucun autre canal (ni cloche,
+    // ni journal). Il passait par `postEmbed`, donc coupé par le gate Discord :
+    // le cron tournait, calculait, et ne publiait rien.
+    await this.discord.sendDiArchiveDigest(description);
 
     // ── 4. Upsert today's snapshot (idempotent, ONLY write) ────────
     // findOneAndUpdate with upsert:true is atomic + idempotent; a second
