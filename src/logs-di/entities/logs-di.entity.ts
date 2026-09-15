@@ -17,6 +17,12 @@ export class DiLogsDocument extends Document {
   @Prop({ default: false })
   // pdr or not
   contain_pdr: boolean;
+  // « Réparation réussie ? » / « Tests validés ? » du wizard réparation.
+  // `null` = non renseigné (réparation antérieure, ou cycle pas encore réparé).
+  @Prop({ type: Boolean, default: null })
+  repair_success: boolean | null;
+  @Prop({ type: Boolean, default: null })
+  tests_validated: boolean | null;
 
   @Prop()
   // stats of tech
@@ -186,6 +192,12 @@ export class LogsDi {
 
   @Field(() => Boolean, { nullable: true })
   contain_pdr?: boolean;
+
+  @Field(() => Boolean, { nullable: true })
+  repair_success?: boolean | null;
+
+  @Field(() => Boolean, { nullable: true })
+  tests_validated?: boolean | null;
 
   @Field(() => String, { nullable: true })
   stats_id?: string;

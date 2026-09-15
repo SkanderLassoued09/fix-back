@@ -13,6 +13,7 @@ import { OperationalErrorService } from 'src/operational-error/operational-error
 import { GraphQLError } from 'graphql';
 import { GoogleDriveService } from 'src/google-drive/google-drive.service';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
+import { withComposantDefaults } from './composant-defaults';
 @Injectable()
 export class ComposantService {
   constructor(
@@ -139,24 +140,26 @@ export class ComposantService {
     profile?: any,
   ): Promise<Composant> {
     try {
+      // Every field left empty is INITIALIZED ('' / 0) — never null, absent, or
+      // a "undefined"/"null" sentinel sent by some screens. Done first, so the
+      // category guard below sees '' and skips the lookup.
+      createComposantInput = withComposantDefaults(createComposantInput);
+
       // Reject a non-existent category BEFORE any side effect (Drive upload).
       await this.assertCategoryExists(
         createComposantInput.category_composant_id,
       );
 
-      // Check if the PDF is a valid base64 string
-      if (
-        createComposantInput.pdf &&
-        createComposantInput.pdf !== 'null' &&
-        createComposantInput.pdf.includes(',')
-      ) {
-        createComposantInput.pdf = await this.uploadDatasheet(
-          createComposantInput.name,
-          createComposantInput.pdf,
-        );
+      // A base64 data-URL is uploaded to Drive; anything else (or a failed
+      // upload) leaves the datasheet empty ('').
+      if (createComposantInput.pdf.includes(',')) {
+        createComposantInput.pdf =
+          (await this.uploadDatasheet(
+            createComposantInput.name,
+            createComposantInput.pdf,
+          )) ?? '';
       } else {
-        // If the PDF is not valid, set it to null
-        createComposantInput.pdf = null;
+        createComposantInput.pdf = '';
       }
 
       // Generate a unique ID for the composant

@@ -9,30 +9,32 @@ export class ComposantDocument extends Document {
   _id: string;
   @Prop({ unique: true })
   name: string;
-  @Prop()
+  // Aucun champ n'est laissé null/absent : '' pour le texte, 0 pour les nombres
+  // (prix à 0 = « pas de prix »). Voir composant-defaults.ts.
+  @Prop({ default: '' })
   package: string;
-  @Prop({ type: String, ref: 'Composant_Category' })
+  @Prop({ type: String, ref: 'Composant_Category', default: '' })
   category_composant_id: string;
-  @Prop()
+  @Prop({ default: 0 })
   prix_achat: number;
-  @Prop()
+  @Prop({ default: 0 })
   prix_vente: number;
-  @Prop()
+  @Prop({ default: '' })
   coming_date: string;
-  @Prop()
+  @Prop({ default: '' })
   link: string;
-  @Prop()
+  @Prop({ default: 0 })
   quantity_stocked: number;
-  @Prop()
+  @Prop({ default: '' })
   pdf: string;
-  @Prop()
+  @Prop({ default: '' })
   status_composant: string;
   // Champs du fichier de stock « Gestion-de-stocks-Fixplus » (migration 016).
-  @Prop()
+  @Prop({ default: '' })
   code_article: string;
-  @Prop()
+  @Prop({ default: '' })
   emplacement: string;
-  @Prop()
+  @Prop({ default: 0 })
   stock_min: number;
   @Prop({ default: false })
   isDeleted: boolean;

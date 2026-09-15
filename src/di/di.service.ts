@@ -130,6 +130,15 @@ const RETOUR_CYCLE_RESET = Object.freeze({
   stockDecrementedAt: null,
 });
 
+/** Documents de cycle et leur champ LIEN scalaire (ligne de cycle + miroir DI). */
+type DiDocType = 'Devis' | 'BC' | 'BL' | 'Facture';
+const DOC_SCALAR_FIELD: Record<DiDocType, string> = {
+  Devis: 'devis',
+  BC: 'bon_de_commande',
+  BL: 'bon_de_livraison',
+  Facture: 'facture',
+};
+
 @Injectable()
 export class DiService {
   constructor(
@@ -821,6 +830,8 @@ export class DiService {
     try {
       const di = await this.diModel.findOne({ _id });
       if (!di) throw new Error(`DI '${_id}' not found`);
+      this.assertIrreparableSlotFree(di, 'Devis');
+      const irreparable = di.status === STATUS_DI.Irreparable.status;
 
       // Drive-only: rename + upload to the DI's entity folder; store the link.
       const { webViewLink, driveFileId, fileName } =
@@ -851,21 +862,25 @@ export class DiService {
       }
 
       // Notification ERP : document attendu ARRIVÉ → coordination (fait avancer).
-      try {
-        await this.notificationService.emit({
-          type: 'DI_DOC_DEVIS',
-          diId: _id,
-          actorId: null,
-          message: `DI ${
-            (di as any)?._idnum ?? _id
-          } — devis ajouté (à vérifier), en attente de BC`,
-          payload: { doc: 'Devis' },
-          notify: {
-            roles: ['Manager', 'Coordinator', 'Admin_Tech', 'Admin_Manager'],
-          },
-        });
-      } catch (err) {
-        await this.captureDiscordFailure('erp-notification', err);
+      // Pas sur une DI IRRÉPARABLE : terminale, elle n'attend aucun BC — l'avis
+      // « en attente de BC » serait faux.
+      if (!irreparable) {
+        try {
+          await this.notificationService.emit({
+            type: 'DI_DOC_DEVIS',
+            diId: _id,
+            actorId: null,
+            message: `DI ${
+              (di as any)?._idnum ?? _id
+            } — devis ajouté (à vérifier), en attente de BC`,
+            payload: { doc: 'Devis' },
+            notify: {
+              roles: ['Manager', 'Coordinator', 'Admin_Tech', 'Admin_Manager'],
+            },
+          });
+        } catch (err) {
+          await this.captureDiscordFailure('erp-notification', err);
+        }
       }
 
       // Gate documentaire : en WAITING_DEVIS, l'upload du devis fait avancer à
@@ -884,6 +899,8 @@ export class DiService {
     try {
       const di = await this.diModel.findOne({ _id });
       if (!di) throw new Error(`DI '${_id}' not found`);
+      this.assertIrreparableSlotFree(di, 'BL');
+      const irreparable = di.status === STATUS_DI.Irreparable.status;
 
       const { webViewLink, driveFileId, fileName } =
         await this.uploadDiDocToDrive(di, pdf, 'BL');
@@ -907,13 +924,18 @@ export class DiService {
 
       const updatedDi = await this.diModel.findOne({ _id });
 
-      this.notificationGateway.blAddedNotification({
-        di: updatedDi,
-        message: {
-          role: 'MAGASIN',
-          content: `A new BL has been added for DI ${di._idnum}`,
-        },
-      });
+      // DI IRRÉPARABLE : le BL est une pièce jointe a posteriori, pas une étape
+      // de la clôture documentaire → ni avis « BL ajouté », ni « en attente de
+      // facture » (plus bas).
+      if (!irreparable) {
+        this.notificationGateway.blAddedNotification({
+          di: updatedDi,
+          message: {
+            role: 'MAGASIN',
+            content: `A new BL has been added for DI ${di._idnum}`,
+          },
+        });
+      }
       this.notificationGateway.updateTicket({
         action: 'updateState',
         content: { result: updatedDi, states: updatedDi },
@@ -929,7 +951,9 @@ export class DiService {
         await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
       }
 
-      await this.emitBlUploadedNotification(_id, updatedDi);
+      if (!irreparable) {
+        await this.emitBlUploadedNotification(_id, updatedDi);
+      }
 
       // Si le BL complete la paire BL + Facture du CYCLE COURANT, la porte
       // documentaire avance (atomique + idempotent).
@@ -945,6 +969,7 @@ export class DiService {
     try {
       const di = await this.diModel.findOne({ _id });
       if (!di) throw new Error(`DI '${_id}' not found`);
+      this.assertIrreparableSlotFree(di, 'Facture');
 
       const { webViewLink, driveFileId, fileName } =
         await this.uploadDiDocToDrive(di, pdf, 'Facture');
@@ -983,6 +1008,8 @@ export class DiService {
     try {
       const di = await this.diModel.findOne({ _id });
       if (!di) throw new Error(`DI '${_id}' not found`);
+      this.assertIrreparableSlotFree(di, 'BC');
+      const irreparable = di.status === STATUS_DI.Irreparable.status;
 
       // GARDE P3 — pas de BC tant que le devis n'est pas présent. C'est LA vraie
       // garde (le grisage front n'est que du confort) : elle couvre aussi les
@@ -1035,30 +1062,34 @@ export class DiService {
       }
 
       // Notification ERP : bon de commande attendu ARRIVÉ → coordination.
-      try {
-        await this.notificationService.emit({
-          type: 'DI_DOC_BC',
-          diId: _id,
-          actorId: null,
-          message: `DI ${
-            (di as any)?._idnum ?? _id
-          } — bon de commande ajouté (à vérifier)`,
-          payload: { doc: 'BC' },
-          notify: {
-            // Le BC est attendu alors que la DI est en WAITING_BC, dont le
-            // responsable est le MANAGER — qui était absent de la liste. On
-            // conserve Admin_Manager (sur-ensemble délibéré : l'annulation et
-            // l'escalade lui reviennent).
-            roles: [
-              ...new Set([
-                ...rolesForStatus(STATUS_DI.WaitingBc.status),
-                'Admin_Manager',
-              ]),
-            ],
-          },
-        });
-      } catch (err) {
-        await this.captureDiscordFailure('erp-notification', err);
+      // Pas sur une DI IRRÉPARABLE : pièce jointe a posteriori, rien à vérifier
+      // pour faire avancer une DI terminale.
+      if (!irreparable) {
+        try {
+          await this.notificationService.emit({
+            type: 'DI_DOC_BC',
+            diId: _id,
+            actorId: null,
+            message: `DI ${
+              (di as any)?._idnum ?? _id
+            } — bon de commande ajouté (à vérifier)`,
+            payload: { doc: 'BC' },
+            notify: {
+              // Le BC est attendu alors que la DI est en WAITING_BC, dont le
+              // responsable est le MANAGER — qui était absent de la liste. On
+              // conserve Admin_Manager (sur-ensemble délibéré : l'annulation et
+              // l'escalade lui reviennent).
+              roles: [
+                ...new Set([
+                  ...rolesForStatus(STATUS_DI.WaitingBc.status),
+                  'Admin_Manager',
+                ]),
+              ],
+            },
+          });
+        } catch (err) {
+          await this.captureDiscordFailure('erp-notification', err);
+        }
       }
 
       // Gate documentaire : en WAITING_BC, l'upload du BC déclenche le routage de
@@ -1682,14 +1713,8 @@ export class DiService {
     type: 'Devis' | 'BC' | 'BL' | 'Facture',
     ref: { driveFileId: string; webViewLink: string; name: string },
   ): Promise<number> {
-    const SCALAR: Record<string, string> = {
-      Devis: 'devis',
-      BC: 'bon_de_commande',
-      BL: 'bon_de_livraison',
-      Facture: 'facture',
-    };
     return this.writeCurrentCycle(_id, {
-      [SCALAR[type]]: ref.webViewLink,
+      [DOC_SCALAR_FIELD[type]]: ref.webViewLink,
       [`driveDocs.${type}`]: ref,
     });
   }
@@ -2222,24 +2247,9 @@ export class DiService {
   // InMagasin or InDiagnostic ==> PENDING2
   //from magasin or tech to coordinator
   async magasinTech_Pending2(_idDI: string): Promise<Di> {
-    // Miroir de la garde posée dans `changeStatusPending2` : cette mutation est
-    // la SECONDE porte vers PENDING2 depuis MagasinEstimation (exposée telle
-    // quelle par le resolver). Un RETOUR Fixtronix ne doit sortir du magasin que
-    // vers la poignée de main composants, jamais vers la tarification.
-    {
-      const guardDi: any = await this.diModel.findOne({ _id: _idDI }).lean();
-      if (await this.shouldDetourMagasinExitForFixtronix(guardDi, _idDI)) {
-        await this.diModel.updateOne(
-          { _id: _idDI },
-          { $set: { needsDevisBeforeRepair: true } },
-        );
-        return (await this.changeStatusInMagasin(_idDI)) as any;
-      }
-    }
-    // Filet : le détour ci-dessus n'agit QUE depuis MagasinEstimation. Depuis
-    // n'importe quelle autre source (INDIAGNOSTIC, CONFIRMATION,
-    // MAGASIN_FINALISATION — toutes acceptées par MAGASIN_TECH_TO_PENDING2),
-    // cette mutation envoyait un retour Fixtronix droit en PENDING2.
+    // Seconde porte vers PENDING2 (exposée telle quelle par le resolver). Un
+    // retour Fixtronix AVEC pièces sort du magasin vers la tarification comme un
+    // retour client ; SANS pièces il n'y arrive jamais (PENDING3 direct).
     await this.assertNotFixtronixBillable(_idDI, 'magasinTech_Pending2');
     await this.assertTransitionAllowed(_idDI, STATUS_DI.Pending2.status);
     // Sortie de diagnostic possible (fin sans pause préalable) : ferme le
@@ -2818,7 +2828,14 @@ export class DiService {
     return result;
   }
   //Tech finsih Reperation
-  async tech_finishReperation(_idDI: string, remarque: string) {
+  async tech_finishReperation(
+    _idDI: string,
+    remarque: string,
+    checks: {
+      repairSuccess?: boolean | null;
+      testsValidated?: boolean | null;
+    } = {},
+  ) {
     let updateReamrqueRep;
     const di = await this.diModel.findOne({ _id: _idDI });
 
@@ -2838,6 +2855,24 @@ export class DiService {
         },
         { new: true },
       );
+    }
+
+    // « Réparation réussie ? » / « Tests validés ? » du wizard : verdict du
+    // cycle, lu par le détail DI sur la ligne du cycle seule (pas de miroir,
+    // aucun lecteur aveugle au cycle). Seuls les booléens sont écrits : la
+    // pause réparation rappelle cette mutation sans eux et ne doit rien effacer.
+    const repairChecks: Record<string, boolean> = {};
+    if (typeof checks.repairSuccess === 'boolean') {
+      repairChecks.repair_success = checks.repairSuccess;
+    }
+    if (typeof checks.testsValidated === 'boolean') {
+      repairChecks.tests_validated = checks.testsValidated;
+    }
+    if (Object.keys(repairChecks).length > 0) {
+      await this.writeCurrentCycle(_idDI, repairChecks, {
+        mirror: false,
+        cycle: di?.ignoreCount ?? 0,
+      });
     }
 
     // Prix des pièces figé en fin de réparation (onglet Finances, par phase).
@@ -2882,6 +2917,26 @@ export class DiService {
    *  legacy filename string or an empty value. */
   private isDriveDocRef(doc: any): boolean {
     return !!doc && typeof doc === 'object' && !!doc.driveFileId;
+  }
+
+  /**
+   * DI IRRÉPARABLE : chaque document (Devis, BC, BL, Facture) se téléverse UNE
+   * seule fois. Le statut reste IRREPARABLE — les pièces s'y joignent a
+   * posteriori — mais un emplacement rempli est définitivement fermé. C'est LA
+   * vraie garde (le grisage de la modale n'est que du confort) ; appelée AVANT
+   * l'upload Drive, elle ne laisse aucun fichier orphelin. Hors IRREPARABLE :
+   * aucun effet, les autres flux gardent leur comportement.
+   */
+  private assertIrreparableSlotFree(di: any, type: DiDocType): void {
+    if (di?.status !== STATUS_DI.Irreparable.status) return;
+    const filled =
+      this.isDriveDocRef(di?.driveDocs?.[type]) ||
+      !!di?.[DOC_SCALAR_FIELD[type]];
+    if (!filled) return;
+    throw new GraphQLError(
+      'Document déjà téléversé pour cette DI irréparable.',
+      { extensions: { code: 'DOC_ALREADY_UPLOADED' } },
+    );
   }
 
   /**
@@ -4366,12 +4421,15 @@ export class DiService {
     }
 
     // 🔒 GARDE SERVEUR-AUTORITAIRE (miroir du front après retrait des bornes) :
-    // une DI PAYANTE doit porter un prix de diagnostic STRICTEMENT POSITIF —
-    // refus des valeurs nulles/négatives, même en appel API direct. Aucune
-    // borne 150–500 n'est imposée ici (décision commerciale, front-only).
-    if (pricing?.diagnosticPayant !== false && !(Number(price) > 0)) {
+    // une DI PAYANTE porte un prix de diagnostic POSITIF OU NUL — 0 est accepté
+    // partout (flux original, retour, irréparable ; décision utilisateur
+    // 2026-09-15). Négatif / NaN refusés. Aucune borne 150–500 n'est imposée ici
+    // (décision commerciale, front-only).
+    const n = Number(price);
+    const payantPriceOk = Number.isFinite(n) && n >= 0;
+    if (pricing?.diagnosticPayant !== false && !payantPriceOk) {
       throw new GraphQLError(
-        'Prix du diagnostic invalide : un montant strictement positif est requis.',
+        'Prix du diagnostic invalide : un montant positif ou nul est requis.',
         { extensions: { code: 'BAD_REQUEST', diId: _id } },
       );
     }
@@ -4645,9 +4703,9 @@ export class DiService {
         }
         return this.magasinTech_Pending2(_id);
       }
-      // Retour RÉPARABLE + AVEC PDR → magasin (MagasinEstimation → poignée de main
-      // composants → PENDING3). Ce chemin ne passe PAS par PENDING2/Pricing (la
-      // facturation d'une erreur Fixtronix reste exclue par construction).
+      // Retour RÉPARABLE + AVEC PDR → magasin (MagasinEstimation → PENDING2 →
+      // tarification), erreur Fixtronix OU client : la bascule « Facturer le
+      // diagnostic ? » décide en Pricing si quelque chose est facturé.
     } else {
       const declaredPdr = di?.contain_pdr === true;
       const hasComposants =
@@ -4740,40 +4798,30 @@ export class DiService {
   }
 
   /**
-   * SORTIE MAGASIN d'un RETOUR Fixtronix : ne JAMAIS partir en PENDING2/Pricing.
-   *
-   * Un retour dont la faute est Fixtronix ET qui contient des PDR passe par le
-   * magasin (il y a des pièces à préparer). À la sortie (« Terminer l'estimation »
-   * → `changeStatusPending2` / `magasinTech_Pending2`), la garde Fixtronix de la
-   * sortie de DIAGNOSTIC ne s'applique plus — la source n'est plus un statut de
-   * diagnostic — et la DI filait en PENDING2 → PRICING_DIAG, donc FACTURÉE au
-   * client pour NOTRE erreur. On la renvoie vers la poignée de main composants
-   * (CONFIRMATION → ATTENTE_CONFIRMATION_COORDINATION → MAGASIN_FINALISATION →
-   * PENDING3), magasin conservé, tarification sautée.
-   *
-   * Borné au flux RETOUR (`ignoreCount > 0`) : le flux original est inchangé.
+   * Le cycle COURANT porte-t-il des pièces (PDR coché ET liste non vide) ?
+   * Miroir DI d'abord, snapshot du cycle en repli — même critère que le routage
+   * de sortie de diagnostic (`changeStatusMagasinEstimation`).
    */
-  private async shouldDetourMagasinExitForFixtronix(
-    di: any,
-    _id: string,
-  ): Promise<boolean> {
-    if (di?.status !== STATUS_DI.MagasinEstimation.status) return false;
-    if ((di?.ignoreCount ?? 0) <= 0) return false;
-    if (di?.can_be_repaired === false) return false;
-    return this.isFixtronixCycle(di, _id);
+  private async cycleHasComponents(di: any, _id: string): Promise<boolean> {
+    if (this.diHasComponents(di)) return true;
+    if ((di?.ignoreCount ?? 0) > 0) {
+      const log: any = await this.logsDiService.getLogsById(di.ignoreCount, _id);
+      return this.diHasComponents(log);
+    }
+    return false;
   }
 
   /**
-   * GARDE ARGENT — une erreur Fixtronix n'est JAMAIS facturée au client.
+   * GARDE ARGENT — un retour « erreur Fixtronix » SANS pièces n'est jamais
+   * tarifé (il part en PENDING3 direct, non facturé).
    *
-   * Partagée par les deux portes de PENDING2 (`changeStatusPending2` et
-   * `magasinTech_Pending2`) et par la porte de tarification
-   * (`changeStatusPricing`). `magasinTech_Pending2` est exposée en mutation et
-   * n'avait AUCUNE garde depuis une source autre que MagasinEstimation :
-   * n'importe quel appelant pouvait y pousser un retour Fixtronix.
+   * Depuis 2026-09-15, un retour Fixtronix AVEC pièces passe par le magasin puis
+   * la tarification, comme un retour client : c'est la bascule « Facturer le
+   * diagnostic ? » (payant / non payant) qui décide ce qui est facturé.
    *
-   * Lève une `GraphQLError` BAD_REQUEST et journalise la tentative, pour qu'un
-   * éventuel cas légitime remonte au lieu de passer inaperçu.
+   * Portes gardées : `magasinTech_Pending2` (mutation exposée) et
+   * `changeStatusPricing` (point de passage unique de toute tarification).
+   * Lève une `GraphQLError` BAD_REQUEST et journalise la tentative.
    */
   private async assertNotFixtronixBillable(
     _id: string,
@@ -4782,6 +4830,7 @@ export class DiService {
     const di: any = await this.diModel.findOne({ _id }).lean();
 
     if ((di?.ignoreCount ?? 0) <= 0) return;
+    if (await this.cycleHasComponents(di, _id)) return;
     if (!(await this.isFixtronixCycle(di, _id))) return;
 
     await this.operationalErrorService.capture({
@@ -4796,7 +4845,7 @@ export class DiService {
     });
 
     throw new GraphQLError(
-      "Cette DI est un retour pour erreur Fixtronix : elle ne peut pas être facturée au client.",
+      "Cette DI est un retour pour erreur Fixtronix sans pièce : elle ne passe pas par la tarification.",
       { extensions: { code: 'BAD_REQUEST' } },
     );
   }
@@ -4836,14 +4885,9 @@ export class DiService {
       await this.statsService.closeDiagLeg(_id, closed.ignoreCount ?? 0);
       return closed as any;
     }
-    // SORTIE MAGASIN (« Terminer l'estimation ») — MÊME règle argent, autre porte.
-    if (await this.shouldDetourMagasinExitForFixtronix(guardDi, _id)) {
-      await this.diModel.updateOne(
-        { _id },
-        { $set: { needsDevisBeforeRepair: true } },
-      );
-      return this.changeStatusInMagasin(_id) as any;
-    }
+    // SORTIE MAGASIN (« Terminer l'estimation ») : un retour AVEC pièces part en
+    // PENDING2 → tarification, erreur Fixtronix comprise (la bascule « Facturer
+    // le diagnostic ? » y décide payant / non payant).
     await this.assertTransitionAllowed(_id, STATUS_DI.Pending2.status);
     const result = await this.diModel.findOneAndUpdate(
       { _id },
@@ -4897,9 +4941,8 @@ export class DiService {
 
   async changeStatusPricing(_id: string, pricingRequestSentBy?: string | null) {
     // POINT DE PASSAGE UNIQUE de toute facturation : quelle que soit la route
-    // ayant amené la DI en PENDING2, elle ne peut plus être tarifée si le cycle
-    // est une erreur Fixtronix. Tout le reste (gardes de diagnostic, détour de
-    // sortie magasin) devient de la défense en profondeur.
+    // ayant amené la DI en PENDING2, un cycle « erreur Fixtronix » SANS pièces
+    // ne peut pas être tarifé. Avec pièces, il l'est comme un retour client.
     await this.assertNotFixtronixBillable(_id, 'changeStatusPricing');
     await this.assertTransitionAllowed(_id, STATUS_DI.Pricing.status);
     // « Prix à fixer » ne doit sonner qu'à la VRAIE entrée en PRICING_DIAG : le

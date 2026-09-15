@@ -39,8 +39,9 @@ const idnum = `BLN-${tag.toUpperCase()}`;
  *  « Disponible » et il n'y a rien à enregistrer. */
 const staleDiId = `DI_${tag}_stale`;
 const staleIdnum = `BLS-${tag.toUpperCase()}`;
-/** DI NON éligible : `IRREPARABLE` sans retour → aucune pièce à joindre, la
- *  notification n'ouvre rien (règle stricte `canAffectFiles`). */
+/** DI NON éligible : `ANNULER` → aucune pièce à joindre, la notification
+ *  n'ouvre rien (règle `canAffectFiles`). NB : une DI `IRREPARABLE` est
+ *  désormais éligible (ses 4 documents se téléversent). */
 const inelDiId = `DI_${tag}_inel`;
 const inelIdnum = `BLI-${tag.toUpperCase()}`;
 /** DI en attente de FACTURE (BL déjà là) : `DI_DOC_BL` « BL ajouté, en attente
@@ -100,14 +101,13 @@ test.beforeAll(async () => {
                 _id: inelDiId,
                 _idnum: inelIdnum,
                 title: 'QA BL notif non éligible',
-                description: 'irréparable sans retour',
-                status: 'IRREPARABLE',
+                description: 'DI annulée',
+                status: 'ANNULER',
                 can_be_repaired: false,
                 contain_pdr: false,
                 isDeleted: false,
                 array_composants: [],
                 current_roles: ['Coordinator'],
-                // Pas de retour (`ignoreCount` 0) → rien à joindre.
                 ignoreCount: 0,
                 statusUpdatedAt: THIRTY_DAYS_AGO,
                 createdAt: THIRTY_DAYS_AGO,
@@ -253,7 +253,7 @@ test('DI non éligible : RIEN ne s\'ouvre (ni upload, ni dossier), un simple avi
     await expect(item).toBeVisible();
     await item.click();
 
-    // `IRREPARABLE` sans retour → rien à téléverser : l'avis s'affiche…
+    // `ANNULER` → rien à téléverser : l'avis s'affiche…
     await expect(
         page.getByText('Plus aucun fichier à téléverser pour cette DI.'),
     ).toBeVisible({ timeout: 10_000 });

@@ -17,7 +17,7 @@ import { gqlPost } from '../utils/graphql';
  *   FT-01  Original + réparable + PDR                → MagasinEstimation
  *   FT-02  Original + réparable + sans PDR           → PENDING2
  *   FT-03  Original + NON réparable                  → PENDING2 (puis IRREPARABLE au prix)
- *   FT-04  Retour + Fixtronix + réparable + PDR      → MagasinEstimation → PENDING3 (jamais Pricing)
+ *   FT-04  Retour + Fixtronix + réparable + PDR      → MagasinEstimation → PENDING2 → Pricing
  *   FT-05  Retour + Fixtronix + réparable + sans PDR → PENDING3   (2 boutons possibles, cf. FT-05b)
  *   FT-06  Retour + Fixtronix + NON réparable        → IRREPARABLE
  *   FT-07  Retour + client + réparable + PDR         → MagasinEstimation
@@ -377,14 +377,14 @@ for (const c of RETOUR_CASES) {
 
 // ───────────────────────────── FT-04, 2e saut ────────────────────────────────
 /**
- * « MagasinEstimation → PENDING3 (jamais Pricing) ».
+ * « MagasinEstimation → PENDING2 → Pricing » (règle du 2026-09-15).
  *
- * FT-04 ci-dessus ne prouve que l'ENTRÉE au magasin. La règle argent porte sur
- * la SORTIE : une erreur Fixtronix (notre faute) n'est jamais facturée, donc la
- * DI ne doit toucher NI PENDING2 NI PRICING_DIAG en chemin. On pousse la DI
- * jusqu'au bout avec les vraies mutations et on relit `statusHistory`.
+ * FT-04 ci-dessus ne prouve que l'ENTRÉE au magasin. Un retour AVEC pièces,
+ * erreur Fixtronix comprise, sort du magasin vers la tarification ; la bascule
+ * « Facturer le diagnostic ? » y décide ce qui est facturé. Plus de détour
+ * CONFIRMATION → PENDING3.
  */
-test('FT-04 (2e saut) — sortie magasin d’un retour Fixtronix → PENDING3 sans jamais voir PENDING2/Pricing', async ({
+test('FT-04 (2e saut) — sortie magasin d’un retour Fixtronix avec pièces → PENDING2 → tarification', async ({
     page,
     request,
 }) => {
@@ -398,32 +398,28 @@ test('FT-04 (2e saut) — sortie magasin d’un retour Fixtronix → PENDING3 sa
     await page.locator('.p-confirm-dialog .p-confirm-dialog-accept').click();
     await expect.poll(() => dbStatus(id), { timeout: 15000 }).toBe('MagasinEstimation');
 
-    // Suite serveur-autoritaire : sortie magasin puis poignée de main composants.
+    // Suite serveur-autoritaire : sortie magasin puis envoi en tarification.
     const token = tokenFor('ADMIN_MANAGER');
     const walk: Array<[string, string, string]> = [
-        // « Terminer l'estimation » du magasin — c'est CE saut qui partait en PENDING2.
-        ['sortie magasin', `changeStatusPending2(_id: "${id}")`, 'CONFIRMATION'],
-        ['envoi coordination', `sendComponentToConMagasinForConfirmation(_id: "${id}") { _id status }`, 'ATTENTE_CONFIRMATION_COORDINATION'],
-        ['confirmation coordination', `componentConfirmedFromCoordinator(_id: "${id}") { _id status }`, 'MAGASIN_FINALISATION'],
-        ['fin liste composants', `changeStatusPending3(_id: "${id}")`, 'PENDING3'],
+        ['sortie magasin', `changeStatusPending2(_id: "${id}")`, 'PENDING2'],
+        ['envoi en tarification', `changeStatusPricing(_id: "${id}")`, 'PRICING_DIAG'],
     ];
-    for (const [label, mut, _expected] of walk) {
+    for (const [label, mut, expected] of walk) {
         const r = await gqlPost(request, `mutation { ${mut} }`, token);
         expect(r.errors, `${label} — ${r.errorText}`).toBeNull();
+        expect(await dbStatus(id), label).toBe(expected);
     }
 
-    expect(await dbStatus(id), 'la DI doit atteindre PENDING3').toBe('PENDING3');
-    // Le devis coordinatrice reste obligatoire avant l'envoi en réparation.
     const di: any = await withDb((db) =>
         db.collection('dis').findOne({ _id: id }),
     );
-    expect(di?.needsDevisBeforeRepair).toBe(true);
+    expect(di?.needsDevisBeforeRepair).not.toBe(true);
 
-    // LA règle : jamais facturé.
+    // Plus de raccourci poignée de main / PENDING3 avant la tarification.
     const trail = await statusTrail(id);
-    for (const billing of ['PENDING2', 'PRICING_DIAG', 'PRICING']) {
-        expect(trail, `erreur Fixtronix passée par ${billing} : ${trail.join(' → ')}`)
-            .not.toContain(billing);
+    for (const shortcut of ['CONFIRMATION', 'PENDING3']) {
+        expect(trail, `raccourci ${shortcut} : ${trail.join(' → ')}`)
+            .not.toContain(shortcut);
     }
 });
 

@@ -1637,8 +1637,9 @@ export class DiscordHookService {
 
     const author = await this.resolveProfileDisplay(profile);
     const role = profile?.role ? ` · ${profile.role}` : '';
+    // 0 = initial value of a composant created without a price → « — ».
     const priceLine = (v: any) =>
-      Number.isFinite(Number(v))
+      Number(v) > 0
         ? `${Number(v).toLocaleString('fr-TN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} TND`
         : '—';
     await this.postEmbed('GENERAL_ATELIER', {

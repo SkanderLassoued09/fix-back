@@ -5,21 +5,16 @@ import { DiService } from './di.service';
 import { STATUS_DI } from './di.status';
 
 /**
- * SORTIE MAGASIN d'un RETOUR « erreur Fixtronix » (FT-04, 2e saut).
+ * SORTIE MAGASIN d'un RETOUR AVEC pièces (FT-04 / FT-07, 2e saut).
  *
- * Règle argent : une erreur Fixtronix (notre faute) n'est JAMAIS facturée. Le cas
- * RETOUR + Fixtronix + réparable + AVEC PDR passe par le magasin (il y a des
- * pièces à préparer) ; à la SORTIE du magasin, la garde Fixtronix de la sortie de
- * DIAGNOSTIC ne s'appliquait plus (la source n'est plus un statut de diagnostic)
- * et la DI filait en PENDING2 → PRICING_DIAG, donc FACTURÉE.
+ * Règle depuis 2026-09-15 : un retour qui contient des PDR passe par le magasin
+ * PUIS la tarification, erreur Fixtronix OU client. En Pricing, la bascule
+ * « Facturer le diagnostic ? » décide ce qui est facturé (non payant = rien).
+ * L'ancien détour Fixtronix (magasin → CONFIRMATION, tarification sautée) est
+ * retiré.
  *
- * Elle doit désormais repartir vers la poignée de main composants
- * (CONFIRMATION → … → PENDING3), magasin conservé, tarification sautée, avec
- * `needsDevisBeforeRepair` posé comme sur le raccourci SANS PDR.
- *
- * Les DEUX portes vers PENDING2 depuis MagasinEstimation sont couvertes :
- * `changeStatusPending2` (bouton magasin « Terminer l'estimation ») et
- * `magasinTech_Pending2` (mutation exposée telle quelle par le resolver).
+ * Reste interdit : tarifer un retour Fixtronix SANS pièces (il part en PENDING3
+ * direct, non facturé) — garde `assertNotFixtronixBillable`.
  */
 
 function makeSvc(di: any, cycleLog: any) {
@@ -55,6 +50,7 @@ function makeSvc(di: any, cycleLog: any) {
     sendDiStatusPending2: jest.fn().mockResolvedValue(undefined),
     sendDiagnosticFinished: jest.fn().mockResolvedValue(undefined),
   };
+  svc.operationalErrorService = { capture: jest.fn().mockResolvedValue(undefined) };
   svc.notificationGateway = { updateTicket: jest.fn() };
   svc.emitDiHandoff = jest.fn().mockResolvedValue(undefined);
   svc.captureDiscordFailure = jest.fn();
@@ -125,102 +121,69 @@ const NO_PDR_LOG = {
   isErrorFromFixtronix: false,
 };
 
-describe('DiService — sortie magasin d’un RETOUR Fixtronix (FT-04)', () => {
+describe('DiService — sortie magasin d’un RETOUR avec pièces → tarification', () => {
   describe('changeStatusPending2 (bouton « Terminer l’estimation » du magasin)', () => {
-    it('RETOUR + Fixtronix (flag DI persistant) → CONFIRMATION, JAMAIS PENDING2', async () => {
-      const svc = makeSvc(
-        atMagasin({ isErrorFromFixtronix: true }),
-        // Log du cycle CLOBBERÉ à false par le formulaire : le flag DI doit gagner.
-        CLIENT_LOG,
-      );
+    it('RETOUR + Fixtronix (flag DI) + pièces → PENDING2, plus de détour CONFIRMATION', async () => {
+      const svc = makeSvc(atMagasin({ isErrorFromFixtronix: true }), FIXTRONIX_LOG);
 
       const out = await svc.changeStatusPending2('DI1');
 
-      expect(out?.status).toBe(STATUS_DI.InMagasin.status); // 'CONFIRMATION'
-      expect(svc.diModel.findOneAndUpdate).toHaveBeenCalledWith(
-        { _id: 'DI1' },
-        { $set: { status: STATUS_DI.InMagasin.status } },
-        { new: true },
-      );
-      // La tarification n'est jamais atteinte.
+      expect(out?.status).toBe(STATUS_DI.Pending2.status);
       expect(svc.diModel.findOneAndUpdate).not.toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({
-          $set: expect.objectContaining({ status: STATUS_DI.Pending2.status }),
-        }),
+        { $set: { status: STATUS_DI.InMagasin.status } },
         expect.anything(),
       );
-      // Devis attendu de la coordinatrice avant l'envoi en réparation.
-      expect(svc.diModel.updateOne).toHaveBeenCalledWith(
-        { _id: 'DI1' },
-        { $set: { needsDevisBeforeRepair: true } },
-      );
+      // Plus de devis coordinatrice imposé : la DI suit l'Approval normale.
+      expect(svc.diModel.updateOne).not.toHaveBeenCalled();
     });
 
-    it('RETOUR + Fixtronix porté par le SNAPSHOT du cycle (flag DI absent) → CONFIRMATION', async () => {
+    it('RETOUR + Fixtronix porté par le SNAPSHOT du cycle → PENDING2', async () => {
       const svc = makeSvc(atMagasin(), FIXTRONIX_LOG);
-
       const out = await svc.changeStatusPending2('DI1');
-
-      expect(svc.logsDiService.getLogsById).toHaveBeenCalledWith(1, 'DI1');
-      expect(out?.status).toBe(STATUS_DI.InMagasin.status);
+      expect(out?.status).toBe(STATUS_DI.Pending2.status);
     });
 
-    it('RETOUR + erreur CLIENT → PENDING2 (non-régression : le client reste facturé)', async () => {
+    it('RETOUR + erreur CLIENT → PENDING2 (inchangé)', async () => {
       const svc = makeSvc(atMagasin(), CLIENT_LOG);
-
       const out = await svc.changeStatusPending2('DI1');
-
       expect(out?.status).toBe(STATUS_DI.Pending2.status);
       expect(svc.diModel.updateOne).not.toHaveBeenCalled();
     });
 
-    it('FLUX ORIGINAL (ignoreCount = 0), même avec le flag Fixtronix → PENDING2 (garde bornée au retour)', async () => {
-      const svc = makeSvc(
-        atMagasin({ ignoreCount: 0, isErrorFromFixtronix: true }),
-        null,
-      );
-
+    it('FLUX ORIGINAL (ignoreCount = 0) → PENDING2 (inchangé)', async () => {
+      const svc = makeSvc(atMagasin({ ignoreCount: 0, isErrorFromFixtronix: true }), null);
       const out = await svc.changeStatusPending2('DI1');
-
-      expect(out?.status).toBe(STATUS_DI.Pending2.status);
-      expect(svc.diModel.updateOne).not.toHaveBeenCalled();
-    });
-
-    it('RETOUR + Fixtronix mais NON réparable → PENDING2 (le détour ne s’applique pas)', async () => {
-      const svc = makeSvc(
-        atMagasin({ can_be_repaired: false, isErrorFromFixtronix: true }),
-        FIXTRONIX_LOG,
-      );
-
-      const out = await svc.changeStatusPending2('DI1');
-
       expect(out?.status).toBe(STATUS_DI.Pending2.status);
     });
   });
 
   describe('magasinTech_Pending2 (2e porte, mutation exposée)', () => {
-    it('RETOUR + Fixtronix depuis MagasinEstimation → CONFIRMATION, aucune transition PENDING2', async () => {
-      const svc = makeSvc(atMagasin({ isErrorFromFixtronix: true }), CLIENT_LOG);
-
-      const out = await svc.magasinTech_Pending2('DI1');
-
-      expect(out?.status).toBe(STATUS_DI.InMagasin.status);
-      expect(svc.diWorkflowService.transition).not.toHaveBeenCalled();
-      expect(svc.diModel.updateOne).toHaveBeenCalledWith(
-        { _id: 'DI1' },
-        { $set: { needsDevisBeforeRepair: true } },
-      );
-    });
-
-    it('RETOUR + erreur CLIENT → transition MAGASIN_TECH_TO_PENDING2 (inchangé)', async () => {
-      const svc = makeSvc(atMagasin(), CLIENT_LOG);
+    it('RETOUR + Fixtronix + pièces depuis MagasinEstimation → transition MAGASIN_TECH_TO_PENDING2', async () => {
+      const svc = makeSvc(atMagasin({ isErrorFromFixtronix: true }), FIXTRONIX_LOG);
 
       await svc.magasinTech_Pending2('DI1');
 
       expect(svc.diWorkflowService.transition).toHaveBeenCalledWith(
         expect.objectContaining({ transitionKey: 'MAGASIN_TECH_TO_PENDING2' }),
       );
+      expect(svc.diModel.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('RETOUR + erreur CLIENT → transition MAGASIN_TECH_TO_PENDING2 (inchangé)', async () => {
+      const svc = makeSvc(atMagasin(), CLIENT_LOG);
+      await svc.magasinTech_Pending2('DI1');
+      expect(svc.diWorkflowService.transition).toHaveBeenCalledWith(
+        expect.objectContaining({ transitionKey: 'MAGASIN_TECH_TO_PENDING2' }),
+      );
+    });
+
+    it('RETOUR + Fixtronix SANS pièce → REFUS (jamais tarifé), aucune transition', async () => {
+      const svc = makeSvc(inDiagRetour({ isErrorFromFixtronix: true }), NO_PDR_LOG);
+
+      await expect(svc.magasinTech_Pending2('DI1')).rejects.toThrow(/erreur Fixtronix/);
+      expect(svc.diWorkflowService.transition).not.toHaveBeenCalled();
+      expect(svc.operationalErrorService.capture).toHaveBeenCalled();
     });
 
     it('sortie de DIAGNOSTIC (flux original, non réparable payant) → transition PENDING2 inchangée', async () => {
@@ -239,6 +202,30 @@ describe('DiService — sortie magasin d’un RETOUR Fixtronix (FT-04)', () => {
         expect.objectContaining({ transitionKey: 'MAGASIN_TECH_TO_PENDING2' }),
       );
       expect(svc.diModel.updateOne).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('assertNotFixtronixBillable (porte de tarification)', () => {
+    it('Fixtronix + pièces sur le miroir DI → autorisé', async () => {
+      const svc = makeSvc(atMagasin({ isErrorFromFixtronix: true }), null);
+      await expect(svc.assertNotFixtronixBillable('DI1', 'test')).resolves.toBeUndefined();
+    });
+
+    it('Fixtronix + pièces seulement sur le snapshot du cycle → autorisé', async () => {
+      const svc = makeSvc(inDiagRetour({ isErrorFromFixtronix: true }), FIXTRONIX_LOG);
+      await expect(svc.assertNotFixtronixBillable('DI1', 'test')).resolves.toBeUndefined();
+    });
+
+    it('Fixtronix SANS pièce → REFUS', async () => {
+      const svc = makeSvc(inDiagRetour({ isErrorFromFixtronix: true }), NO_PDR_LOG);
+      await expect(svc.assertNotFixtronixBillable('DI1', 'test')).rejects.toThrow(
+        /erreur Fixtronix/,
+      );
+    });
+
+    it('erreur CLIENT sans pièce → autorisé (facturé normalement)', async () => {
+      const svc = makeSvc(inDiagRetour(), NO_PDR_LOG);
+      await expect(svc.assertNotFixtronixBillable('DI1', 'test')).resolves.toBeUndefined();
     });
   });
 });

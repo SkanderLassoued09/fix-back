@@ -40,10 +40,15 @@ const BLANK = new Set(['', 'undefined', 'null', 'NaN']);
 const isBlankStr = (v: unknown): boolean =>
   v == null || BLANK.has(String(v).trim());
 
-/** `0` est une valeur RENSEIGNÉE (prix nul, stock épuisé) — jamais « vide ».
+/** Quantité : `0` est une valeur RENSEIGNÉE (stock épuisé) — jamais « vide ».
  *  Seuls l'absence, `null` et une valeur non numérique comptent comme vides. */
 const isBlankNum = (v: unknown): boolean =>
   typeof v !== 'number' || !Number.isFinite(v);
+
+/** Prix : `0` est la valeur INITIALE d'un composant créé sans prix
+ *  (2026-09-15, `composant-defaults.ts`) — il compte donc comme « pas de prix ». */
+const isBlankPrice = (v: unknown): boolean =>
+  isBlankNum(v) || (v as number) <= 0;
 
 /** Fiche réduite aux champs inspectés, quantité normalisée (`null` = absente). */
 interface NamedPart {
@@ -160,7 +165,7 @@ export class MagasinStockReminderService {
 
     for (const p of parts ?? []) {
       const noStatus = isBlankStr(p.status_composant);
-      const noPrice = isBlankNum(p.prix_achat) || isBlankNum(p.prix_vente);
+      const noPrice = isBlankPrice(p.prix_achat) || isBlankPrice(p.prix_vente);
       const noQty = isBlankNum(p.quantity_stocked);
       if (!noStatus && !noPrice && !noQty) continue;
 

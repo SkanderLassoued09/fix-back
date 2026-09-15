@@ -17,6 +17,8 @@ const priceId = `DI_${tag}_price`;
 const priceNum = `RUIP-${tag.toUpperCase()}`;
 const irrId = `DI_${tag}_irr`;
 const irrNum = `RUII-${tag.toUpperCase()}`;
+const fxId = `DI_${tag}_fx`;
+const fxNum = `RUIF-${tag.toUpperCase()}`;
 
 test.use({ storageState: authFile('ADMIN_MANAGER') });
 test.describe.configure({ mode: 'serial' });
@@ -49,13 +51,28 @@ test.beforeAll(async () => {
             client_id: 'C1', current_roles: ['Manager'], array_composants: [],
             isDeleted: false, statusUpdatedAt: now, createdAt: now, updatedAt: now,
         });
+        // 3) Retour erreur FIXTRONIX + réparable + AVEC pièces, EN PRICING_DIAG
+        //    (règle 2026-09-15 : magasin puis tarification).
+        const comps = [{ nameComposant: 'Fusible', quantity: 1 }];
+        await db.collection('dis').insertOne({
+            _id: fxId, _idnum: fxNum, title: 'QA retour Fixtronix pricing',
+            status: 'PRICING_DIAG', ignoreCount: 1, can_be_repaired: true,
+            contain_pdr: true, isErrorFromFixtronix: true,
+            client_id: 'C1', current_roles: ['Admin_Manager'], array_composants: comps,
+            isDeleted: false, statusUpdatedAt: now, createdAt: now, updatedAt: now,
+        });
+        await db.collection('logsdis').insertOne({
+            _id: `log-${fxId}`, _idDi: fxId, idIgnore: 1,
+            can_be_repaired: true, contain_pdr: true, array_composants: comps,
+            isErrorFromFixtronix: true, createdAt: now, updatedAt: now,
+        });
     });
 });
 
 test.afterAll(async () => {
     await withDb(async (db) => {
-        await db.collection('dis').deleteMany({ _id: { $in: [priceId, irrId] } });
-        await db.collection('logsdis').deleteMany({ _idDi: { $in: [priceId, irrId] } });
+        await db.collection('dis').deleteMany({ _id: { $in: [priceId, irrId, fxId] } });
+        await db.collection('logsdis').deleteMany({ _idDi: { $in: [priceId, irrId, fxId] } });
     });
 });
 
@@ -85,6 +102,9 @@ test('1b) Non payant → Payant rouvre le prix du diagnostic et « Valider le pr
 
     await toggle.click(); // → Non payant
     await expect(priceInput).toBeDisabled();
+    // Non payant = rien facturé : la réparation est grisée aussi, et on peut valider.
+    await expect(page.locator('#pricing-repair-estimate')).toBeDisabled();
+    await expect(submit).toBeEnabled();
 
     await toggle.click(); // → Payant
     await expect(priceInput).toBeEnabled();
@@ -96,6 +116,34 @@ test('1b) Non payant → Payant rouvre le prix du diagnostic et « Valider le pr
     await repair.click();
     await repair.pressSequentially('300');
     await expect(priceInput).toHaveValue(/180/);
+    await expect(submit).toBeEnabled();
+});
+
+test('1c) Retour FIXTRONIX avec pièces : bascule visible, Non payant grise tout, Payant accepte 0', async ({ page }) => {
+    await page.goto(TICKET_LIST);
+    const row = page.locator('tr', { hasText: fxNum });
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await row.locator('button:has(.pi-dollar)').first().click();
+    const priceInput = page.locator('#pricing-init-input');
+    const repair = page.locator('#pricing-repair-estimate');
+    const toggle = page.locator('.pricing-facturer__toggle');
+    const submit = page.locator('button.pricing-submit');
+    await expect(priceInput).toBeVisible({ timeout: 15_000 });
+    await expect(toggle).toBeVisible();
+
+    await toggle.click(); // → Non payant
+    await expect(priceInput).toBeDisabled();
+    await expect(repair).toBeDisabled();
+    await expect(submit).toBeEnabled();
+
+    await toggle.click(); // → Payant
+    await expect(priceInput).toBeEnabled();
+    await expect(repair).toBeEnabled();
+    await priceInput.click();
+    await priceInput.pressSequentially('0');
+    await repair.click();
+    await repair.pressSequentially('300');
+    await expect(priceInput).toHaveValue(/^0/);
     await expect(submit).toBeEnabled();
 });
 

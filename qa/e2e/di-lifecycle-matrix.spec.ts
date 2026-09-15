@@ -224,8 +224,8 @@ test('11 · RETOUR · Fixtronix + PDR + réparable → MagasinEstimation (passe 
     log: { contain_pdr: true, composants: true, fixtronix: true },
   });
   // Fixtronix + AVEC PDR → magasin (MagasinEstimation). Ce test ne prouve que
-  // l'ENTRÉE au magasin ; la SORTIE (qui partait en PENDING2 → Pricing, donc
-  // FACTURÉE) est couverte par le cas 14 ci-dessous et, de bout en bout, par
+  // l'ENTRÉE au magasin ; la SORTIE (PENDING2 → tarification depuis
+  // 2026-09-15) est couverte par le cas 14 ci-dessous et, de bout en bout, par
   // « FT-04 (2e saut) » dans di-flow-all-ui.spec.ts. (Le raccourci
   // PENDING3-direct ne concerne que le cas SANS PDR.)
   const r = await gqlPost(request, magasinEstim(id));
@@ -258,21 +258,20 @@ test('13 · RETOUR · Fixtronix=OUI · NON réparable · sans PDR · appel DIREC
   expect(await statusOf(id)).toBe('IRREPARABLE');
 });
 
-test('14 · RETOUR · Fixtronix + PDR · SORTIE magasin → CONFIRMATION (jamais PENDING2/Pricing)', async ({ request }) => {
+test('14 · RETOUR · Fixtronix + PDR · SORTIE magasin → PENDING2 (tarification, comme un retour client)', async ({ request }) => {
   const id = await seed({
     key: 'r-fix-rep-pdr-exit', ignoreCount: 1, can_be_repaired: true, contain_pdr: true, composants: true,
     status: 'MagasinEstimation', fixtronixOnDi: true,
-    // Log de cycle CLOBBERÉ à false par le formulaire : le flag DI doit gagner.
-    log: { contain_pdr: true, composants: true, fixtronix: false },
+    log: { contain_pdr: true, composants: true, fixtronix: true },
   });
-  // « Terminer l'estimation » du magasin. Sans garde, ce saut posait PENDING2 →
-  // PRICING_DIAG : une erreur Fixtronix (notre faute) FACTURÉE au client. La DI
-  // doit repartir vers la poignée de main composants (→ … → PENDING3).
+  // « Terminer l'estimation » du magasin. Depuis 2026-09-15, un retour AVEC
+  // pièces part en tarification, erreur Fixtronix comprise : la bascule
+  // « Facturer le diagnostic ? » décide en Pricing ce qui est facturé.
   const r = await gqlPost(request, pending2(id));
   expect(r.errors, r.errorText).toBeNull();
-  expect(await statusOf(id)).toBe('CONFIRMATION');
+  expect(await statusOf(id)).toBe('PENDING2');
   const di: any = await withDb((db) => db.collection('dis').findOne({ _id: id }));
-  expect(di?.needsDevisBeforeRepair).toBe(true);
+  expect(di?.needsDevisBeforeRepair).not.toBe(true);
 });
 
 test('15 · RETOUR · erreur CLIENT + PDR · SORTIE magasin → PENDING2 (non-régression : le client reste facturé)', async ({ request }) => {

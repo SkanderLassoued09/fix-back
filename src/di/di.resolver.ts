@@ -444,9 +444,16 @@ export class DiResolver {
     @CurrentUser() user: Profile,
     @Args('_id') _id: string,
     @Args('remarque') remarque: string,
+    @Args('repairSuccess', { type: () => Boolean, nullable: true })
+    repairSuccess?: boolean,
+    @Args('testsValidated', { type: () => Boolean, nullable: true })
+    testsValidated?: boolean,
   ) {
     await this.statService.assertTechOwnsDi(_id, user, 'rep');
-    return this.diService.tech_finishReperation(_id, remarque);
+    return this.diService.tech_finishReperation(_id, remarque, {
+      repairSuccess,
+      testsValidated,
+    });
   }
 
   @Mutation(() => Di)

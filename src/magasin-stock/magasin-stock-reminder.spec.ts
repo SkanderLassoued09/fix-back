@@ -143,16 +143,17 @@ describe('MagasinStockReminderService.run — §2 fiches à compléter', () => {
     expect(arg.message).not.toContain('OK');
   });
 
-  it('0 est une valeur RENSEIGNÉE : prix nul et stock épuisé ne sont pas « vides »', async () => {
+  it('prix à 0 = « pas de prix » (valeur initiale) ; stock à 0 reste RENSEIGNÉ', async () => {
     const svc = makeSvc([], [
-      { name: 'GRATUIT', status_composant: 'En stock', prix_achat: 0, prix_vente: 0, quantity_stocked: 0 },
+      { name: 'NEUF', status_composant: 'En stock', prix_achat: 0, prix_vente: 0, quantity_stocked: 0 },
     ]);
 
     const res = await svc.run();
 
-    expect(res.incomplete).toEqual({ status: 0, price: 0, qty: 0, affected: 0 });
-    expect(res.incompleteNotified).toBe(false);
-    expect(emitOf(svc, 'MAGASIN_STOCK_INCOMPLETE')).toBeUndefined();
+    expect(res.incomplete).toEqual({ status: 0, price: 1, qty: 0, affected: 1 });
+    const arg = emitOf(svc, 'MAGASIN_STOCK_INCOMPLETE');
+    expect(arg.payload.priceMissing.map((p: any) => p.name)).toEqual(['NEUF']);
+    expect(arg.payload.qtyMissing).toEqual([]);
   });
 
   it('prix : un seul des deux manquant suffit ; quantité non numérique = vide', async () => {

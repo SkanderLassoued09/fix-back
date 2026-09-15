@@ -7,7 +7,8 @@ import { DiService } from './di.service';
  * Garde serveur sur le prix du diagnostic (feat/prix-diagnostic-tarification).
  * Après le retrait des bornes 150–500 (front, décision commerciale), le back
  * garde deux invariants monétaires :
- *   - DI PAYANTE  → prix STRICTEMENT POSITIF requis (refus 0 / négatif / NaN) ;
+ *   - DI PAYANTE  → prix POSITIF OU NUL requis — 0 accepté partout, flux
+ *     original compris (décision 2026-09-15) ; refus négatif / NaN ;
  *   - DI NON PAYANTE → aucun prix positif facturable (garde existante).
  * AUCUNE borne 150–500 côté back : une valeur hors bornes est acceptée.
  */
@@ -41,18 +42,28 @@ describe('DiService.affectinitialPrice — garde prix diagnostic', () => {
     );
   });
 
-  it('PAYANT + prix = 0 → REFUS (montant strictement positif requis)', async () => {
+  it('PAYANT + prix = 0 (flux original) → ACCEPTÉ, écrit 0', async () => {
     const svc = makeSvc({ _id: 'DI1', diagnosticPayant: true, ignoreCount: 0 });
-    await expect(svc.affectinitialPrice('DI1', 0)).rejects.toThrow(
-      /strictement positif|invalide/,
+    await svc.affectinitialPrice('DI1', 0);
+    expect(svc.diModel.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: 'DI1' },
+      { $set: { price: 0 } },
+      { new: true },
     );
-    expect(svc.diModel.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it('PAYANT + prix négatif → REFUS', async () => {
     const svc = makeSvc({ _id: 'DI1', diagnosticPayant: true, ignoreCount: 0 });
     await expect(svc.affectinitialPrice('DI1', -50)).rejects.toThrow(
-      /strictement positif|invalide/,
+      /invalide/,
+    );
+    expect(svc.diModel.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('PAYANT + prix non numérique → REFUS', async () => {
+    const svc = makeSvc({ _id: 'DI1', diagnosticPayant: true, ignoreCount: 0 });
+    await expect(svc.affectinitialPrice('DI1', NaN)).rejects.toThrow(
+      /invalide/,
     );
     expect(svc.diModel.findOneAndUpdate).not.toHaveBeenCalled();
   });
@@ -65,6 +76,18 @@ describe('DiService.affectinitialPrice — garde prix diagnostic', () => {
       { $set: { price: 600 } },
       { new: true },
     );
+  });
+
+  it('RETOUR + PAYANT + prix = 0 → ACCEPTÉ (bascule « Facturer le diagnostic ? »)', async () => {
+    const svc = makeSvc({ _id: 'DI1', diagnosticPayant: true, ignoreCount: 1 });
+    await svc.affectinitialPrice('DI1', 0);
+    expect(svc.logsDiService.savePricing).toHaveBeenCalledWith('DI1', 1, 0);
+  });
+
+  it('RETOUR + PAYANT + prix négatif → REFUS', async () => {
+    const svc = makeSvc({ _id: 'DI1', diagnosticPayant: true, ignoreCount: 1 });
+    await expect(svc.affectinitialPrice('DI1', -1)).rejects.toThrow(/invalide/);
+    expect(svc.logsDiService.savePricing).not.toHaveBeenCalled();
   });
 
   it('NON PAYANT + prix 0 → OK (no-op toléré, aucune facturation)', async () => {

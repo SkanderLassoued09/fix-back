@@ -4,15 +4,13 @@ import { gqlPost } from '../utils/graphql';
 import { tokenFor } from '../utils/auth';
 
 /**
- * FT-04 (cas 1A) : un RETOUR Fixtronix + AVEC PDR + réparable doit finir
- * « Magasin → PENDING3 », SANS jamais passer par PENDING2/Pricing — une erreur
- * Fixtronix (notre faute) n'est jamais facturée au client. Le cas 11 de la
- * matrice ne prouve que l'ENTRÉE au magasin (MagasinEstimation).
+ * FT-04 (cas 1A) : un RETOUR Fixtronix + AVEC PDR + réparable passe par le
+ * magasin PUIS la tarification (règle du 2026-09-15), comme un retour client.
+ * En Pricing, la bascule « Facturer le diagnostic ? » décide ce qui est facturé.
  *
- * La sortie magasin partait auparavant en PENDING2 → PRICING_DIAG (facturée) ;
- * elle est désormais détournée vers la poignée de main composants. On pousse la
- * DI jusqu'au bout, on journalise le statut à chaque étape, et on assert que
- * AUCUN statut de facturation n'a été touché.
+ * Avant, la sortie magasin était détournée vers la poignée de main composants
+ * (CONFIRMATION → … → PENDING3) en sautant la tarification. On pousse la DI
+ * jusqu'en tarification, on journalise chaque étape et on assert le chemin.
  */
 
 const ID = 'DI_retour1a-path-e2e';
@@ -68,23 +66,13 @@ async function statusOf(): Promise<string | undefined> {
   });
 }
 
-test('1A : retour Fixtronix+PDR+réparable atteint bien PENDING3 (via Magasin → poignée de main composants)', async ({ request }) => {
+test('1A : retour Fixtronix+PDR+réparable → Magasin → PENDING2 → tarification', async ({ request }) => {
   const M = (op: string) => `mutation { ${op} }`;
-  // Route Fixtronix : la sortie magasin (`magasinTech_Pending2`) est DÉTOURNÉE
-  // vers la poignée de main composants (CONFIRMATION), en sautant PENDING2 et
-  // toute la phase tarification/approbation. Séquence serveur-autoritaire
-  // complète jusqu'à PENDING3.
-  // En RETOUR, la poignée de main suit EXACTEMENT les statuts du flux original
-  // (CONFIRMATION → ATTENTE_CONFIRMATION_COORDINATION → MAGASIN_FINALISATION).
-  // Avant, elle n'écrivait que les drapeaux du log : la DI restait en
-  // CONFIRMATION et la coordinatrice ne pouvait jamais confirmer.
-  const token = tokenFor('ADMIN_MANAGER'); // componentConfirmedFromCoordinator = JwtAuthGuard
+  const token = tokenFor('ADMIN_MANAGER');
   const steps: Array<[string, string, string]> = [
     ['changeStatusMagasinEstimation', M(`changeStatusMagasinEstimation(_id: "${ID}")`), 'MagasinEstimation'],
-    ['magasinTech_Pending2 (sortie magasin, détournée)', M(`magasinTech_Pending2(_id: "${ID}") { _id status }`), 'CONFIRMATION'],
-    ['sendComponentToConMagasinForConfirmation', M(`sendComponentToConMagasinForConfirmation(_id: "${ID}") { _id status }`), 'ATTENTE_CONFIRMATION_COORDINATION'],
-    ['componentConfirmedFromCoordinator', M(`componentConfirmedFromCoordinator(_id: "${ID}") { _id status }`), 'MAGASIN_FINALISATION'],
-    ['changeStatusPending3', M(`changeStatusPending3(_id: "${ID}")`), 'PENDING3'],
+    ['magasinTech_Pending2 (sortie magasin)', M(`magasinTech_Pending2(_id: "${ID}") { _id status }`), 'PENDING2'],
+    ['changeStatusPricing', M(`changeStatusPricing(_id: "${ID}")`), 'PRICING_DIAG'],
   ];
 
   const trail: string[] = [];
@@ -94,29 +82,19 @@ test('1A : retour Fixtronix+PDR+réparable atteint bien PENDING3 (via Magasin �
     const err = r.errors?.[0]?.message ?? '';
     const st = await statusOf();
     trail.push(`${label} → status=${st} (attendu ${expected})${err ? ` [ERR: ${err}]` : ''}`);
-    // Chaque étape de la route Fixtronix doit passer proprement : un refus de
-    // transition ici signifierait que le détour a cassé le chemin composants.
     expect(err, `${label} : ${err}`).toBe('');
     expect(st, `${label} : statut inattendu`).toBe(expected);
   }
   console.log('\n──── RETOUR 1A PATH TRAIL ────\n' + trail.join('\n') + '\n');
-  const finalStatus = await statusOf();
-  console.log('FINAL:', finalStatus);
 
-  // 1A COMPLET : la DI atteint réellement PENDING3 (envoi en réparation) après
-  // le magasin + la poignée de main composants. Pas de lacune : le chemin existe.
-  expect(finalStatus, 'retour PDR réparable doit atteindre PENDING3').toBe('PENDING3');
-
-  // LA règle argent : une erreur Fixtronix ne touche AUCUN statut de facturation.
   const di: any = await withDb((db) => db.collection('dis').findOne({ _id: ID }));
   const visited = [
     ...(di?.statusHistory ?? []).map((h: any) => String(h?.status)),
     String(di?.status),
   ];
-  for (const billing of ['PENDING2', 'PRICING_DIAG', 'PRICING']) {
-    expect(visited, `erreur Fixtronix passée par ${billing} : ${visited.join(' → ')}`)
-      .not.toContain(billing);
+  // Plus de raccourci : ni poignée de main anticipée ni PENDING3 avant tarification.
+  for (const shortcut of ['CONFIRMATION', 'PENDING3']) {
+    expect(visited, `raccourci ${shortcut} : ${visited.join(' → ')}`).not.toContain(shortcut);
   }
-  // Le devis coordinatrice reste obligatoire avant l'envoi en réparation.
-  expect(di?.needsDevisBeforeRepair).toBe(true);
+  expect(di?.needsDevisBeforeRepair).not.toBe(true);
 });
