@@ -1,4 +1,4 @@
-import { ObjectType, Field, Int } from '@nestjs/graphql';
+import { ObjectType, Field, Float, Int } from '@nestjs/graphql';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 import { DiCategory } from 'src/di_category/entities/di_category.entity';
@@ -329,4 +329,11 @@ export class ComposantStructureLogs {
   quantity: number;
   @Field({ nullable: true, defaultValue: false })
   isUpdated: boolean;
+  /** Prix de vente catalogue figé quand le magasin valide la pièce (phase
+   *  diagnostic). Écrit par le serveur uniquement — absent des inputs. */
+  @Field(() => Float, { nullable: true })
+  prixVenteDiag?: number;
+  /** Prix de vente catalogue figé à la fin de la réparation. */
+  @Field(() => Float, { nullable: true })
+  prixVenteRep?: number;
 }

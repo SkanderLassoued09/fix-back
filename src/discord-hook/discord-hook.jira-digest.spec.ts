@@ -22,7 +22,7 @@ describe('DiscordHookService.sendJiraTasksDigest', () => {
   });
 
   // Constructor models are unused by this method → harmless stubs.
-  const svc = () => new DiscordHookService({} as any, {} as any, {} as any);
+  const svc = () => new DiscordHookService({} as any, {} as any, {} as any, {} as any);
 
   it('UN embed, un field par responsable, tâches en liens [issueKey](url)', async () => {
     await svc().sendJiraTasksDigest([

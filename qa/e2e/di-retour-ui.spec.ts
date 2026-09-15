@@ -30,6 +30,9 @@ test.beforeAll(async () => {
             _id: priceId, _idnum: priceNum, title: 'QA retour pricing toggle',
             status: 'PRICING_DIAG', ignoreCount: 1, can_be_repaired: true,
             contain_pdr: false, isErrorFromFixtronix: false, diagnosticPayant: true,
+            // Estimation de création > 0 : c'est elle qui verrouillait le champ
+            // prix après Non payant → Payant (champ grisé + prix vide).
+            diagnosticEstimate: 200,
             client_id: 'C1', current_roles: ['Admin_Manager'], array_composants: [],
             isDeleted: false, statusUpdatedAt: now, createdAt: now, updatedAt: now,
         });
@@ -68,12 +71,40 @@ test('1) Pricing modal shows the « Facturer le diagnostic ? » toggle (retour e
     await expect(page.getByText('Facturer le diagnostic', { exact: false })).toBeVisible({ timeout: 10_000 });
 });
 
+test('1b) Non payant → Payant rouvre le prix du diagnostic et « Valider le prix »', async ({ page }) => {
+    await page.goto(TICKET_LIST);
+    const row = page.locator('tr', { hasText: priceNum });
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await row.locator('button:has(.pi-dollar)').first().click();
+    const priceInput = page.locator('#pricing-init-input');
+    const toggle = page.locator('.pricing-facturer__toggle');
+    const submit = page.locator('button.pricing-submit');
+    await expect(priceInput).toBeVisible({ timeout: 15_000 });
+    // Retour : pas de verrou sur l'estimation de création.
+    await expect(priceInput).toBeEnabled();
+
+    await toggle.click(); // → Non payant
+    await expect(priceInput).toBeDisabled();
+
+    await toggle.click(); // → Payant
+    await expect(priceInput).toBeEnabled();
+
+    await priceInput.click();
+    await priceInput.press('ControlOrMeta+a');
+    await priceInput.pressSequentially('180');
+    const repair = page.locator('#pricing-repair-estimate');
+    await repair.click();
+    await repair.pressSequentially('300');
+    await expect(priceInput).toHaveValue(/180/);
+    await expect(submit).toBeEnabled();
+});
+
 test('2) IRREPARABLE 2C row exposes a document-upload trigger', async ({ page }) => {
     await page.goto(TICKET_LIST);
     const row = page.locator('tr', { hasText: irrNum });
     await expect(row).toBeVisible({ timeout: 30_000 });
     // Au moins un déclencheur d'upload doit apparaître (paperclip « Fichiers »
-    // OU le bouton « Négociation » pi-dollar) — masqués avant le fix.
-    const uploadTriggers = row.locator('button:has(.pi-paperclip), button:has(.pi-dollar)');
+    // OU le bouton Approval pi-file) — masqués avant le fix.
+    const uploadTriggers = row.locator('button:has(.pi-paperclip), button:has(.pi-file)');
     await expect(uploadTriggers.first()).toBeVisible({ timeout: 10_000 });
 });

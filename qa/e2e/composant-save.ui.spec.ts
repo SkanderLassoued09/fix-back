@@ -105,8 +105,8 @@ test('Enregistrer persists the edit, stops the spinner, one toast, button stays 
     // The block-UI spinner must be gone (this is the bug: it used to hang).
     await expect(page.locator('.p-blockui')).toBeHidden({ timeout: 8000 });
 
-    // The button is never frozen.
-    await expect(saveBtn).toBeEnabled();
+    // Saved → nothing left to save: « Enregistrer » greyed until the next edit.
+    await expect(saveBtn).toBeDisabled();
 
     // The line is NOT validated/greyed by « Enregistrer » (that's « Valider »).
     await expect(

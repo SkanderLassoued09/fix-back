@@ -8,6 +8,7 @@ import {
   Profile,
   ProfileSchema,
 } from 'src/profile/entities/profile.entity';
+import { Stat, StatSchema } from 'src/stat/entities/stat.entity';
 
 @Module({
   controllers: [DiscordHookController],
@@ -17,6 +18,8 @@ import {
       { name: Client.name, schema: ClientSchema },
       { name: Company.name, schema: CompanySchema },
       { name: Profile.name, schema: ProfileSchema },
+      // Techniciens du cycle (id_tech_diag / id_tech_rep) affichés sur les embeds DI.
+      { name: Stat.name, schema: StatSchema },
     ]),
   ],
   exports: [DiscordHookService],

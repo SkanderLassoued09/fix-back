@@ -27,6 +27,13 @@ export class ComposantDocument extends Document {
   pdf: string;
   @Prop()
   status_composant: string;
+  // Champs du fichier de stock « Gestion-de-stocks-Fixplus » (migration 016).
+  @Prop()
+  code_article: string;
+  @Prop()
+  emplacement: string;
+  @Prop()
+  stock_min: number;
   @Prop({ default: false })
   isDeleted: boolean;
 }
@@ -57,6 +64,12 @@ export class Composant {
   pdf: string;
   @Field({ nullable: true })
   status_composant: string;
+  @Field({ nullable: true })
+  code_article: string;
+  @Field({ nullable: true })
+  emplacement: string;
+  @Field({ nullable: true })
+  stock_min: number;
   @Field({ nullable: true })
   isDeleted: boolean;
 }

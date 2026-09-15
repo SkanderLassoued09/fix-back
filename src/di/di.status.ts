@@ -184,7 +184,9 @@ export const STATUS_DI = {
   WaitingFacture: {
     status: 'WAITING_FACTURE',
     description: 'Clôture — attente de la facture',
-    role: ['Tech', 'Manager', 'Admin_Tech', 'Admin_Manager'],
+    // Même règle que WAITING_BL : le Tech ne voit JAMAIS la clôture documentaire
+    // (liste, recherche, compteurs — cf. `getDiStatusCounts`).
+    role: ['Manager', 'Admin_Tech', 'Admin_Manager'],
     future_status: ['Finished'],
   },
   Finished: {

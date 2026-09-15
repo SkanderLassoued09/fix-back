@@ -1,4 +1,4 @@
-import { InputType, Field } from '@nestjs/graphql';
+import { InputType, Field, Float } from '@nestjs/graphql';
 
 @InputType()
 export class SearchDiInput {
@@ -179,6 +179,45 @@ export class UpdateDi {
   remarque_tech_repair?: string;
   @Field(() => [ComposantStructureInput], { nullable: true })
   array_composants?: ComposantStructureInput[];
+}
+
+/**
+ * Édition des infos SAISIES À LA CRÉATION — modal « Modifier la DI » du tableau
+ * des interventions (mutation `updateDiInfo`, gardée par rôle ; le service la
+ * limite aux statuts CREATED / PENDING1).
+ *
+ * Séparé de `UpdateDi` pour la même raison qu'`AdminTechUpdateDiInput` : cette
+ * mutation-là n'a pas de garde de rôle, or client/société et photo ne doivent
+ * pas devenir modifiables par un technicien.
+ *
+ * - `client_id` / `company_id` : une DI appartient à un client OU à une société,
+ *   l'autre partie est envoyée à `null` explicite.
+ * - `image` : data-URL base64, fournie UNIQUEMENT pour remplacer la photo.
+ */
+@InputType()
+export class UpdateDiInfoInput {
+  @Field()
+  _id: string;
+  @Field({ nullable: true })
+  title?: string;
+  @Field({ nullable: true })
+  description?: string;
+  @Field({ nullable: true })
+  nSerie?: string;
+  @Field(() => String, { nullable: true })
+  location_id?: string | null;
+  @Field(() => String, { nullable: true })
+  client_id?: string | null;
+  @Field(() => String, { nullable: true })
+  company_id?: string | null;
+  @Field({ nullable: true })
+  remarque_manager?: string;
+  @Field({ nullable: true })
+  diagnosticPayant?: boolean;
+  @Field(() => Float, { nullable: true })
+  diagnosticEstimate?: number | null;
+  @Field({ nullable: true })
+  image?: string;
 }
 
 /**

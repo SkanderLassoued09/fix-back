@@ -198,16 +198,18 @@ test('A — Fixtronix DÉCOCHÉ + sans PDR → « Fin diagnostique retour » →
     // retour » ⇒ mutation changeStatusPending2 (le chemin qui cassait).
     await setToggle(page, 'isErrorFromFixtronix', false);
     await setToggle(page, 'isPdr', false);
-    // Plus AUCUN grisage sur le flux retour : les deux boutons sont cliquables,
-    // le backend garantit le statut (garde Fixtronix + backstop non-réparable).
-    // On vérifie donc l'inverse d'avant — les deux sont bien actifs.
+    // Plus AUCUN grisage sur le flux retour : le backend garantit le statut
+    // (garde Fixtronix + backstop non-réparable). « Envoyer vers finir » est
+    // MASQUÉ depuis le 2026-09-15 (`showSendToFinishRetour`) : seul « Fin
+    // diagnostique retour » reste, et il doit être actif.
     await goStep(page, 'Résumé');
-    for (const label of ['Envoyer vers finir', 'Fin diagnostique retour']) {
-        await expect(
-            page.locator('.actions button', { hasText: label }),
-            `« ${label} » doit être cliquable`,
-        ).toBeEnabled({ timeout: 8000 });
-    }
+    await expect(
+        page.locator('.actions button', { hasText: 'Fin diagnostique retour' }),
+        '« Fin diagnostique retour » doit être cliquable',
+    ).toBeEnabled({ timeout: 8000 });
+    await expect(
+        page.locator('.actions button', { hasText: 'Envoyer vers finir' }),
+    ).toHaveCount(0);
     await clickFinishButton(page, 'Fin diagnostique retour');
 
     // Garde Fixtronix (flag DI persistant) ⇒ PENDING3, JAMAIS PENDING2.

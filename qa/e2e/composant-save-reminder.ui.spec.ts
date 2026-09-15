@@ -13,10 +13,11 @@ import { withDb } from '../utils/mongo';
  * bleu. Même condition : « Valider ce composant » reste grisé tant que
  * « Enregistrer » n'a pas été fait.
  *
- *  - ouverture (chargement du formulaire) → AUCUN rappel ;
+ *  - ouverture (chargement du formulaire) → AUCUN rappel, Enregistrer grisé ;
  *  - champ modifié + formulaire valide     → rappel ambre + reflet, Valider grisé ;
  *  - champ requis vidé                      → rappel « complétez », SANS reflet ;
- *  - après « Enregistrer »                  → rappel éteint, Valider réactivé ;
+ *  - après « Enregistrer »                  → rappel éteint, Enregistrer grisé,
+ *                                             Valider réactivé ;
  *  - changement de composant dans le rail   → rappel éteint.
  *
  * Même gabarit de seed que `composant-save.ui.spec.ts` : une DI
@@ -114,6 +115,9 @@ test('le rappel « Enregistrer » suit l’état modifié du composant actif', a
     // 1) Le CHARGEMENT du formulaire ne compte pas comme une modification.
     await expect(hint).toHaveCount(0);
     await expect(saveBtn).not.toHaveClass(/cmp-btn--attention/);
+    // Rien à enregistrer : « Enregistrer » grisé, « Valider » seul actif.
+    await expect(saveBtn).toBeDisabled();
+    await expect(validateBtn).toBeEnabled();
 
     // 2) Champ modifié + formulaire valide → rappel ambre + reflet.
     const pkgInput = page.locator('input[formcontrolname="package"]');
@@ -148,7 +152,8 @@ test('le rappel « Enregistrer » suit l’état modifié du composant actif', a
     await expect(hint).toHaveCount(0);
     await expect(saveBtn).not.toHaveClass(/cmp-btn--attention/);
     await expect(saveBtn).toHaveCSS('background-color', BLUE);
-    // Enregistré → « Valider » redevient cliquable.
+    // Enregistré → « Enregistrer » grisé, « Valider » redevient cliquable.
+    await expect(saveBtn).toBeDisabled();
     await expect(validateBtn).toBeEnabled();
 
     // 5) Changer de composant dans le rail repart d'un formulaire propre :

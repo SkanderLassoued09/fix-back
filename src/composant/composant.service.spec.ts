@@ -18,6 +18,7 @@ import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
  *    field, which used to crash and hang the spinner).
  */
 type ComposantModelMock = {
+  find: jest.Mock;
   findOne: jest.Mock;
   findOneAndUpdate: jest.Mock;
   findByIdAndUpdate: jest.Mock;
@@ -28,6 +29,7 @@ type CategoryModelMock = { exists: jest.Mock };
 const leanOf = (doc: unknown) => ({ lean: () => Promise.resolve(doc) });
 
 const makeModelMock = (): ComposantModelMock => ({
+  find: jest.fn(),
   findOne: jest.fn(),
   findOneAndUpdate: jest.fn(),
   findByIdAndUpdate: jest.fn(),
@@ -257,6 +259,44 @@ describe('ComposantService.addComposantInfo', () => {
         expect((e as GraphQLError).extensions?.code).toBe('BAD_USER_INPUT');
       }
       expect(model.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('addComposantInfo — champs du fichier de stock', () => {
+    it('écrit code_article / emplacement / stock_min fournis (0 compris)', async () => {
+      model.findOne.mockReturnValue(leanOf(fullInput()));
+      model.findOneAndUpdate.mockResolvedValue(fullInput() as any);
+      await service.addComposantInfo(
+        fullInput({
+          code_article: 'P0001',
+          emplacement: 'AR1-1A',
+          stock_min: 0,
+        }) as any,
+      );
+      const set = model.findOneAndUpdate.mock.calls[0][1].$set;
+      expect(set.code_article).toBe('P0001');
+      expect(set.emplacement).toBe('AR1-1A');
+      expect(set.stock_min).toBe(0);
+    });
+  });
+
+  describe('generateComposantId', () => {
+    it('prend le MAX NUMÉRIQUE des _id, pas le dernier créé ni le max lexicographique', async () => {
+      // Ordre de retour arbitraire (createdAt identiques après la migration
+      // 016) ; « Cmp9 » est le max LEXICOGRAPHIQUE, 186 le max réel.
+      model.find.mockReturnValue(
+        leanOf([{ _id: 'Cmp9' }, { _id: 'Cmp186' }, { _id: 'Cmp40' }]),
+      );
+      await expect(service.generateComposantId()).resolves.toBe(187);
+      expect(model.find).toHaveBeenCalledWith(
+        { _id: { $regex: '^Cmp\\d+$' } },
+        { _id: 1 },
+      );
+    });
+
+    it('repart de 0 quand aucun _id au format', async () => {
+      model.find.mockReturnValue(leanOf([]));
+      await expect(service.generateComposantId()).resolves.toBe(0);
     });
   });
 });

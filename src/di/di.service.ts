@@ -12,6 +12,7 @@ import {
   FilterConfigDi,
   PaginationConfigDi,
   UpdateDi,
+  UpdateDiInfoInput,
 } from './dto/create-di.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Di, DiDocument, UpdateNego } from './entities/di.entity';
@@ -1091,7 +1092,18 @@ export class DiService {
       }
     }
 
-    const previous = await this.diModel.findOne({ _id }).select('location_id');
+    const previous = await this.diModel
+      .findOne({ _id })
+      .select('location_id array_composants');
+    // Prix figés par phase (`prixVenteDiag` / `prixVenteRep`) : écrits par le
+    // serveur seul, absents des inputs. Une liste de pièces renvoyée par le
+    // client (fin de réparation, édition admin) les effacerait sans ce report.
+    if (Array.isArray(updateSet.array_composants)) {
+      updateSet.array_composants = this.carryPartPrices(
+        (previous as any)?.array_composants,
+        updateSet.array_composants as Array<Record<string, any>>,
+      );
+    }
     const update = await this.diModel.findOneAndUpdate(
       { _id },
       { $set: updateSet },
@@ -1146,13 +1158,31 @@ export class DiService {
       });
     }
 
+    return this.applyTracedDiEdit(before, input, actor);
+  }
+
+  /**
+   * Écriture TRACÉE d'une édition manuelle, partagée par `adminTechUpdateDi` et
+   * `updateDiInfo` : `updateDi` (normalisation `undefined`, resynchro
+   * d'emplacement, broadcast `updateTicket`), puis diff avant/après et
+   * `SystemEvent DI_EDITED`. `before` = la DI relue AVANT écriture.
+   */
+  private async applyTracedDiEdit(
+    before: any,
+    input: { _id: string } & Record<string, any>,
+    actor?: { id?: string | null; role?: string | null },
+  ) {
+    const { _id } = input;
     const updated = await this.updateDi(input as any);
 
     // Diff APRÈS écriture, sur les seules clés soumises. `JSON.stringify` suffit
     // pour comparer les scalaires ET `array_composants` (petit tableau plat).
+    // `driveDocs` / chemins pointés (`driveDocs.Image`) = plomberie de stockage :
+    // un changement de photo se lit déjà sur `image`.
     const changes: Record<string, { from: any; to: any }> = {};
     for (const [key, value] of Object.entries(input)) {
       if (key === '_id' || value === undefined) continue;
+      if (key === 'driveDocs' || key.includes('.')) continue;
       const from = (before as any)[key] ?? null;
       const to = (updated as any)?.[key] ?? null;
       if (JSON.stringify(from) !== JSON.stringify(to)) {
@@ -1185,6 +1215,132 @@ export class DiService {
     }
 
     return updated;
+  }
+
+  /** Statuts où les infos de création restent modifiables (crayon du tableau
+   *  des interventions) : la DI n'est encore prise en charge par personne. */
+  static readonly INFO_EDITABLE_STATUSES: readonly string[] = [
+    STATUS_DI.Created.status,
+    STATUS_DI.Pending1.status,
+  ];
+
+  /**
+   * Édition des infos SAISIES À LA CRÉATION (mutation `updateDiInfo`, modal
+   * « Modifier la DI ») : titre, description, n° de série, emplacement, client
+   * OU société, remarque administration, diagnostic payant + estimation, photo.
+   *
+   * Gardes serveur (le front les reflète mais ne fait pas foi) :
+   *  - statut CREATED / PENDING1 seulement ;
+   *  - exactement UNE partie (client ou société) résolue, l'autre mise à `null`
+   *    — `isResolvableId` absorbe les « null » littéraux écrits par `createDi` ;
+   *  - « Diagnostic payant » verrouillé une fois la tarification faite (même
+   *    règle que `setDiagnosticPayant`) ; non payant ⇒ estimation effacée.
+   *
+   * Photo : remplacée seulement si une data-URL est fournie, déposée dans le
+   * dossier Drive de la partie APRÈS édition. Contrairement à `createDi`, un
+   * échec d'upload fait échouer l'édition : le remplacement était demandé.
+   */
+  async updateDiInfo(
+    input: UpdateDiInfoInput,
+    actor?: { id?: string | null; role?: string | null },
+  ) {
+    const { _id, image, ...fields } = input;
+    const before: any = await this.diModel.findOne({ _id }).lean();
+    if (!before) {
+      throw new GraphQLError(`DI '${_id}' introuvable.`, {
+        extensions: { code: 'BAD_REQUEST' },
+      });
+    }
+    const refuse = (message: string) =>
+      new GraphQLError(message, {
+        extensions: { code: 'BAD_REQUEST', diId: _id },
+      });
+
+    if (!DiService.INFO_EDITABLE_STATUSES.includes(before.status)) {
+      throw refuse(
+        'DI non modifiable à ce stade : seules les DI créées ou en attente d’affectation peuvent être modifiées.',
+      );
+    }
+
+    const set: { _id: string } & Record<string, any> = { _id };
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === undefined) continue;
+      set[key] = typeof value === 'string' ? value.trim() : value;
+    }
+
+    if (set.title === '' || set.description === '') {
+      throw refuse('Le titre et la description sont obligatoires.');
+    }
+
+    if ('location_id' in set && !this.isResolvableId(set.location_id)) {
+      set.location_id = null;
+    }
+
+    // Client XOR société — une partie non fournie reprend sa valeur en base.
+    if ('client_id' in set || 'company_id' in set) {
+      const resolved = (key: 'client_id' | 'company_id') => {
+        const raw = key in set ? set[key] : before[key];
+        return this.isResolvableId(raw) ? raw : null;
+      };
+      const clientId = resolved('client_id');
+      const companyId = resolved('company_id');
+      if (!clientId && !companyId) {
+        throw refuse('Choisissez un client ou une société.');
+      }
+      if (clientId && companyId) {
+        throw refuse(
+          'Une DI appartient à un client OU à une société, pas aux deux.',
+        );
+      }
+      set.client_id = clientId;
+      set.company_id = companyId;
+    }
+
+    const payantBefore = before.diagnosticPayant !== false;
+    if (
+      typeof set.diagnosticPayant === 'boolean' &&
+      set.diagnosticPayant !== payantBefore &&
+      Number(before.price) > 0
+    ) {
+      throw refuse(
+        'Tarification déjà effectuée : le flag « Diagnostic payant » est verrouillé.',
+      );
+    }
+    const payantAfter =
+      typeof set.diagnosticPayant === 'boolean'
+        ? set.diagnosticPayant
+        : payantBefore;
+    if (!payantAfter) {
+      set.diagnosticEstimate = null;
+    } else if (set.diagnosticEstimate != null) {
+      const estimate = Number(set.diagnosticEstimate);
+      if (!Number.isFinite(estimate) || estimate < 0) {
+        throw refuse('Estimation du prix du diagnostic invalide.');
+      }
+      set.diagnosticEstimate = estimate;
+    }
+
+    if (typeof image === 'string' && image.includes(',')) {
+      try {
+        const { webViewLink, driveFileId, fileName } =
+          await this.uploadDiDocToDrive({ ...before, ...set }, image, 'Image');
+        const ref = { driveFileId, webViewLink, name: fileName };
+        set.image = webViewLink;
+        // Chemin pointé comme les autres documents ; objet complet seulement
+        // quand `driveDocs` n'en est pas un (DI héritées) : Mongo refuse de
+        // créer `driveDocs.Image` sous un `null`.
+        if (before.driveDocs && typeof before.driveDocs === 'object') {
+          set['driveDocs.Image'] = ref;
+        } else {
+          set.driveDocs = { Image: ref };
+        }
+      } catch (err) {
+        await this.captureUploadFailure('UPDATE_DI_IMAGE', err, _id);
+        throw err;
+      }
+    }
+
+    return this.applyTracedDiEdit(before, set, actor);
   }
 
   private async syncEmplacementStats(emplacementId?: string): Promise<void> {
@@ -1703,11 +1859,23 @@ export class DiService {
     return result;
   }
 
-  async calculateTicketComposantPrice(ticketId: string) {
-    let totlalComposant;
+  async calculateTicketComposantPrice(ticketId: string, idIgnore?: number) {
     const ticket = await this.diModel.findById(ticketId);
     if (!ticket) {
       throw new Error('Ticket not found');
+    }
+
+    // Cycle EXPLICITE (modal « Dossier », cycle affiché) : pièces de la ligne
+    // logsdis de CE cycle. Le miroir DI n'est lu qu'en l'absence de ligne ET
+    // pour le cycle courant — il n'est le miroir que de celui-là.
+    if (idIgnore !== undefined && idIgnore !== null) {
+      const row: any = await this.logsDiService.getLogsById(idIgnore, ticketId);
+      const lines = row
+        ? row.array_composants
+        : idIgnore === (ticket.ignoreCount ?? 0)
+          ? ticket.array_composants
+          : [];
+      return this.priceComposantLines(lines);
     }
 
     if (ticket.ignoreCount && ticket.ignoreCount > 0) {
@@ -1716,18 +1884,185 @@ export class DiService {
         ticket.ignoreCount,
       );
     } else {
-      const totalPrice = await Promise.all(
-        ticket.array_composants.map(async (item) => {
-          const composant = await this.composantModel.findOne({
-            name: item.nameComposant,
-          });
-
-          return composant ? composant.prix_vente * item.quantity : 0;
-        }),
-      );
-      // TODO substruct the quantity needed from compsant in stock.
-      return totalPrice.reduce((acc, curr) => acc + curr, 0);
+      return this.priceComposantLines(ticket.array_composants);
     }
+  }
+
+  /** Σ prix_vente × quantité, jointure PAR NOM. Les composants soft-supprimés
+   *  restent tarifés (la pièce a bien été utilisée) ; un nom introuvable
+   *  compte 0. */
+  private async priceComposantLines(
+    lines: Array<{ nameComposant?: string; quantity?: number }> | null,
+  ): Promise<number> {
+    const totalPrice = await Promise.all(
+      (lines ?? []).map(async (item) => {
+        const composant = await this.composantModel.findOne({
+          name: item.nameComposant,
+        });
+
+        return composant
+          ? composant.prix_vente * (Number(item.quantity) || 0)
+          : 0;
+      }),
+    );
+    // TODO substruct the quantity needed from compsant in stock.
+    return totalPrice.reduce((acc, curr) => acc + curr, 0);
+  }
+
+  /**
+   * Composants du cycle valorisés PAR PHASE (onglet Finances). Même sélection
+   * de cycle que `calculateTicketComposantPrice` ; chaque ligne prend son prix
+   * figé (au diagnostic / en fin de réparation) et retombe sur le prix
+   * catalogue actuel quand il n'a pas été figé (DI antérieures).
+   */
+  async calculateTicketComposantPriceByPhase(
+    ticketId: string,
+    idIgnore?: number,
+  ): Promise<{ diag: number; rep: number; diagRecorded: boolean }> {
+    const ticket = await this.diModel.findById(ticketId);
+    if (!ticket) {
+      throw new Error('Ticket not found');
+    }
+
+    let lines: any[] | null;
+    if (idIgnore !== undefined && idIgnore !== null) {
+      const row: any = await this.logsDiService.getLogsById(idIgnore, ticketId);
+      lines = row
+        ? row.array_composants
+        : idIgnore === (ticket.ignoreCount ?? 0)
+          ? ticket.array_composants
+          : [];
+    } else if (ticket.ignoreCount && ticket.ignoreCount > 0) {
+      const row: any = await this.logsDiService.getLogsById(
+        ticket.ignoreCount,
+        ticketId,
+      );
+      lines = row?.array_composants ?? [];
+    } else {
+      lines = ticket.array_composants;
+    }
+    return this.priceComposantLinesByPhase(lines);
+  }
+
+  private async priceComposantLinesByPhase(
+    lines: Array<Record<string, any>> | null,
+  ): Promise<{ diag: number; rep: number; diagRecorded: boolean }> {
+    const list = (lines ?? []).filter(Boolean);
+    const current = await this.catalogPrixVente(
+      list.map((l) => l.nameComposant),
+    );
+    const saved = (v: unknown): number | null =>
+      typeof v === 'number' && Number.isFinite(v) ? v : null;
+
+    let diag = 0;
+    let rep = 0;
+    for (const line of list) {
+      const quantity = Number(line.quantity) || 0;
+      const now = current.get(line.nameComposant) ?? 0;
+      diag += (saved(line.prixVenteDiag) ?? now) * quantity;
+      rep += (saved(line.prixVenteRep) ?? now) * quantity;
+    }
+    const diagRecorded = list.every((l) => saved(l.prixVenteDiag) !== null);
+    return { diag, rep, diagRecorded };
+  }
+
+  /** Prix de vente catalogue par nom — même jointure que `priceComposantLines`
+   *  (soft-supprimés compris). Nom introuvable → absent de la map. */
+  private async catalogPrixVente(
+    names: Array<string | null | undefined>,
+  ): Promise<Map<string, number>> {
+    const prices = new Map<string, number>();
+    for (const name of new Set(names.filter((n): n is string => !!n))) {
+      const composant = await this.composantModel.findOne({ name });
+      const prix = Number(composant?.prix_vente);
+      if (composant && Number.isFinite(prix)) prices.set(name, prix);
+    }
+    return prices;
+  }
+
+  /**
+   * Fige le prix de vente catalogue ACTUEL sur les pièces du cycle courant :
+   * ligne logsdis ET miroir DI. `names` absent = toutes les pièces du cycle.
+   * `onlyMissing` ne remplit que les lignes sans prix (le prix figé au
+   * diagnostic n'est jamais écrasé). Jamais bloquant : un échec est tracé et
+   * l'action métier (validation, tarification, fin de réparation) continue.
+   */
+  private async snapshotPartPrices(
+    diId: string,
+    key: 'prixVenteDiag' | 'prixVenteRep',
+    opts: { names?: string[]; onlyMissing: boolean },
+  ): Promise<void> {
+    try {
+      const di: any = await this.diModel.findOne({ _id: diId }).lean();
+      if (!di) return;
+      const cycle = di.ignoreCount ?? 0;
+      const row: any = await this.logsDiService.getLogsById(cycle, diId);
+      const names =
+        opts.names ??
+        [...(row?.array_composants ?? []), ...(di.array_composants ?? [])].map(
+          (l: any) => l?.nameComposant,
+        );
+      const prices = await this.catalogPrixVente(names);
+
+      for (const [name, price] of prices) {
+        if (row) {
+          await this.logsDiService.setPartPriceSnapshot(
+            diId,
+            cycle,
+            key,
+            name,
+            price,
+            opts.onlyMissing,
+          );
+        }
+        const filter: Record<string, unknown> = { 'e.nameComposant': name };
+        if (opts.onlyMissing) filter[`e.${key}`] = null;
+        await this.diModel.updateOne(
+          { _id: diId },
+          { $set: { [`array_composants.$[e].${key}`]: price } },
+          { arrayFilters: [filter] },
+        );
+      }
+    } catch (error) {
+      try {
+        await this.operationalErrorService.capture({
+          module: 'di',
+          submodule: 'diService',
+          method: 'SNAPSHOT_PART_PRICES',
+          severity: 'MEDIUM',
+          error: 'Prix des pièces non figé',
+          message: (error as Error)?.message ?? String(error),
+          payload: { diId, key, names: opts.names ?? null },
+        });
+      } catch {
+        // Traçage indisponible : ne jamais bloquer l'action métier.
+      }
+    }
+  }
+
+  /** Reporte les prix figés des anciennes lignes (par NOM) sur les lignes
+   *  renvoyées par un client, qui n'en portent jamais. */
+  private carryPartPrices(
+    previous: Array<Record<string, any>> | null | undefined,
+    next: Array<Record<string, any>>,
+  ): Array<Record<string, any>> {
+    const before = new Map<string, Record<string, any>>();
+    for (const line of previous ?? []) {
+      if (line?.nameComposant && !before.has(line.nameComposant)) {
+        before.set(line.nameComposant, line);
+      }
+    }
+    return next.map((line) => {
+      const old = line?.nameComposant ? before.get(line.nameComposant) : undefined;
+      if (!old) return line;
+      const out: Record<string, any> = { ...line };
+      for (const key of ['prixVenteDiag', 'prixVenteRep']) {
+        if (typeof out[key] !== 'number' && typeof old[key] === 'number') {
+          out[key] = old[key];
+        }
+      }
+      return out;
+    });
   }
 
   /** "HH:MM:SS" → heures décimales (0 si absent/invalide). */
@@ -2504,6 +2839,10 @@ export class DiService {
         { new: true },
       );
     }
+
+    // Prix des pièces figé en fin de réparation (onglet Finances, par phase).
+    // Non bloquant : un catalogue indisponible est tracé, la fin reste valide.
+    await this.snapshotPartPrices(_idDI, 'prixVenteRep', { onlyMissing: false });
 
     return updateReamrqueRep;
   }
@@ -3980,8 +4319,9 @@ export class DiService {
   ): Promise<any> {
     const di = await this.diModel.findOne({ _id });
 
+    let updated: any;
     if (di && di.ignoreCount && di.ignoreCount > 0) {
-      return await this.logsDiService.setSelectedComponentAsDoneLogs(
+      updated = await this.logsDiService.setSelectedComponentAsDoneLogs(
         di._id,
         di.ignoreCount,
         nameComponent,
@@ -3998,8 +4338,17 @@ export class DiService {
         throw new NotFoundException(`Document or component not found.`);
       }
 
-      return updatedDocument;
+      updated = updatedDocument;
     }
+
+    // Le magasin vient de fixer le prix de la pièce : on le fige comme prix
+    // de la phase diagnostic (jamais écrasé ensuite). Non bloquant.
+    await this.snapshotPartPrices(_id, 'prixVenteDiag', {
+      names: [nameComponent],
+      onlyMissing: true,
+    });
+
+    return updated;
   }
 
   async affectinitialPrice(_id: string, price: number) {
@@ -4046,6 +4395,10 @@ export class DiService {
         { new: true },
       );
     }
+
+    // Pièces jamais validées une à une par le magasin : leur prix de phase
+    // diagnostic est figé au plus tard ici (un prix déjà figé est conservé).
+    await this.snapshotPartPrices(_id, 'prixVenteDiag', { onlyMissing: true });
 
     // 🔔 Discord notification (price assigned)
     try {
@@ -5244,8 +5597,8 @@ export class DiService {
         payload: { doc: 'BL' },
         notify: {
           // Le BL arrivé fait passer la DI en WAITING_FACTURE : les
-          // responsables sont donc ceux de CE statut — dont le TECHNICIEN, qui
-          // était absent de la liste écrite à la main. On y ajoute la
+          // responsables sont donc ceux de CE statut (le Tech en est exclu, il
+          // ne voit jamais la clôture documentaire). On y ajoute la
           // coordination, qui suit les documents sans en être responsable
           // (sur-ensemble DÉLIBÉRÉ, déclaré dans di.notification-audience.spec).
           roles: [

@@ -8,6 +8,7 @@
     "seed": "node scripts/seed-scenarios.mjs",
     "seed:clean": "node scripts/seed-scenarios.mjs --clean",
     "seed:only": "node scripts/seed-scenarios.mjs --no-verify",
+    "seed:showcase": "node scripts/seed-showcase-di.mjs",
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",

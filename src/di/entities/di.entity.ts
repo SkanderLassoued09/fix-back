@@ -604,6 +604,27 @@ export class ComposantStructure {
   quantity: number;
   @Field({ nullable: true, defaultValue: false })
   isUpdated: boolean;
+  /** Prix de vente catalogue figé quand le magasin valide la pièce (phase
+   *  diagnostic). Écrit par le serveur uniquement — absent des inputs. */
+  @Field(() => Float, { nullable: true })
+  prixVenteDiag?: number;
+  /** Prix de vente catalogue figé à la fin de la réparation. */
+  @Field(() => Float, { nullable: true })
+  prixVenteRep?: number;
+}
+
+/** Composants d'un cycle valorisés par phase (onglet Finances du dossier). */
+@ObjectType()
+export class ComposantPhaseCost {
+  /** Σ (prix figé au diagnostic, sinon prix catalogue actuel) × quantité. */
+  @Field(() => Float)
+  diag: number;
+  /** Σ (prix figé en fin de réparation, sinon prix catalogue actuel) × quantité. */
+  @Field(() => Float)
+  rep: number;
+  /** Vrai si CHAQUE ligne porte un prix figé au diagnostic (liste vide → vrai). */
+  @Field()
+  diagRecorded: boolean;
 }
 @ObjectType()
 export class RemarqueDi {

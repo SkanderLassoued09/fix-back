@@ -359,8 +359,11 @@ test('step 4 — Prix Final UI (P3 modal + serialized cascade)', async ({ page }
     const row = page.locator('tr', { hasText: idnum });
     await expect(row).toBeVisible({ timeout: 25_000 });
 
-    // The NEGOTIATION1 row exposes a dollar-icon "Négociation" button.
-    await row.locator('button:has(.pi-dollar)').click();
+    // The Approval row (WAITING_DEVIS/WAITING_BC, or legacy NEGOTIATION1) exposes
+    // the Approval button — one file icon per status.
+    await row
+        .locator('button:has(.pi-file-edit), button:has(.pi-file-check), button:has(.pi-file)')
+        .click();
     await expect(page.locator('.pricing-modal__title')).toContainText(
         /Affectation du prix final/i,
         { timeout: 10_000 },

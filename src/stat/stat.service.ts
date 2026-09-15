@@ -11,7 +11,11 @@ import { Stat } from './entities/stat.entity';
 import { Model } from 'mongoose';
 import { NotificationsGateway } from 'src/notification.gateway';
 import { ProfileService } from 'src/profile/profile.service';
-import { STATUS_DI, TECH_STATUS_DI_VALUES } from 'src/di/di.status';
+import {
+  CLOSING_STATUS_VALUES,
+  STATUS_DI,
+  TECH_STATUS_DI_VALUES,
+} from 'src/di/di.status';
 import { PaginationConfigDi } from 'src/di/dto/create-di.input';
 import { Di } from 'src/di/entities/di.entity';
 import { LogsDiService } from 'src/logs-di/logs-di.service';
@@ -524,6 +528,9 @@ export class StatService {
               $or: [{ id_tech_diag: _idtech }, { id_tech_rep: _idtech }],
             },
             dateFilter, // Apply date filter if provided
+            // Le Tech ne voit JAMAIS la clôture documentaire (WAITING_BL /
+            // WAITING_FACTURE + legacy) : ni en liste, ni dans ses compteurs.
+            { status: { $nin: CLOSING_STATUS_VALUES } },
           ],
         },
       },

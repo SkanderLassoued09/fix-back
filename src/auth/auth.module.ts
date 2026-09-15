@@ -9,6 +9,7 @@ import { Profile, ProfileSchema } from 'src/profile/entities/profile.entity';
 
 import { JwtStrategy } from './jwt.strategy';
 import { LocalStrategy } from './local.strategy';
+import { JWT_SECRET } from './jwt.constants';
 
 @Module({
   imports: [
@@ -16,7 +17,7 @@ import { LocalStrategy } from './local.strategy';
     PassportModule,
     JwtModule.register({
       signOptions: { expiresIn: '365d' },
-      secret: 'hide-me',
+      secret: JWT_SECRET,
     }),
     // AuthService needs direct write access to the Profile collection (set
     // `activeLoginId` / `lastSeenAt` / `isConnected` at login + heartbeat).

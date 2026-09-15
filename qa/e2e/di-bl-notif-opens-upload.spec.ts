@@ -9,7 +9,11 @@ import { withDb } from '../utils/mongo';
  *
  * On le joue en COORDINATRICE, parce que c'est le rôle que le bug cassait — et
  * c'est la destinataire citée en PREMIER par les deux sites d'émission
- * (`di.service.ts:2796` et `:5272`).
+ * (`di.service.ts` : entrée en WAITING_BL et relance cron `remindPendingBl`).
+ *
+ * Règle produit (2026-09-14) : une notification de document n'ouvre QUE la modale
+ * de téléversement ; s'il n'y a plus rien à téléverser, RIEN ne s'ouvre (un simple
+ * avis) — plus de repli sur le dossier.
  *
  * Deux régressions sont verrouillées ici :
  *
@@ -36,9 +40,13 @@ const idnum = `BLN-${tag.toUpperCase()}`;
 const staleDiId = `DI_${tag}_stale`;
 const staleIdnum = `BLS-${tag.toUpperCase()}`;
 /** DI NON éligible : `IRREPARABLE` sans retour → aucune pièce à joindre, la
- *  notification doit retomber sur le dossier (règle stricte `canAffectFiles`). */
+ *  notification n'ouvre rien (règle stricte `canAffectFiles`). */
 const inelDiId = `DI_${tag}_inel`;
 const inelIdnum = `BLI-${tag.toUpperCase()}`;
+/** DI en attente de FACTURE (BL déjà là) : `DI_DOC_BL` « BL ajouté, en attente
+ *  de facture » doit ouvrir la même modale de téléversement. */
+const facDiId = `DI_${tag}_fac`;
+const facIdnum = `BLF-${tag.toUpperCase()}`;
 
 /** Destinataire des notifications = l'utilisateur dont la session est rejouée. */
 const COORD_ID = userIdFor('COORDINATOR');
@@ -105,6 +113,24 @@ test.beforeAll(async () => {
                 createdAt: THIRTY_DAYS_AGO,
                 updatedAt: THIRTY_DAYS_AGO,
             },
+            {
+                _id: facDiId,
+                _idnum: facIdnum,
+                title: 'QA facture attendue',
+                description: 'BL arrivé, facture attendue',
+                status: 'WAITING_FACTURE',
+                can_be_repaired: true,
+                contain_pdr: false,
+                isDeleted: false,
+                array_composants: [],
+                current_roles: ['Coordinator'],
+                bon_de_commande: 'https://drive.google.com/test-bc.pdf',
+                devis: 'https://drive.google.com/test-devis.pdf',
+                bon_de_livraison: 'https://drive.google.com/test-bl.pdf',
+                statusUpdatedAt: THIRTY_DAYS_AGO,
+                createdAt: THIRTY_DAYS_AGO,
+                updatedAt: THIRTY_DAYS_AGO,
+            },
         ]);
         await db.collection('notifications').insertMany([
             {
@@ -134,6 +160,15 @@ test.beforeAll(async () => {
                 message: `Bon de livraison à téléverser (${inelIdnum})`,
                 createdAt: new Date(),
             },
+            {
+                eventId: `evt_${tag}_fac`,
+                userId: COORD_ID,
+                readAt: null,
+                type: 'DI_DOC_BL',
+                diId: facDiId,
+                message: `DI ${facIdnum} — bon de livraison ajouté, en attente de facture`,
+                createdAt: new Date(),
+            },
         ]);
     });
 });
@@ -142,10 +177,15 @@ test.afterAll(async () => {
     await withDb(async (db) => {
         await db
             .collection('dis')
-            .deleteMany({ _id: { $in: [diId, staleDiId, inelDiId] } });
+            .deleteMany({ _id: { $in: [diId, staleDiId, inelDiId, facDiId] } });
         await db.collection('notifications').deleteMany({
             eventId: {
-                $in: [`evt_${tag}`, `evt_${tag}_stale`, `evt_${tag}_inel`],
+                $in: [
+                    `evt_${tag}`,
+                    `evt_${tag}_stale`,
+                    `evt_${tag}_inel`,
+                    `evt_${tag}_fac`,
+                ],
             },
         });
     });
@@ -204,7 +244,7 @@ test('DI déjà complète : la modale s\'ouvre mais il n\'y a rien à enregistre
     ).toBeDisabled();
 });
 
-test('DI non éligible : la notification retombe sur le dossier, pas sur une modale vide', async ({
+test('DI non éligible : RIEN ne s\'ouvre (ni upload, ni dossier), un simple avis', async ({
     page,
 }) => {
     await page.goto(COORD_LIST);
@@ -213,10 +253,27 @@ test('DI non éligible : la notification retombe sur le dossier, pas sur une mod
     await expect(item).toBeVisible();
     await item.click();
 
-    // `IRREPARABLE` sans retour → rien à téléverser : pas de modale d'upload…
-    await expect(page.locator('app-di-info-modal .p-dialog')).toBeVisible({
-        timeout: 10_000,
-    });
-    // …et on ne laisse PAS l'utilisateur devant une modale vide.
+    // `IRREPARABLE` sans retour → rien à téléverser : l'avis s'affiche…
+    await expect(
+        page.getByText('Plus aucun fichier à téléverser pour cette DI.'),
+    ).toBeVisible({ timeout: 10_000 });
+    // …et aucune modale : ni l'upload, ni le dossier en lecture.
     await expect(page.locator('.af-modal')).toHaveCount(0);
+    await expect(page.locator('app-di-info-modal .p-dialog')).toHaveCount(0);
+});
+
+test('« BL ajouté, en attente de facture » ouvre la modale pour téléverser la facture', async ({
+    page,
+}) => {
+    await page.goto(COORD_LIST);
+    await page.locator('.topbar-bell__btn').click();
+    const item = page.locator('.topbar-bell__item', { hasText: facIdnum });
+    await expect(item).toBeVisible();
+    await item.click();
+
+    await expect(page.locator('.af-modal')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.af-modal__subtitle')).toContainText(facIdnum);
+    // Toujours sur place, sans navigation.
+    expect(page.url()).toContain('coordinator-di-list');
+    expect(page.url()).not.toContain('action=');
 });

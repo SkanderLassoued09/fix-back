@@ -1,5 +1,9 @@
 import { GraphQLError } from 'graphql';
-import { STATUS_DI } from '../di.status';
+import {
+  CLOSING_STATUS_VALUES,
+  STATUS_DI,
+  TECH_STATUS_DI_VALUES,
+} from '../di.status';
 import {
   ALLOWED_TRANSITIONS,
   assertDiTransition,
@@ -231,6 +235,13 @@ describe('assertDiTransition · M1 guard', () => {
     );
     expect(STATUS_DI.WaitingBl.status).toBe('WAITING_BL');
     expect(STATUS_DI.WaitingFacture.status).toBe('WAITING_FACTURE');
+  });
+
+  it('the Tech never sees the closing phase (WAITING_BL / WAITING_FACTURE)', () => {
+    // TECH_STATUS_DI_VALUES filtre la liste + la recherche technicien.
+    expect(
+      TECH_STATUS_DI_VALUES.filter((s) => CLOSING_STATUS_VALUES.includes(s)),
+    ).toEqual([]);
   });
 
   // ── Re-entry sources (retour / annuler) bypass the forward whitelist ────

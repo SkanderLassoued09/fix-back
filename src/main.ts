@@ -10,6 +10,7 @@ import * as bodyParser from 'body-parser';
 import { AppModule } from './app.module';
 import { AppCronService } from './cron/cron.service';
 import { buildActionBanner, buildStartupBanner } from './config/env-banner';
+import { runWithRequest } from './common/request-context';
 
 /**
  * Single bootstrap entrypoint, two modes:
@@ -80,6 +81,9 @@ async function bootstrap() {
   const bodyLimit = process.env.BODY_LIMIT || '5gb';
   app.use(bodyParser.json({ limit: bodyLimit }));
   app.use(bodyParser.urlencoded({ limit: bodyLimit, extended: true }));
+  // Contexte de requête (acteur des notifications Discord). APRÈS les
+  // body-parsers — voir src/common/request-context.ts.
+  app.use((req: any, _res: any, next: () => void) => runWithRequest(req, next));
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);

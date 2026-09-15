@@ -103,19 +103,32 @@ export class ComposantService {
     }
   }
 
+  /**
+   * Prochain index libre = MAXIMUM NUMÉRIQUE réel des `_id` `Cmp<N>` + 1.
+   *
+   * L'ancienne version prenait « le dernier créé » (tri `createdAt`) comme plus
+   * grand index — même défaut que celui corrigé dans
+   * `Composant_CategoryService.generateComposant_CategoryId` : après une
+   * insertion en masse (migration 016), plusieurs documents partagent la même
+   * milliseconde, Mongo départage par ordre naturel et l'index calculé est déjà
+   * pris → E11000 à la création. On balaye TOUS les `_id` au format, supprimés
+   * compris (suppression douce : un id reste occupé).
+   */
   async generateComposantId(): Promise<number> {
-    let indexComposant = 0;
-    const lastComposant = await this.ComposantModel.findOne(
-      {},
-      {},
-      { sort: { createdAt: -1 } },
-    );
+    const prefix = 'Cmp';
+    const rows = await this.ComposantModel.find(
+      { _id: { $regex: `^${prefix}\\d+$` } },
+      { _id: 1 },
+    ).lean();
 
-    if (lastComposant) {
-      indexComposant = +lastComposant._id.substring(3);
-      return indexComposant + 1;
+    let maxIndex = -1;
+    for (const row of rows) {
+      const parsed = Number(String(row._id).slice(prefix.length));
+      if (Number.isFinite(parsed) && parsed > maxIndex) {
+        maxIndex = parsed;
+      }
     }
-    return indexComposant;
+    return maxIndex + 1;
   }
 
   async createComposant(
@@ -349,6 +362,9 @@ export class ComposantService {
       assign('quantity_stocked', updateComposant.quantity_stocked);
       assign('status_composant', updateComposant.status_composant);
       assign('category_composant_id', updateComposant.category_composant_id);
+      assign('code_article', updateComposant.code_article);
+      assign('emplacement', updateComposant.emplacement);
+      assign('stock_min', updateComposant.stock_min);
 
       // Une catégorie fournie doit exister — un client obsolète qui envoie
       // encore le LIBELLÉ est rejeté proprement au lieu de polluer la base.

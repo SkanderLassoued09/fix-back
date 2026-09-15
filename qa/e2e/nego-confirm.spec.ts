@@ -112,7 +112,8 @@ async function openNego(page: Page, idnum: string) {
     // wait is more reliable than reload-looping (which would reset the load).
     const row = page.locator('tr', { hasText: idnum });
     await expect(row).toBeVisible({ timeout: 20000 });
-    await row.locator('button:has(.pi-dollar)').click();
+    // Legacy NEGOTIATION1 row → Approval button carries the plain `pi-file` icon.
+    await row.locator('button:has(.pi-file)').click();
     await expect(page.locator('.pricing-modal')).toBeVisible({ timeout: 10000 });
 }
 

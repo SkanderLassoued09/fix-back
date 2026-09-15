@@ -5,6 +5,8 @@ import axios from 'axios';
 import { Client } from 'src/clients/entities/client.entity';
 import { Company } from 'src/company/entities/company.entity';
 import { Profile } from 'src/profile/entities/profile.entity';
+import { Stat } from 'src/stat/entities/stat.entity';
+import { currentActor } from 'src/common/request-context';
 
 /**
  * Channels — each `sendXxx` posts through `postEmbed(channel, payload)`.
@@ -12,6 +14,13 @@ import { Profile } from 'src/profile/entities/profile.entity';
  * webhook URL per channel; a missing one is logged ONCE and the post is
  * silently skipped (never throws) so a partial config can't cascade a
  * failure through a DI-create call.
+ *
+ * Routage :
+ *   - GENERAL_ATELIER : TOUT le flux (DI, documents, catalogue, PV, réunions) ;
+ *   - ERROR           : erreurs opérationnelles ;
+ *   - APP_ALERT       : alertes (stagnation, sauvegarde BDD, digests DiArchive/Jira) ;
+ *   - DEMANDE_PDF     : salon « demande PDR » — rappel stock magasin.
+ * SERVICE_TECHNIQUE n'a plus d'émetteur ; la clé reste pour TEST_DISCORD_CHANNELS.
  */
 type ChannelKey =
   | 'GENERAL_ATELIER'
@@ -20,13 +29,20 @@ type ChannelKey =
   | 'ERROR'
   | 'APP_ALERT';
 
-/**
- * Salon du rappel matinal du magasin (stock bas + fiches à compléter).
- * Cible FONCTIONNELLE = `DEMANDE_PDF` (demande PDR) ; on reste sur `APP_ALERT`
- * en attendant l'arbitrage. Bascule = cette seule ligne (les deux webhooks sont
- * déjà renseignés dans les 3 `.env`).
- */
-const STOCK_REMINDER_CHANNEL: ChannelKey = 'APP_ALERT';
+/** Salon du rappel matinal du magasin (stock bas + fiches à compléter) : le
+ *  salon « demande PDR » (clé historique `DEMANDE_PDF`). */
+const STOCK_REMINDER_CHANNEL: ChannelKey = 'DEMANDE_PDF';
+
+/** Libellés FR des rôles pour « 🙋 Action par » — la valeur brute (dont la
+ *  typo persistée `COORDIANTOR`) ne doit jamais fuiter vers Discord. */
+const ROLE_LABELS: Record<string, string> = {
+  COORDIANTOR: 'Coordinatrice',
+  TECH: 'Technicien',
+  MAGASIN: 'Magasin',
+  MANAGER: 'Manager',
+  ADMIN_MANAGER: 'Admin Manager',
+  ADMIN_TECH: 'Admin Tech',
+};
 
 // Centralized human-readable status labels with color emoji prefix.
 // New raw enum values added to STATUS_DI MUST be added here so embeds
@@ -93,24 +109,33 @@ interface EmbedContext {
   customerLabel: string; // company if present, otherwise client
   customerFieldName: string; // '🏢 Company' or '👤 Client'
   statusLabel: string;
+  actorLabel: string; // « 🙋 Action par »
+  techLabel: string; // « 👨‍🔧 Technicien »
+}
+
+/** Surcharges de `buildContext`, quand l'appelant en sait plus que le contexte
+ *  de requête ou que la ligne Stat du cycle. */
+interface EmbedContextOptions {
+  /** Profil ou id — prioritaire sur l'acteur de la requête. */
+  actor?: any;
+  /** Profils ou ids — prioritaires, champ par champ, sur la ligne Stat. */
+  tech?: { diag?: any; rep?: any };
+  /** Cycle de la ligne Stat à lire (défaut : `di.ignoreCount`). */
+  cycle?: number;
 }
 
 /**
- * 🔕 INTERRUPTEUR TEMPORAIRE DES NOTIFICATIONS DISCORD.
+ * 🔕 INTERRUPTEUR DES NOTIFICATIONS DISCORD DU FLUX.
  *
- * `true` → seules RETOUR (1/2/3), STAGNATION DI et le RAPPEL STOCK MAGASIN
- * sont émis ; tous les autres types (pending, assigned, pricing, finished,
- * diagnostic, réparation, PV, digest DiArchive…) sont coupés à la source via le
- * gate de `postEmbed`. Aucune donnée n'est supprimée ; les émetteurs restent
- * dans le code.
+ * `false` → tout est émis. `true` → seuls les envois qui appellent
+ * `deliverEmbed` DIRECTEMENT restent émis (retour, stagnation, rappel stock
+ * magasin, sauvegarde BDD, erreurs, digest DiArchive) ; tous les autres sont
+ * coupés à la source via le gate de `postEmbed`.
  *
- * Les trois exceptions appellent `deliverEmbed` DIRECTEMENT (hors gate). Toute
- * nouvelle exception doit faire pareil ET être listée ici, sinon la prochaine
- * lecture du code croira le canal muet.
- *
- * ▶️ POUR TOUT RÉACTIVER : repasser cette constante à `false` (une seule ligne).
+ * ⚠️ Ni file d'attente ni gestion du 429 (Discord limite à ~5 req/s par
+ * webhook) : surveiller les `[HTTP 429]` journalisés par `deliverEmbed`.
  */
-const DISCORD_NOTIFS_DISABLED = true;
+const DISCORD_NOTIFS_DISABLED = false;
 
 /** Plafond d'attente d'un webhook Discord. Voir `deliverEmbed`. */
 const DISCORD_TIMEOUT_MS = 5000;
@@ -155,11 +180,10 @@ export class DiscordHookService {
     channel: ChannelKey,
     payload: object,
   ): Promise<void> {
-    // 🔕 GATE TEMPORAIRE — Discord réduit au strict nécessaire. Toutes les
-    // notifications du FLUX DI (~28 types) passent par ici et sont coupées À
-    // LA SOURCE.
+    // 🔕 GATE — coupe À LA SOURCE tout ce qui passe par ici quand
+    // DISCORD_NOTIFS_DISABLED vaut true (ouvert : false).
     //
-    // EXCEPTIONS (appellent `deliverEmbed` DIRECTEMENT, donc non gated) :
+    // Hors gate (appellent `deliverEmbed` DIRECTEMENT) :
     //   - RETOUR 1/2/3, STAGNATION, RAPPEL STOCK MAGASIN, SAUVEGARDE BDD ;
     //   - canal ERROR (`sendOperationalError`) — canal d'ALERTE, pas du bruit
     //     DI : coupé, les pannes n'étaient plus visibles que dans un fichier
@@ -213,15 +237,18 @@ export class DiscordHookService {
 
   /** True when the Jira-digest channel (APP_ALERT) is reachable — lets
    *  the Jira-notify cron skip cleanly instead of claiming docs it can't
-   *  deliver. Named for backwards compatibility with existing callers. */
+   *  deliver. Named for backwards compatibility with existing callers.
+   *  Lisait SERVICE_TECHNIQUE alors que `sendJiraTasksDigest` poste sur
+   *  APP_ALERT : retirer ce webhook aurait coupé le cron Jira en silence. */
   get isPvConfigured(): boolean {
-    return !!this.urlFor('SERVICE_TECHNIQUE');
+    return !!this.urlFor('APP_ALERT');
   }
 
   constructor(
     @InjectModel(Client.name) private readonly clientModel: Model<any>,
     @InjectModel(Company.name) private readonly companyModel: Model<any>,
     @InjectModel(Profile.name) private readonly profileModel: Model<any>,
+    @InjectModel(Stat.name) private readonly statModel: Model<any>,
   ) {}
 
   /**
@@ -339,12 +366,86 @@ export class DiscordHookService {
     return '';
   }
 
-  async buildContext(di: any): Promise<EmbedContext> {
+  /**
+   * « 🙋 Action par » — surcharge explicite, sinon acteur de la requête
+   * (`currentActor`). `⚙️ Système` hors requête (cron / ACTION), `Inconnu`
+   * quand la requête n'identifie personne. Ne lève jamais.
+   */
+  private async resolveActorLabel(explicit?: any): Promise<string> {
+    try {
+      let actor = explicit;
+      if (actor === undefined || actor === null || actor === '') {
+        const fromRequest = currentActor();
+        if (fromRequest === undefined) return '⚙️ Système';
+        if (!fromRequest) return 'Inconnu';
+        actor = fromRequest;
+      }
+      // Id brut → profil (nom + rôle) ; objet (JWT, profil peuplé) → tel quel.
+      const profile =
+        typeof actor === 'string'
+          ? await this.profileModel.findOne({ _id: actor }).lean()
+          : actor;
+      if (!profile) return 'Inconnu';
+      const name = await this.resolveProfileDisplay(profile);
+      if (!name || name === 'N/A') return 'Inconnu';
+      const role = ROLE_LABELS[(profile as any)?.role];
+      return role ? `${name} · ${role}` : name;
+    } catch {
+      return 'Inconnu';
+    }
+  }
+
+  /**
+   * « 👨‍🔧 Technicien » — ligne Stat du cycle (`{ _idDi, ignoreCount }`, une ligne
+   * PAR cycle), surchargée champ par champ par `opts.tech`. Ne lève jamais :
+   * une lecture ratée donne `Non affecté` plutôt que de bloquer l'envoi.
+   */
+  private async resolveTechLabel(
+    di: any,
+    opts: EmbedContextOptions,
+  ): Promise<string> {
+    try {
+      let stat: any = null;
+      if (di?._id && this.statModel?.findOne) {
+        stat = await this.statModel
+          .findOne({
+            _idDi: String(di._id),
+            ignoreCount: opts.cycle ?? di?.ignoreCount ?? 0,
+          })
+          .lean();
+      }
+      const diagRef = opts.tech?.diag ?? stat?.id_tech_diag;
+      const repRef = opts.tech?.rep ?? stat?.id_tech_rep;
+      const [diag, rep] = await Promise.all([
+        diagRef ? this.resolveProfileDisplay(diagRef) : 'N/A',
+        repRef ? this.resolveProfileDisplay(repRef) : 'N/A',
+      ]);
+      const hasDiag = diag !== 'N/A';
+      const hasRep = rep !== 'N/A';
+      if (hasDiag && hasRep) {
+        return diag === rep
+          ? `${diag} (diag + rép)`
+          : `Diag : ${diag} · Rép : ${rep}`;
+      }
+      if (hasDiag) return `Diag : ${diag}`;
+      if (hasRep) return `Rép : ${rep}`;
+      return 'Non affecté';
+    } catch {
+      return 'Non affecté';
+    }
+  }
+
+  async buildContext(
+    di: any,
+    opts: EmbedContextOptions = {},
+  ): Promise<EmbedContext> {
     const idnum = di?._idnum || 'N/A';
     const title = di?.title || 'N/A';
-    const [clientName, companyName] = await Promise.all([
+    const [clientName, companyName, actorLabel, techLabel] = await Promise.all([
       this.resolveClientName(di?.client_id),
       this.resolveCompanyName(di?.company_id),
+      this.resolveActorLabel(opts.actor),
+      this.resolveTechLabel(di, opts),
     ]);
     const useCompany = Boolean(companyName);
     return {
@@ -355,11 +456,13 @@ export class DiscordHookService {
       customerLabel: useCompany ? companyName : clientName || 'N/A',
       customerFieldName: useCompany ? '🏢 Société' : '👤 Client',
       statusLabel: this.resolveStatusLabel(di?.status),
+      actorLabel,
+      techLabel,
     };
   }
 
-  // Build the standard 4-field skeleton: DI Number, Title, Customer, Status.
-  // Append extraFields after status for context-specific data.
+  // Build the standard skeleton: DI Number, Title, Customer, Status, Actor,
+  // Technician. Append extraFields after them for context-specific data.
   private buildBaseFields(
     ctx: EmbedContext,
     statusOverride?: string,
@@ -378,6 +481,8 @@ export class DiscordHookService {
         value: statusOverride || ctx.statusLabel,
         inline: true,
       },
+      { name: '🙋 Action par', value: ctx.actorLabel, inline: true },
+      { name: '👨‍🔧 Technicien', value: ctx.techLabel, inline: true },
       ...extraFields,
     ];
   }
@@ -388,8 +493,9 @@ export class DiscordHookService {
   // ─────────────────────────────────────────────────────────────────────
 
   async sendDiPendingNotification(di: any) {
-    const ctx = await this.buildContext(di);
-    const createdBy = await this.resolveProfileDisplay(di?.createdBy);
+    // Acteur = créateur de la DI (juste aussi pour un import, où la requête
+    // n'est pas celle du créateur) ; remplace l'ancien champ « Créée par ».
+    const ctx = await this.buildContext(di, { actor: di?.createdBy });
 
     await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
@@ -397,9 +503,7 @@ export class DiscordHookService {
           title: '📌 DI en attente',
           description: 'Une nouvelle DI a été créée et est en attente.',
           color: 16776960, // yellow (pending)
-          fields: this.buildBaseFields(ctx, undefined, [
-            { name: '🧑‍💼 Créée par', value: createdBy, inline: true },
-          ]),
+          fields: this.buildBaseFields(ctx),
           footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
@@ -416,22 +520,22 @@ export class DiscordHookService {
     stat: any;
     technician: any;
   }) {
-    const ctx = await this.buildContext({
-      ...di,
-      // The Stat carries the live status when DI hasn't been refetched yet.
-      status: stat?.status || di?.status,
-    });
-    const techDisplay = await this.resolveProfileDisplay(technician);
+    const ctx = await this.buildContext(
+      {
+        ...di,
+        // The Stat carries the live status when DI hasn't been refetched yet.
+        status: stat?.status || di?.status,
+      },
+      { tech: { diag: technician } },
+    );
 
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '🛠️ DI affectée au technicien',
           description: 'Une DI a été affectée pour diagnostic.',
           color: 3447003, // blue
-          fields: this.buildBaseFields(ctx, undefined, [
-            { name: '👨‍🔧 Technicien', value: techDisplay, inline: true },
-          ]),
+          fields: this.buildBaseFields(ctx),
           footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
@@ -441,7 +545,7 @@ export class DiscordHookService {
 
   async sendComponentsSentToCoordinator(di: any) {
     const ctx = await this.buildContext(di);
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '📦 Composants envoyés pour validation',
@@ -460,7 +564,7 @@ export class DiscordHookService {
 
   async sendComponentsConfirmedByCoordinator(di: any) {
     const ctx = await this.buildContext(di);
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '✅ Composants validés par la coordinatrice',
@@ -512,7 +616,7 @@ export class DiscordHookService {
 
   async sendDiDevisUploaded({ di, fileName }: { di: any; fileName: string }) {
     const ctx = await this.buildContext(di);
-    await this.postEmbed('DEMANDE_PDF', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '🧾 Devis ajouté',
@@ -530,7 +634,7 @@ export class DiscordHookService {
 
   async sendDiBCUploaded({ di, fileName }: { di: any; fileName: string }) {
     const ctx = await this.buildContext(di);
-    await this.postEmbed('DEMANDE_PDF', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '📄 Bon de commande ajouté',
@@ -686,7 +790,7 @@ export class DiscordHookService {
   async sendDiInReparation(di: any) {
     // Called when status is REPARATION — assigned but not yet started.
     const ctx = await this.buildContext(di);
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '🛠️ DI prête pour réparation',
@@ -706,7 +810,7 @@ export class DiscordHookService {
     const repairable = diag?.can_be_repaired
       ? '✅ Réparable'
       : '🚫 Non réparable';
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '✅ Diagnostic terminé',
@@ -742,7 +846,7 @@ export class DiscordHookService {
 
     const ctx = await this.buildContext(di);
     const note = di?.remarque_tech_diagnostic;
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '⏸️ Diagnostic en pause',
@@ -762,7 +866,7 @@ export class DiscordHookService {
 
   async sendDiagnosticResumed(di: any) {
     const ctx = await this.buildContext(di);
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '▶️ Diagnostic repris',
@@ -778,7 +882,7 @@ export class DiscordHookService {
 
   async sendDiagnosticStarted(di: any) {
     const ctx = await this.buildContext(di);
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '🔍 Diagnostic démarré',
@@ -793,24 +897,18 @@ export class DiscordHookService {
   }
 
   async sendDiagnosticAssigned(di: any, technician?: any) {
-    const ctx = await this.buildContext(di);
-    // Include the assigned diagnostic technician so this SINGLE notification is
-    // complete (it replaces the old, duplicate `sendDiAssignedToTech`). Only add
-    // the field when the tech resolves to a real name — never surface "N/A".
-    const extras: Array<{ name: string; value: string; inline?: boolean }> = [];
-    if (technician !== undefined && technician !== null) {
-      const techDisplay = await this.resolveProfileDisplay(technician);
-      if (techDisplay && techDisplay !== 'N/A') {
-        extras.push({ name: '👨‍🔧 Technicien', value: techDisplay, inline: true });
-      }
-    }
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    // Le technicien affecté est passé en surcharge (prioritaire sur la ligne
+    // Stat) : le champ standard « 👨‍🔧 Technicien » le porte, sans doublon.
+    const ctx = await this.buildContext(di, {
+      tech: { diag: technician ?? undefined },
+    });
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '🧭 Diagnostic affecté',
           description: 'La coordinatrice a affecté cette DI au diagnostic.',
           color: 3447003,
-          fields: this.buildBaseFields(ctx, undefined, extras),
+          fields: this.buildBaseFields(ctx),
           footer: { text: 'Fixtronix System' },
           timestamp: new Date().toISOString(),
         },
@@ -821,7 +919,7 @@ export class DiscordHookService {
   async sendReparationStarted(di: any) {
 
     const ctx = await this.buildContext(di);
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '🔧 Réparation démarrée',
@@ -839,7 +937,7 @@ export class DiscordHookService {
 
     const ctx = await this.buildContext(di);
     const note = di?.remarque_tech_repair;
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '⏸️ Réparation en pause',
@@ -860,7 +958,7 @@ export class DiscordHookService {
   async sendReparationResumed(di: any) {
 
     const ctx = await this.buildContext(di);
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '▶️ Réparation reprise',
@@ -956,7 +1054,9 @@ export class DiscordHookService {
   }
 
   async sendDiRetour(di: any, level: 1 | 2 | 3) {
-    const ctx = await this.buildContext(di);
+    // Technicien du cycle QUI REVIENT (niveau - 1) : la ligne Stat du nouveau
+    // cycle n'existe pas encore au moment du retour.
+    const ctx = await this.buildContext(di, { cycle: level - 1 });
     const titles = {
       1: '🔁 Retour 1',
       2: '🔁 Retour 2',
@@ -991,7 +1091,7 @@ export class DiscordHookService {
 
   async sendDiBLUploaded({ di, fileName }: { di: any; fileName: string }) {
     const ctx = await this.buildContext(di);
-    await this.postEmbed('DEMANDE_PDF', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '📦 Bon de livraison ajouté',
@@ -1541,7 +1641,7 @@ export class DiscordHookService {
       Number.isFinite(Number(v))
         ? `${Number(v).toLocaleString('fr-TN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} TND`
         : '—';
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '🧩 Nouveau composant catalogue',
@@ -1604,19 +1704,13 @@ export class DiscordHookService {
     activeDiCount?: number;
   }) {
 
-    const ctx = await this.buildContext(di);
-    const techDisplay = await this.resolveProfileDisplay(technician);
-    const assignerDisplay = await this.resolveProfileDisplay(assignedBy);
-    const extras = [
-      { name: '👨‍🔧 Technicien réparation', value: techDisplay, inline: true },
-    ];
-    if (assignerDisplay && assignerDisplay !== 'N/A') {
-      extras.push({
-        name: '🧑‍💼 Affecté par',
-        value: assignerDisplay,
-        inline: true,
-      });
-    }
+    // Technicien réparation + affecteur passés en surcharge : ils alimentent les
+    // champs standards « 👨‍🔧 Technicien » et « 🙋 Action par ».
+    const ctx = await this.buildContext(di, {
+      tech: { rep: technician },
+      actor: assignedBy,
+    });
+    const extras: Array<{ name: string; value: string; inline?: boolean }> = [];
     if (Number.isFinite(activeDiCount)) {
       extras.push({
         name: '📋 DI actifs (tech)',
@@ -1624,7 +1718,7 @@ export class DiscordHookService {
         inline: true,
       });
     }
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '🛠️ Réparation affectée',
@@ -1695,7 +1789,7 @@ export class DiscordHookService {
     if (participantsLine) {
       fields.push({ name: '👥 Participants', value: participantsLine });
     }
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '📄 Procès-Verbal de Réunion',
@@ -1775,7 +1869,7 @@ export class DiscordHookService {
     if (url) {
       fields.push({ name: '🔗 Documenter', value: `[Ouvrir la réunion](${url})` });
     }
-    await this.postEmbed('SERVICE_TECHNIQUE', {
+    await this.postEmbed('GENERAL_ATELIER', {
       embeds: [
         {
           title: '⏰ Rappel — réunion dans ~5 min',

@@ -200,8 +200,12 @@ test.describe('Dossier DI — données correctement rendues', () => {
     // DI19 n'avait aucun historique : la migration 011 l'a reconstruit.
     const modal = await openModal(page, DI.deuxRetours);
     await selectCycle(modal, 0);
-    const steps = modal.locator('.di-step');
-    if ((await steps.count()) > 0) {
+    // Le parcours vit dans « Temps & chrono » ; le détail à la seconde (où
+    // figure la marque « reconstruit ») est replié par défaut.
+    await openTab(modal, 'Temps & chrono');
+    const toggle = modal.locator('.di-flow-detail__toggle');
+    if ((await toggle.count()) > 0) {
+      await toggle.click();
       // Une entrée déduite ne doit jamais se faire passer pour une observation.
       await expect(modal.locator('.di-origin', { hasText: 'reconstruit' }).first()).toBeVisible();
     } else {

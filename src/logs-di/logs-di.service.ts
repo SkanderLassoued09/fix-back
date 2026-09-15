@@ -392,6 +392,29 @@ export class LogsDiService {
     }
   }
 
+  /**
+   * Fige un prix de vente sur la pièce `nameComposant` de la ligne du cycle
+   * (onglet Finances : composants valorisés par phase). Écriture positionnelle
+   * par NOM, le reste de la ligne est intact. `onlyMissing` ne remplit qu'une
+   * ligne sans prix : un prix de diagnostic déjà figé n'est jamais écrasé.
+   */
+  async setPartPriceSnapshot(
+    _idDi: string,
+    idIgnore: number,
+    key: 'prixVenteDiag' | 'prixVenteRep',
+    nameComposant: string,
+    price: number,
+    onlyMissing: boolean,
+  ): Promise<void> {
+    const filter: Record<string, unknown> = { 'e.nameComposant': nameComposant };
+    if (onlyMissing) filter[`e.${key}`] = null;
+    await this.logsDiModel.updateOne(
+      { _idDi, idIgnore },
+      { $set: { [`array_composants.$[e].${key}`]: price } },
+      { arrayFilters: [filter] },
+    );
+  }
+
   async getAllLogsByDi(_idDi: string) {
     try {
       // TRI par cycle : la liste est indexee PAR POSITION a plusieurs endroits

@@ -84,23 +84,36 @@ test('finances : ligne Total + écart SAIN (aucun pourcentage aberrant)', async 
   expect(fin).not.toMatch(/[+-]?\d{4,}(?:[.,]\d+)?\s*%/);
 });
 
-test('écart entre statuts : 5 étapes puis « Tout afficher » (T1420, 13 transitions)', async ({
+test('parcours du dossier : vue simple, détail technique replié (T1420)', async ({
   page,
 }) => {
   const modal = await openModal(page, DI.richSteps);
-  const steps = modal.locator('.di-step');
-  const preview = await steps.count();
-  expect(preview).toBeGreaterThan(0);
-  expect(preview).toBeLessThanOrEqual(5);
+  // Le parcours vit dans « Temps & chrono ».
+  await openTab(modal, 'Temps & chrono');
+  const flow = modal.locator('.di-flow');
+  test.skip(
+    (await flow.locator('.di-empty').count()) > 0,
+    'fixture sans historique dans cette base',
+  );
 
-  const more = modal.locator('.di-steps__more');
-  if (await more.count()) {
-    await expect(more).toContainText('Tout afficher');
-    await more.click();
-    const expanded = await steps.count();
-    expect(expanded).toBeGreaterThan(preview);
-    await expect(more).toContainText('Réduire');
-  }
+  // Vue simple : ni frise horizontale ni tableau « Temps passé par étape » ;
+  // le compteur de pauses est toujours là (« Aucune pause » sinon) ; plus de liste « Étapes ».
+  await expect(flow.locator('.di-stepper__item')).toHaveCount(0);
+  await expect(flow.locator('.di-phase-table')).toHaveCount(0);
+  await expect(flow.locator('.di-pause-sum')).toHaveCount(1);
+  await expect(flow.locator('.di-passage')).toHaveCount(0);
+
+  // Le détail à la seconde est replié par défaut…
+  await expect(flow.locator('.di-step')).toHaveCount(0);
+  const toggle = flow.locator('.di-flow-detail__toggle');
+  await expect(toggle).toContainText('Détail technique');
+  const n = Number((await toggle.innerText()).match(/(\d+)\s+changement/)?.[1]);
+  expect(n).toBeGreaterThan(0);
+
+  // …et déplié, il liste CHAQUE changement.
+  await toggle.click();
+  await expect(flow.locator('.di-step')).toHaveCount(n);
+  await expect(toggle).toContainText('Masquer');
 });
 
 test('sélecteur de cycle ABSENT si la DI n’a aucun retour', async ({ page }) => {

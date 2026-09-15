@@ -52,6 +52,9 @@ const BTN = {
     retourSend: 'Envoyer vers finir',
 } as const;
 const ALL_BUTTONS = Object.values(BTN);
+/** Miroir de `showSendToFinishRetour` (diagnostic-summary-step) : « Envoyer vers
+ *  finir » est masqué à la demande de l'utilisateur depuis le 2026-09-15. */
+const SEND_TO_FINISH_VISIBLE = false;
 
 type ToggleOp = [control: 'isPdr' | 'isReparable' | 'isErrorFromFixtronix', checked: boolean];
 interface Case {
@@ -72,10 +75,13 @@ const CASES: Case[] = [
     { key: '03', label: 'Original + NON réparable',                  flow: 'orig',   rep: false, pdr: false, fix: false, toggles: [['isReparable', false]],       button: BTN.notReparable,  expect: 'PENDING2' },
     { key: '04', label: 'Retour + Fixtronix + réparable + PDR',      flow: 'retour', rep: true,  pdr: true,  fix: true,  toggles: [],                             button: BTN.retourFinish,  expect: 'MagasinEstimation' },
     { key: '05', label: 'Retour + Fixtronix + réparable + sans PDR', flow: 'retour', rep: true,  pdr: false, fix: true,  toggles: [['isPdr', false], ['isErrorFromFixtronix', false]], button: BTN.retourFinish, expect: 'PENDING3' },
-    { key: '06', label: 'Retour + Fixtronix + NON réparable',        flow: 'retour', rep: false, pdr: false, fix: true,  toggles: [['isReparable', false]],       button: BTN.retourSend,    expect: 'IRREPARABLE' },
+    // FT-06 / FT-09 : « Envoyer vers finir » est MASQUÉ (2026-09-15) — un retour
+    // NON réparable se clôture par « Fin diagnostique retour » (backstop serveur
+    // de `changeStatusPending2` → IRREPARABLE).
+    { key: '06', label: 'Retour + Fixtronix + NON réparable',        flow: 'retour', rep: false, pdr: false, fix: true,  toggles: [['isReparable', false]],       button: BTN.retourFinish,  expect: 'IRREPARABLE' },
     { key: '07', label: 'Retour + client + réparable + PDR',         flow: 'retour', rep: true,  pdr: true,  fix: false, toggles: [],                             button: BTN.retourFinish,  expect: 'MagasinEstimation' },
     { key: '08', label: 'Retour + client + réparable + sans PDR',    flow: 'retour', rep: true,  pdr: false, fix: false, toggles: [['isPdr', false]],             button: BTN.retourFinish,  expect: 'PENDING2' },
-    { key: '09', label: 'Retour + client + NON réparable',           flow: 'retour', rep: false, pdr: false, fix: false, toggles: [['isReparable', false]],       button: BTN.retourSend,    expect: 'IRREPARABLE' },
+    { key: '09', label: 'Retour + client + NON réparable',           flow: 'retour', rep: false, pdr: false, fix: false, toggles: [['isReparable', false]],       button: BTN.retourFinish,  expect: 'IRREPARABLE' },
     // FT-05b — MÊME cas que FT-05 mais le tech LAISSE « Erreur Fixtronix » COCHÉE
     // (le geste réel). Le gating est désormais indexé sur le SEUL critère
     // « réparable » : cocher Fixtronix ne doit RIEN changer au bouton actif, et
@@ -264,12 +270,19 @@ async function assertFinishGating(
         // (backstop non-réparable sur `changeStatusPending2` + routage complet
         // des retours réparables dans `changeStatusTofinsh`). Les cas `…b`
         // ci-dessous prouvent l'équivalence bouton par bouton.
-        for (const label of [BTN.retourFinish, BTN.retourSend]) {
-            await expect(
-                cta(label),
-                `« ${label} » doit être cliquable sur un retour`,
-            ).toBeEnabled({ timeout: 8000 });
+        await expect(
+            cta(BTN.retourFinish),
+            `« ${BTN.retourFinish} » doit être cliquable sur un retour`,
+        ).toBeEnabled({ timeout: 8000 });
+        // « Envoyer vers finir » est MASQUÉ depuis le 2026-09-15.
+        if (!SEND_TO_FINISH_VISIBLE) {
+            await expect(cta(BTN.retourSend)).toHaveCount(0);
+            return;
         }
+        await expect(
+            cta(BTN.retourSend),
+            `« ${BTN.retourSend} » doit être cliquable sur un retour`,
+        ).toBeEnabled({ timeout: 8000 });
         return;
     }
 
@@ -329,7 +342,11 @@ for (const c of CASES) {
  *   RÉPARABLE ; FT-08 idem ; FT-06/FT-09 par « Fin diagnostique retour »
  *   partaient en PENDING2 (facturation) au lieu d'IRREPARABLE.
  */
-const RETOUR_CASES = CASES.filter((c) => c.flow === 'retour' && c.key !== '05b');
+// Sans « Envoyer vers finir » (masqué), il n'y a plus de bouton OPPOSÉ à
+// comparer : ces cas d'équivalence ne tournent que si le bouton est réaffiché.
+const RETOUR_CASES = SEND_TO_FINISH_VISIBLE
+    ? CASES.filter((c) => c.flow === 'retour' && c.key !== '05b')
+    : [];
 
 for (const c of RETOUR_CASES) {
     const other =

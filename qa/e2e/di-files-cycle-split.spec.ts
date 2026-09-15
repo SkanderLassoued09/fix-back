@@ -25,6 +25,15 @@ const diId = `DI_${tag}`;
 const idnum = `CYC-${tag.toUpperCase()}`;
 const url = (kind: string, cycle: number) =>
     `https://drive.google.com/${kind}-c${cycle}.pdf`;
+/** Nom STANDARD du back (`buildDocFileName`) ; l'heure distingue les cycles. */
+const stdName = (type: string, cycle: number) =>
+    `QACYCLE_${type}_05-0${cycle + 1}-2026_10-00-0${cycle}.pdf`;
+/** Référence `driveDocs` : `driveFileId` requis, sinon `buildDocuments` l'ignore. */
+const ref = (kind: string, type: string, cycle: number) => ({
+    driveFileId: `${kind}-c${cycle}`,
+    webViewLink: url(kind, cycle),
+    name: stdName(type, cycle),
+});
 
 let TECH_ID = '';
 
@@ -53,6 +62,11 @@ test.beforeAll(async () => {
             devis: url('devis', 1),
             bon_de_commande: url('bc', 1),
             bon_de_livraison: url('bl', 1),
+            driveDocs: {
+                Devis: ref('devis', 'Devis', 1),
+                BC: ref('bc', 'BC', 1),
+                BL: ref('bl', 'BL', 1),
+            },
             statusUpdatedAt: now,
             createdAt: now,
             updatedAt: now,
@@ -66,6 +80,12 @@ test.beforeAll(async () => {
                 bon_de_commande: url('bc', 0),
                 bon_de_livraison: url('bl', 0),
                 facture: url('facture', 0),
+                driveDocs: {
+                    Devis: ref('devis', 'Devis', 0),
+                    BC: ref('bc', 'BC', 0),
+                    BL: ref('bl', 'BL', 0),
+                    Facture: ref('facture', 'Facture', 0),
+                },
                 closedAt: now,
                 createdAt: now,
                 updatedAt: now,
@@ -117,6 +137,14 @@ test('« Fichiers principaux » = cycle 0, « Historique des retours » = cycles
     // Aucun document du RETOUR ne doit fuiter dans le bloc principal.
     expect(mainHrefs.some((h) => h.includes('-c1'))).toBe(false);
     await expect(page.locator('.af-count-pill').first()).toHaveText('4');
+    // Noms STANDARD des fichiers du cycle 0 (ordre des cartes : BC, BL, FAC,
+    // DEV) — jamais ceux du retour portés par le miroir.
+    await expect(page.locator('.af-status-card__title')).toHaveText([
+        stdName('BC', 0),
+        stdName('BL', 0),
+        stdName('Facture', 0),
+        stdName('Devis', 0),
+    ]);
 
     // ── Historique des retours : le cycle 1, et lui seul ────────────────────
     const nodes = page.locator('.af-tl-node');

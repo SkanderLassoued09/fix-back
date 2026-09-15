@@ -5,9 +5,11 @@ import {
   Query,
   Subscription,
   Float,
+  Int,
 } from '@nestjs/graphql';
 import { DiService } from './di.service';
 import {
+  ComposantPhaseCost,
   Di,
   DiTable,
   DiTableData,
@@ -25,6 +27,7 @@ import {
   PaginationConfigDi,
   SearchDiInput,
   UpdateDi,
+  UpdateDiInfoInput,
 } from './dto/create-di.input';
 import { AnnulerDiInput } from './dto/annuler-di.input';
 import { AbandonDiInput } from './dto/abandon-di.input';
@@ -315,6 +318,28 @@ export class DiResolver {
     });
   }
 
+  /**
+   * Modal « Modifier la DI » du tableau des interventions : infos saisies à la
+   * création. Rôles = ceux qui accèdent à cette page (`role-routes.ts` front).
+   *
+   * DISTINCTE de `updateDi` (non gardée) pour la même raison
+   * qu'`adminTechUpdateDi` : client/société et photo ne doivent pas devenir
+   * modifiables par un technicien. Statut, cohérence client/société et verrou
+   * de tarification sont gardés dans le service ; l'édition est journalisée.
+   */
+  @Mutation(() => Di)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.MANAGER, Role.ADMIN_MANAGER, Role.ADMIN_TECH)
+  async updateDiInfo(
+    @Args('input') input: UpdateDiInfoInput,
+    @CurrentUser() profile: Profile,
+  ) {
+    return await this.diService.updateDiInfo(input, {
+      id: (profile as any)?._id ?? null,
+      role: (profile as any)?.role ?? null,
+    });
+  }
+
   @Query(() => Di)
   getAllRemarque(@Args('_id') _id: string) {
     return this.diService.getAllRemarque(_id);
@@ -451,8 +476,22 @@ export class DiResolver {
     return true;
   }
   @Query(() => Number)
-  calculateTicketComposantPrice(@Args('_id') _id: string) {
-    return this.diService.calculateTicketComposantPrice(_id);
+  calculateTicketComposantPrice(
+    @Args('_id') _id: string,
+    // Cycle demandé (modal « Dossier ») ; absent = cycle courant de la DI.
+    @Args('idIgnore', { type: () => Int, nullable: true }) idIgnore?: number,
+  ) {
+    return this.diService.calculateTicketComposantPrice(_id, idIgnore);
+  }
+
+  /** Composants du cycle valorisés par phase : prix figés au diagnostic et en
+   *  fin de réparation, repli sur le prix catalogue actuel (DI antérieures). */
+  @Query(() => ComposantPhaseCost)
+  calculateTicketComposantPriceByPhase(
+    @Args('_id') _id: string,
+    @Args('idIgnore', { type: () => Int, nullable: true }) idIgnore?: number,
+  ) {
+    return this.diService.calculateTicketComposantPriceByPhase(_id, idIgnore);
   }
 
   @Mutation(() => Di)

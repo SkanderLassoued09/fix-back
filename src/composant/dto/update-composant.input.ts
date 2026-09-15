@@ -35,4 +35,10 @@ export class UpdateComposantInput {
   pdf?: string;
   @Field({ nullable: true })
   status_composant?: string;
+  @Field({ nullable: true })
+  code_article?: string;
+  @Field({ nullable: true })
+  emplacement?: string;
+  @Field({ nullable: true })
+  stock_min?: number;
 }
