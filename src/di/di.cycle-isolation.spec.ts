@@ -145,6 +145,9 @@ describe('Séparation des flux — entrée en retour', () => {
     expect($set.remarque_tech_diagnostic).toBeNull();
     // Ré-arme l'idempotence du décrément de stock pour le nouveau cycle.
     expect($set.stockDecrementedAt).toBeNull();
+    // Le marqueur « retour sans pièces » ne vaut que pour SON cycle : plus rien
+    // ne le retire à l'envoi en réparation, c'est l'ouverture du retour qui le fait.
+    expect($set.needsDevisBeforeRepair).toBe(false);
 
     // Les 4 documents sont retirés UN PAR UN : `driveDocs.Image` est la photo
     // de création, au niveau DI, et la vider casserait `GET /di/:id/image`.
@@ -299,5 +302,133 @@ describe('Séparation des flux — sûreté du vidage du miroir', () => {
     expect(MAGASIN_STATUS_DI_VALUES).not.toContain(STATUS_DI.Retour1.status);
     expect(MAGASIN_STATUS_DI_VALUES).not.toContain(STATUS_DI.Retour2.status);
     expect(MAGASIN_STATUS_DI_VALUES).not.toContain(STATUS_DI.Retour3.status);
+  });
+});
+
+/**
+ * PROJECTION PAR CYCLE — le technicien affiché est celui du cycle courant.
+ *
+ * Bug constaté en prod (T1373, T1368) puis reproduit en dev sur 16 DI : la
+ * liste coordination et le dossier affichaient le technicien d'un ANCIEN
+ * retour alors que l'affectation en base était la bonne. Cause : les mappers
+ * lisaient `statModel.findOne({ _idDi })` SANS `ignoreCount` ni tri, et Mongo
+ * rendait l'ordre naturel — le plus souvent la ligne du cycle 0. Une ligne
+ * `stats` existe PAR CYCLE (index unique `{_idDi, ignoreCount}`), donc un
+ * filtre sans le cycle est toujours sous-spécifié.
+ *
+ * `mapCoordinatorDiRow` sert `get_coordinatorDI`, `searchCoordinatorDI` ET
+ * `getDiDetail` : le verrouiller couvre la liste coordination, le dialog flow
+ * et le dossier. `searchDi` / `getAllDi` portent le même filtre.
+ */
+describe('Séparation des flux — projection du technicien par cycle', () => {
+  const TECH_C0 = 'id-tech-cycle-0';
+  const TECH_C1 = 'id-tech-cycle-1';
+  const NAMES: Record<string, string> = {
+    [TECH_C0]: 'OMAR OMAR',
+    [TECH_C1]: 'Youssef HAJJI',
+  };
+
+  function makeProjectionSvc(rowsByCycle: Record<number, any>) {
+    const svc: any = Object.create(DiService.prototype);
+    svc.statModel = {
+      findOne: jest.fn((filter: any) => {
+        // Reproduit l'ORDRE NATUREL : un filtre sans `ignoreCount` retombe sur
+        // la 1re ligne insérée (cycle 0) — exactement l'ancien comportement.
+        const row =
+          filter?.ignoreCount === undefined
+            ? rowsByCycle[Math.min(...Object.keys(rowsByCycle).map(Number))]
+            : rowsByCycle[filter.ignoreCount] ?? null;
+        const q: any = Promise.resolve(row);
+        q.exec = () => Promise.resolve(row);
+        q.lean = () => Promise.resolve(row);
+        return q;
+      }),
+    };
+    svc.logsDiService = { getAllLogsByDi: jest.fn().mockResolvedValue([]) };
+    svc.profileService = {
+      getTech: jest.fn(async (id: string) => NAMES[id] ?? 'Unknown'),
+    };
+    return svc;
+  }
+
+  const statRow = (cycle: number, tech: string) => ({
+    _idDi: 'DI_cycle',
+    ignoreCount: cycle,
+    id_tech_diag: tech,
+    id_tech_rep: tech,
+    diagAssignments: [{ tech, assignedAt: new Date(), abandonedAt: null }],
+  });
+
+  const TWO_CYCLES = {
+    0: statRow(0, TECH_C0),
+    1: statRow(1, TECH_C1),
+  };
+
+  it('une DI en retour rend le technicien du cycle courant, pas celui du cycle 0', async () => {
+    const svc = makeProjectionSvc(TWO_CYCLES);
+
+    const row = await svc.mapCoordinatorDiRow({
+      _id: 'DI_cycle',
+      _idnum: 'T9999',
+      ignoreCount: 1,
+      status: STATUS_DI.WaitingBl.status,
+    });
+
+    // Le CYCLE est dans le filtre — c'est ça qui empêche l'ordre naturel.
+    expect(svc.statModel.findOne).toHaveBeenCalledWith({
+      _idDi: 'DI_cycle',
+      ignoreCount: 1,
+    });
+    expect(row.techDiag).toBe('Youssef HAJJI');
+    expect(row.techRep).toBe('Youssef HAJJI');
+    // L'historique d'affectation vient de la MÊME ligne : il suit le cycle.
+    expect(row.diagAssignments.map((a: any) => a.tech)).toEqual([
+      'Youssef HAJJI',
+    ]);
+  });
+
+  it('le flux original porte `ignoreCount: 0` EXPLICITEMENT (jamais un findOne nu)', async () => {
+    const svc = makeProjectionSvc(TWO_CYCLES);
+
+    const row = await svc.mapCoordinatorDiRow({
+      _id: 'DI_cycle',
+      _idnum: 'T9999',
+      ignoreCount: 0,
+      status: 'INDIAGNOSTIC',
+    });
+
+    expect(svc.statModel.findOne).toHaveBeenCalledWith({
+      _idDi: 'DI_cycle',
+      ignoreCount: 0,
+    });
+    expect(row.techDiag).toBe('OMAR OMAR');
+  });
+
+  it('`ignoreCount` absent de la DI retombe sur le cycle 0, pas sur un filtre nu', async () => {
+    const svc = makeProjectionSvc(TWO_CYCLES);
+
+    await svc.mapCoordinatorDiRow({ _id: 'DI_cycle', status: 'PENDING1' });
+
+    expect(svc.statModel.findOne).toHaveBeenCalledWith({
+      _idDi: 'DI_cycle',
+      ignoreCount: 0,
+    });
+  });
+
+  it('cycle courant sans ligne stats → « N/A », JAMAIS le tech d’un autre cycle', async () => {
+    // DI garée en RETOUR / annulée : aucun technicien n'est affecté à ce
+    // cycle-là. « N/A » est la bonne réponse ; afficher le tech du cycle
+    // précédent est précisément le bug.
+    const svc = makeProjectionSvc({ 0: statRow(0, TECH_C0) });
+
+    const row = await svc.mapCoordinatorDiRow({
+      _id: 'DI_cycle',
+      ignoreCount: 1,
+      status: STATUS_DI.Retour1.status,
+    });
+
+    expect(row.techDiag).toBe('N/A');
+    expect(row.techRep).toBe('N/A');
+    expect(row.diagAssignments).toEqual([]);
   });
 });

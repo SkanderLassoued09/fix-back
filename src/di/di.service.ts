@@ -1556,7 +1556,14 @@ export class DiService {
     // MAP RESPONSE
     const di = await Promise.all(
       diRecords.map(async (di) => {
-        const stat = await this.statModel.findOne({ _idDi: di._id });
+        // Ligne du CYCLE COURANT (0 compris) — pendant exact de l'index unique
+        // `{_idDi, ignoreCount}`. Sans le cycle, `findOne` rendait l'ordre
+        // naturel sur une DI multi-cycles : la liste affichait le technicien
+        // d'un ANCIEN retour alors que l'affectation en base etait la bonne.
+        const stat = await this.statModel.findOne({
+          _idDi: di._id,
+          ignoreCount: di.ignoreCount ?? 0,
+        });
         const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
 
         return {
@@ -1581,7 +1588,7 @@ export class DiService {
           isErrorFromFixtronix: di.isErrorFromFixtronix,
           // Parité avec `getAllDi` / la projection coordination : sans ça une DI
           // atteinte par la RECHERCHE perdait les vrais noms de fichiers.
-          documents: this.buildDocuments((di as any).driveDocs),
+          documents: this.buildDocuments((di as any).driveDocs, (di as any).docNumeros),
           // Keep `*_id` as the actual referenced _id so the frontend can
           // run lookups, drive dropdown ngModel values, and patch state
           // immutably after a reassignment. The display strings live on
@@ -1643,7 +1650,8 @@ export class DiService {
    */
   private buildDocuments(
     driveDocs: any,
-  ): Array<{ type: string; name: string; webViewLink: string }> {
+    docNumeros?: any,
+  ): Array<{ type: string; name: string; webViewLink: string; numero: string }> {
     const d = driveDocs || {};
     return Object.keys(d)
       .filter((type) => d[type] && d[type].driveFileId)
@@ -1651,6 +1659,7 @@ export class DiService {
         type,
         name: d[type]?.name ?? null,
         webViewLink: d[type]?.webViewLink ?? null,
+        numero: docNumeros?.[type] ?? null,
       }));
   }
 
@@ -1722,7 +1731,7 @@ export class DiService {
   private withCycleDocuments(log: any): any {
     if (!log) return log;
     const row = typeof log.toObject === 'function' ? log.toObject() : log;
-    return { ...row, documents: this.buildDocuments(row.driveDocs) };
+    return { ...row, documents: this.buildDocuments(row.driveDocs, row.docNumeros) };
   }
 
   async getAllDi(
@@ -1762,8 +1771,11 @@ export class DiService {
     // Fetch linked stats & logs for each DI
     const di = await Promise.all(
       diRecords.map(async (di) => {
-        // Fetch the stat document based on the DI's _id
-        const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
+        // Ligne du CYCLE COURANT (0 compris) : cf. `searchDi`. Sans le cycle,
+        // `techDiag` / `techRep` / `diagAssignments` venaient d'un ancien retour.
+        const stat = await this.statModel
+          .findOne({ _idDi: di._id, ignoreCount: di.ignoreCount ?? 0 })
+          .exec();
 
         // Fetch logs related to this DI
         const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
@@ -1833,7 +1845,7 @@ export class DiService {
             ? await this.profileService.getTech(stat?.id_tech_rep)
             : 'N/A',
           // Real uploaded documents (name + Drive link) for the detail modal.
-          documents: this.buildDocuments((di as any).driveDocs),
+          documents: this.buildDocuments((di as any).driveDocs, (di as any).docNumeros),
           // Include logs related to this DI
           logs: (logsDi ?? []).map((l) => this.withCycleDocuments(l)),
         };
@@ -2327,9 +2339,10 @@ export class DiService {
       skipRoleValidation: true,
     });
 
-    // Marque la DI comme « en attente du devis coordinatrice » : la carte
-    // Réparation du modal coordinateur bascule alors en mode « joindre le devis »
-    // et bloque l'envoi tant qu'aucun devis n'est attaché.
+    // Marque la DI comme « en attente du devis » : le devis se dépose dans
+    // « Affectation du prix final » (ticket-list, mode documents seuls) et
+    // l'affectation du réparateur reste verrouillée côté coordinatrice tant
+    // qu'il manque. Remis à false à l'ouverture du retour suivant.
     await this.diModel.updateOne(
       { _id: _idDI },
       { $set: { needsDevisBeforeRepair: true } },
@@ -4162,8 +4175,12 @@ export class DiService {
     di: any,
     opts: { withContacts?: boolean } = {},
   ) {
-    // Fetch the stat document based on the DI's _id
-    const stat = await this.statModel.findOne({ _idDi: di._id }).exec();
+    // Ligne du CYCLE COURANT (0 compris). Ce mapper sert `get_coordinatorDI`,
+    // `searchCoordinatorDI` ET `getDiDetail` : sans le cycle, la liste
+    // coordination et le dossier affichaient le technicien d'un ancien retour.
+    const stat = await this.statModel
+      .findOne({ _idDi: di._id, ignoreCount: di.ignoreCount ?? 0 })
+      .exec();
     // Fetch logs related to this DI
     const logsDi = await this.logsDiService.getAllLogsByDi(di._id);
     return {
@@ -4184,7 +4201,7 @@ export class DiService {
       contain_pdr: di.contain_pdr,
       current_roles: di.current_roles,
       array_composants: di.array_composants,
-      documents: this.buildDocuments((di as any).driveDocs),
+      documents: this.buildDocuments((di as any).driveDocs, (di as any).docNumeros),
       di_category_id: di.di_category_id?.category,
       // Numéro de série + estimation réparation (manquaient au chemin DiTable →
       // sections « — » dans le dossier). Passthrough honnête (repairEstimate est
@@ -5390,7 +5407,6 @@ export class DiService {
   }
 
   async changeStatusInRepair(_id: string) {
-    console.log('[changeStatusInRepair][service] start _id=', _id);
     await this.assertTransitionAllowed(_id, STATUS_DI.InReparation.status);
 
     // Mirror `changeStatusInDiagnostic` exactly: delegate to the workflow
@@ -5404,12 +5420,6 @@ export class DiService {
         transitionKey: 'CHANGE_STATUS_IN_REPAIR',
         skipRoleValidation: true,
       });
-    console.log(
-      '[changeStatusInRepair][service] transition result=',
-      result ? { _id: result._id, status: result.status } : null,
-      'previousStatus=',
-      previousStatus,
-    );
 
     try {
       if (previousStatus === STATUS_DI.ReparationInPause.status) {

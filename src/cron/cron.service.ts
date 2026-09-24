@@ -16,6 +16,7 @@ import { ReunionPVService } from 'src/reunion-pv/reunion-pv.service';
 import { DbBackupService } from 'src/db-backup/db-backup.service';
 import { SessionCleanupService } from '../session-cleanup/session-cleanup.service';
 import { NotificationPurgeService } from '../notification-purge/notification-purge.service';
+import { ActionsEnCoursExportService } from 'src/actions-en-cours/actions-en-cours-export.service';
 
 /**
  * The 5 Discord channels of an environment, mapped to the EXACT env vars read
@@ -48,6 +49,7 @@ export class AppCronService {
     private readonly dbBackupService: DbBackupService,
     private readonly sessionCleanupService: SessionCleanupService,
     private readonly notificationPurgeService: NotificationPurgeService,
+    private readonly actionsEnCoursExportService: ActionsEnCoursExportService,
   ) {}
 
   /**
@@ -67,6 +69,9 @@ export class AppCronService {
         break;
       case 'SYNC_ACTIONS_EN_COURS':
         await this.triggerActionsEnCoursSync();
+        break;
+      case 'EXPORT_ACTIONS_EN_COURS':
+        await this.triggerActionsEnCoursExport();
         break;
       case 'SYNC_JIRA_DUE_SOON':
         await this.triggerJiraDueSoonSync();
@@ -254,7 +259,6 @@ export class AppCronService {
    */
   async triggerJiraTasksSync() {
     const res = await this.jiraCronNotificationService.syncTaches();
-    console.log('🥠[res]:', res);
     this.logger.log(
       `Jira tasks sync: fetched=${res.fetched} inserted=${res.inserted}` +
         (res.skipped ? ' (skipped: not configured)' : '') +
@@ -293,6 +297,35 @@ export class AppCronService {
     } catch (err) {
       this.logger.error(
         `Actions-en-cours snapshot sync failed: ${(err as Error).stack ?? err}`,
+      );
+    }
+  }
+
+  /**
+   * Onglet annuel du Google Sheet « ACTIONS EN COURS », réécrit à 12 h et 17 h
+   * Africa/Tunis. L'échec est déjà signalé sur Discord par le service ; il est
+   * avalé ici pour ne pas casser la boucle du scheduler.
+   */
+  @Cron('0 12,17 * * *', { timeZone: 'Africa/Tunis' })
+  async scheduledActionsEnCoursExport() {
+    try {
+      await this.triggerActionsEnCoursExport();
+    } catch (err) {
+      this.logger.error(
+        `Export ACTIONS EN COURS échoué : ${(err as Error).stack ?? err}`,
+      );
+    }
+  }
+
+  /**
+   * Trigger — EXPORT_ACTIONS_EN_COURS (`npm run action:export-actions-en-cours`).
+   * L'échec est RELANCÉ : le bootstrap ACTION sort en code 1.
+   */
+  async triggerActionsEnCoursExport() {
+    const res = await this.actionsEnCoursExportService.publish();
+    if (res) {
+      this.logger.log(
+        `ACTIONS EN COURS : « ${res.tabName} » réécrit · ${res.rows} DI · ${res.url}`,
       );
     }
   }

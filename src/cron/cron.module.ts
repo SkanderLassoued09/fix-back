@@ -17,6 +17,8 @@ import { DbBackupModule } from 'src/db-backup/db-backup.module';
 import { SessionCleanupModule } from '../session-cleanup/session-cleanup.module';
 // Consommé par `triggerNotificationPurge` (03 h Africa/Tunis).
 import { NotificationPurgeModule } from '../notification-purge/notification-purge.module';
+// Consommé par `triggerActionsEnCoursExport` (12 h / 17 h Africa/Tunis).
+import { ActionsEnCoursModule } from 'src/actions-en-cours/actions-en-cours.module';
 
 @Module({
   imports: [
@@ -39,6 +41,7 @@ import { NotificationPurgeModule } from '../notification-purge/notification-purg
     DbBackupModule,
     SessionCleanupModule,
     NotificationPurgeModule,
+    ActionsEnCoursModule,
     ScheduleModule.forRoot(),
   ],
   providers: [AppCronService, NotificationsGateway],

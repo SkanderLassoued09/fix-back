@@ -18,24 +18,15 @@ export const CurrentUser = createParamDecorator(
       const gqlCtx = GqlExecutionContext.create(context).getContext();
       const fromReq = gqlCtx?.req?.user;
       const fromCtx = gqlCtx?.user;
-      console.log(
-        '[CurrentUser] gqlCtx.req.user =',
-        JSON.stringify(fromReq),
-        ' gqlCtx.user =',
-        JSON.stringify(fromCtx),
-      );
       if (fromReq) return fromReq;
       if (fromCtx) return fromCtx;
-    } catch (e) {
-      console.log('[CurrentUser] not gql context:', (e as Error)?.message);
+    } catch {
+      // Pas un contexte GraphQL — on tente le repli REST ci-dessous.
     }
     // REST fallback (defensive — current app is GraphQL-only).
     try {
-      const httpUser = context.switchToHttp().getRequest()?.user;
-      console.log('[CurrentUser] http fallback user =', JSON.stringify(httpUser));
-      return httpUser;
+      return context.switchToHttp().getRequest()?.user;
     } catch {
-      console.log('[CurrentUser] returning undefined');
       return undefined;
     }
   },

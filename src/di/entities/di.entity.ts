@@ -77,6 +77,11 @@ export class DiDocument extends Document {
     string,
     { driveFileId: string; webViewLink: string; name: string }
   >;
+  // N° métier de chaque document (« 130/26 », BC client…), clé = DocType
+  // (Devis/BC/BL/Facture). À part de `driveDocs` : un numéro sans PDF (repris
+  // de l'ancien Excel) ne compte jamais comme document présent.
+  @Prop({ type: Object, default: {} })
+  docNumeros: Partial<Record<'Devis' | 'BC' | 'BL' | 'Facture', string>>;
   @Prop()
   // affected by magasin
   price: number;

@@ -120,6 +120,21 @@ export class StatService {
     });
   }
 
+  /**
+   * Filtre CANONIQUE d'une ligne Stat — le cycle est TOUJOURS dedans, **0
+   * compris**. Pendant exact de l'index unique `{_idDi, ignoreCount}` : un
+   * filtre qui le porte ne peut matcher qu'UNE ligne.
+   *
+   * Sans lui, `findOne({ _idDi })` rend l'ORDRE NATUREL — qui n'est même pas
+   * fiablement le plus ancien (mesuré : le plus ancien dans 41 cas sur 84) —
+   * donc le technicien d'un autre cycle, de façon intermittente. Les branches
+   * `cycle > 0 ? {...} : { _idDi }` laissaient précisément le flux original
+   * (cycle 0) non scopé.
+   */
+  private cycleFilter(_idDi: string, ignoreCount?: number | null) {
+    return { _idDi, ignoreCount: ignoreCount ?? 0 };
+  }
+
   async generateStatId(): Promise<number> {
     let indexStat = 0;
     const lastStat = await this.StatModel.findOne(
@@ -179,40 +194,58 @@ export class StatService {
       // affecté sur ce cycle (donc ayant abandonné) est refusé côté serveur.
       if (createStatInput.id_tech_diag) {
         const cycle = di?.ignoreCount ?? 0;
-        // `any` : le modèle est typé `Model<Stat>` (type GraphQL) alors que
-        // `diagAssignments` vit sur `StatDocument` (schéma) — cast localisé.
-        const existing: any = await this.StatModel.findOne(
-          cycle > 0
-            ? { _idDi: createStatInput._idDi, ignoreCount: cycle }
-            : { _idDi: createStatInput._idDi },
-        );
-        if (existing) {
-          const alreadyAssigned = (existing.diagAssignments ?? []).some(
-            (a) => a.tech === createStatInput.id_tech_diag,
-          );
-          if (alreadyAssigned) {
-            throw new ForbiddenException(
-              "Ce technicien a déjà été affecté à cette DI sur ce cycle et l'a abandonnée — choisissez un autre technicien.",
-            );
-          }
-          existing.id_tech_diag = createStatInput.id_tech_diag;
-          existing.diagAssignments = [
-            ...(existing.diagAssignments ?? []),
-            {
-              tech: createStatInput.id_tech_diag,
-              assignedAt: new Date(),
-              abandonedAt: null,
-              motif: null,
-              abandonedBy: null,
-              diagTimeStart: existing.diag_time ?? '00:00:00',
-              diagTime: null,
-            },
-          ];
-          existing.markModified('diagAssignments');
-          await existing.save();
+        const filter = this.cycleFilter(createStatInput._idDi, cycle);
+        const tech = createStatInput.id_tech_diag;
 
+        // Garde MÊME-TECH + écriture en UNE SEULE opération atomique.
+        //
+        // Avant : `findOne` → contrôle en mémoire → mutation → `save()`.
+        //   1. `save()` réécrit le document ENTIER sous garde de version, d'où
+        //      les `VersionError` (« No matching document found for id … ») et,
+        //      sous deux clics concurrents, la PERTE de l'entrée d'historique
+        //      de l'un des deux ;
+        //   2. la garde était une lecture SÉPARÉE de l'écriture : deux
+        //      affectations simultanées du même tech la passaient toutes deux.
+        //
+        // Ici `'diagAssignments.tech': { $ne: tech }` porte la garde DANS le
+        // filtre : Mongo ne peut pas l'évaluer puis se faire doubler. `$push`
+        // ajoute sans réécrire le tableau, donc deux affectations concurrentes
+        // se cumulent au lieu de s'écraser.
+        // Chrono déjà cumulé sur le cycle : point de départ imputé au nouveau
+        // technicien. Sert aussi à distinguer les deux sens d'un `null` plus bas.
+        const currentRow = await this.StatModel.findOne(filter).lean<any>();
+
+        const reassigned: any = await this.StatModel.findOneAndUpdate(
+          { ...filter, 'diagAssignments.tech': { $ne: tech } },
+          {
+            $set: { id_tech_diag: tech },
+            $push: {
+              diagAssignments: {
+                tech,
+                assignedAt: new Date(),
+                abandonedAt: null,
+                motif: null,
+                abandonedBy: null,
+                diagTimeStart: currentRow?.diag_time ?? '00:00:00',
+                diagTime: null,
+              },
+            },
+          },
+          { new: true },
+        );
+
+        // `null` recouvre deux cas DISTINCTS : soit la ligne du cycle existe et
+        // c'est la garde même-tech qui a mordu (→ refus), soit il n'y a pas
+        // encore de ligne pour ce cycle (→ création plus bas).
+        if (!reassigned && currentRow) {
+          throw new ForbiddenException(
+            "Ce technicien a déjà été affecté à cette DI sur ce cycle et l'a abandonnée — choisissez un autre technicien.",
+          );
+        }
+
+        if (reassigned) {
           const statWithStatusReassigned = {
-            ...existing.toObject(),
+            ...reassigned.toObject(),
             status: di?.status || null,
           };
           const reassignedProfile = await this.profileService.findProlileById(
@@ -447,33 +480,16 @@ export class StatService {
         throw new Error('Issue in finding di in send di to reparation');
       }
 
-      let result;
-      if (di && di.ignoreCount && di.ignoreCount > 0) {
-        result = await this.StatModel.updateOne(
-          { _idDi, ignoreCount: di.ignoreCount },
-          {
-            $set: {
-              id_tech_rep: _idTech,
-            },
-          },
-        );
-      } else {
-        result = await this.StatModel.updateOne(
-          { _idDi },
-          {
-            $set: {
-              id_tech_rep: _idTech,
-            },
-          },
-        );
-      }
-
-      // Cycle TOUJOURS dans le filtre (0 compris) : sans lui, Mongo rendait
-      // l'ordre naturel sur une DI multi-cycles.
-      const stat = await this.StatModel.findOne({
-        _idDi,
-        ignoreCount: di.ignoreCount ?? 0,
+      // Cycle TOUJOURS dans le filtre, 0 compris. La branche `else` d'avant
+      // écrivait sur `{ _idDi }` SEUL : sur une DI portant plusieurs lignes
+      // (`di.ignoreCount = 0` avec des lignes aux cycles 0, 1 et 2 — ça existe
+      // en base), le réparateur atterrissait sur une ligne arbitraire.
+      const filter = this.cycleFilter(_idDi, di.ignoreCount);
+      const result = await this.StatModel.updateOne(filter, {
+        $set: { id_tech_rep: _idTech },
       });
+
+      const stat = await this.StatModel.findOne(filter);
       const profile = await this.profileService.findProlileById(_idTech);
 
       this.notificationGateway.updateTicket({
@@ -1075,8 +1091,8 @@ export class StatService {
     abandonedBy: string,
   ): Promise<boolean> {
     await this.closeDiagLeg(_idDi, ignoreCount); // fige diag_time (cumulatif)
-    const filter = { _idDi, ignoreCount };
-    const stat: any = await this.StatModel.findOne(filter);
+    const filter = this.cycleFilter(_idDi, ignoreCount);
+    const stat: any = await this.StatModel.findOne(filter).lean();
     if (!stat) return false;
 
     const now = new Date();
@@ -1090,31 +1106,45 @@ export class StatService {
         break;
       }
     }
+    // Écriture CIBLÉE au lieu d'un `save()` du document entier : pas de garde
+    // de version (donc pas de `VersionError`), et un abandon concurrent ne peut
+    // plus écraser l'historique. Le `abandonedAt: null` dans le FILTRE rend
+    // l'opération idempotente : si l'entrée a déjà été clôturée entre-temps,
+    // rien n'est réécrit.
     if (openIdx >= 0) {
       const entry = list[openIdx];
       const contribMs = Math.max(
         0,
         cumulMs - StatService.hhmmssToMs(entry.diagTimeStart),
       );
-      entry.abandonedAt = now;
-      entry.motif = motif;
-      entry.abandonedBy = abandonedBy;
-      entry.diagTime = StatService.msToHhmmss(contribMs);
+      const at = `diagAssignments.${openIdx}`;
+      await this.StatModel.updateOne(
+        { ...filter, [`${at}.abandonedAt`]: null },
+        {
+          $set: {
+            [`${at}.abandonedAt`]: now,
+            [`${at}.motif`]: motif,
+            [`${at}.abandonedBy`]: abandonedBy,
+            [`${at}.diagTime`]: StatService.msToHhmmss(contribMs),
+          },
+        },
+      );
     } else {
       // Fallback (données héritées) : entrée clôturée depuis le tech courant.
-      list.push({
-        tech: stat.id_tech_diag,
-        assignedAt: (stat as any).createdAt ?? now,
-        abandonedAt: now,
-        motif,
-        abandonedBy,
-        diagTimeStart: '00:00:00',
-        diagTime: stat.diag_time ?? null,
+      await this.StatModel.updateOne(filter, {
+        $push: {
+          diagAssignments: {
+            tech: stat.id_tech_diag,
+            assignedAt: (stat as any).createdAt ?? now,
+            abandonedAt: now,
+            motif,
+            abandonedBy,
+            diagTimeStart: '00:00:00',
+            diagTime: stat.diag_time ?? null,
+          },
+        },
       });
     }
-    stat.diagAssignments = list;
-    stat.markModified('diagAssignments');
-    await stat.save();
     return true;
   }
 

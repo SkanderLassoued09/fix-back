@@ -2,6 +2,48 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { google, sheets_v4 } from 'googleapis';
 import { GoogleOAuthService } from '../google-auth/google-auth.service';
 
+/** Une cellule mise en forme pour `writeFormattedTab`. */
+export interface SheetCell {
+  value?: string | number | Date | null;
+  /** Couleur de fond `RRGGBB` (sans #). */
+  background?: string | null;
+  bold?: boolean;
+  fontSize?: number;
+  align?: 'LEFT' | 'CENTER' | 'RIGHT';
+  /** Texte qui déborde sur les cellules vides voisines au lieu de passer à la ligne. */
+  overflow?: boolean;
+  /** Liens DANS la cellule : chaque `text` doit apparaître dans `value`. */
+  links?: Array<{ text: string; url: string }>;
+}
+
+/** Mise en page d'un onglet réécrit par `writeFormattedTab`. */
+export interface SheetLayout {
+  frozenRows?: number;
+  frozenColumns?: number;
+  /** Largeur en pixels, par colonne (index 0 = A). */
+  columnWidths?: number[];
+  /** Fusions sur une ligne : colonnes [fromCol, toCol[ (0-based). */
+  merges?: Array<{ row: number; fromCol: number; toCol: number }>;
+  /** Ligne d'en-tête (0-based) du filtre ; filtre posé jusqu'à la dernière ligne. */
+  filterHeaderRow?: number;
+  /** Bordures fines sur les lignes [fromRow, fin[ et toutes les colonnes. */
+  bordersFromRow?: number;
+}
+
+/** Série Google Sheets (jours depuis 1899-12-30) d'une date « civile » UTC. */
+function toSheetSerial(d: Date): number {
+  return d.getTime() / 86400000 + 25569;
+}
+
+function hexColor(hex: string): sheets_v4.Schema$Color {
+  const h = hex.replace('#', '');
+  return {
+    red: parseInt(h.slice(0, 2), 16) / 255,
+    green: parseInt(h.slice(2, 4), 16) / 255,
+    blue: parseInt(h.slice(4, 6), 16) / 255,
+  };
+}
+
 /**
  * Thin client around the Google Sheets v4 API. Owns:
  *   - lazy authentication via the shared **OAuth 2.0** grant (same Gmail account
@@ -154,6 +196,261 @@ export class GoogleSheetsClient implements OnModuleInit {
       }),
     );
     this.logger.log(`replaceRows · ${tabName} · rows=${rows.length}`);
+  }
+
+  /**
+   * Réécrit ENTIÈREMENT un onglet — valeurs, couleurs, liens, mise en page — en
+   * UN SEUL `batchUpdate` (atomique : jamais d'onglet à moitié écrit visible).
+   *
+   * L'onglet est créé s'il manque. Cas particulier : un classeur neuf dont le
+   * seul onglet est l'onglet par défaut VIDE (« Sheet1 » / « Feuille 1 ») est
+   * RENOMMÉ plutôt que laissé à côté. Rien d'autre du classeur n'est touché.
+   * Retourne le `sheetId` (gid) de l'onglet.
+   */
+  async writeFormattedTab(
+    spreadsheetId: string,
+    tabName: string,
+    grid: SheetCell[][],
+    layout: SheetLayout = {},
+  ): Promise<number> {
+    const sheets = await this.ensureClient();
+    const sheetId = await this.ensureNamedTab(sheets, spreadsheetId, tabName);
+
+    const meta = await this.callWithRetry(`get grid ${tabName}`, () =>
+      sheets.spreadsheets.get({
+        spreadsheetId,
+        fields: 'sheets(properties(sheetId,gridProperties),basicFilter)',
+      }),
+    );
+    const sheet = meta.data.sheets?.find(
+      (s) => s.properties?.sheetId === sheetId,
+    );
+    const gridRows = sheet?.properties?.gridProperties?.rowCount ?? 1000;
+    const gridCols = sheet?.properties?.gridProperties?.columnCount ?? 26;
+    const numCols = Math.max(1, ...grid.map((r) => r.length));
+
+    const requests: sheets_v4.Schema$Request[] = [];
+    // Place pour toutes les lignes (+ marge) et colonnes.
+    if (grid.length + 20 > gridRows || numCols > gridCols) {
+      requests.push({
+        updateSheetProperties: {
+          properties: {
+            sheetId,
+            gridProperties: {
+              rowCount: Math.max(gridRows, grid.length + 50),
+              columnCount: Math.max(gridCols, numCols),
+            },
+          },
+          fields: 'gridProperties(rowCount,columnCount)',
+        },
+      });
+    }
+    // Remise à zéro : fusions, filtre, puis valeurs + formats de TOUT l'onglet
+    // (sinon les lignes d'une DI supprimée resteraient sous la dernière ligne).
+    requests.push({ unmergeCells: { range: { sheetId } } });
+    if (sheet?.basicFilter) requests.push({ clearBasicFilter: { sheetId } });
+    requests.push({
+      updateCells: {
+        range: { sheetId },
+        fields: 'userEnteredValue,userEnteredFormat,textFormatRuns',
+      },
+    });
+    requests.push({
+      updateCells: {
+        start: { sheetId, rowIndex: 0, columnIndex: 0 },
+        rows: grid.map((row) => ({ values: row.map((c) => this.toCellData(c)) })),
+        fields: 'userEnteredValue,userEnteredFormat,textFormatRuns',
+      },
+    });
+
+    for (const m of layout.merges ?? []) {
+      requests.push({
+        mergeCells: {
+          range: {
+            sheetId,
+            startRowIndex: m.row,
+            endRowIndex: m.row + 1,
+            startColumnIndex: m.fromCol,
+            endColumnIndex: m.toCol,
+          },
+          mergeType: 'MERGE_ALL',
+        },
+      });
+    }
+    if (typeof layout.bordersFromRow === 'number' && grid.length > layout.bordersFromRow) {
+      const thin = { style: 'SOLID', color: hexColor('000000') };
+      requests.push({
+        updateBorders: {
+          range: {
+            sheetId,
+            startRowIndex: layout.bordersFromRow,
+            endRowIndex: grid.length,
+            startColumnIndex: 0,
+            endColumnIndex: numCols,
+          },
+          top: thin,
+          bottom: thin,
+          left: thin,
+          right: thin,
+          innerHorizontal: thin,
+          innerVertical: thin,
+        },
+      });
+    }
+    requests.push({
+      updateSheetProperties: {
+        properties: {
+          sheetId,
+          gridProperties: {
+            frozenRowCount: layout.frozenRows ?? 0,
+            frozenColumnCount: layout.frozenColumns ?? 0,
+          },
+        },
+        fields: 'gridProperties(frozenRowCount,frozenColumnCount)',
+      },
+    });
+    (layout.columnWidths ?? []).forEach((px, i) => {
+      requests.push({
+        updateDimensionProperties: {
+          range: { sheetId, dimension: 'COLUMNS', startIndex: i, endIndex: i + 1 },
+          properties: { pixelSize: px },
+          fields: 'pixelSize',
+        },
+      });
+    });
+    if (typeof layout.filterHeaderRow === 'number' && grid.length > layout.filterHeaderRow) {
+      requests.push({
+        setBasicFilter: {
+          filter: {
+            range: {
+              sheetId,
+              startRowIndex: layout.filterHeaderRow,
+              endRowIndex: grid.length,
+              startColumnIndex: 0,
+              endColumnIndex: numCols,
+            },
+          },
+        },
+      });
+    }
+
+    await this.callWithRetry(`write formatted ${tabName}`, () =>
+      sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } }),
+    );
+    this.logger.log(`writeFormattedTab · ${tabName} · rows=${grid.length}`);
+    return sheetId;
+  }
+
+  /** Onglet `tabName` → son sheetId ; le crée (ou renomme l'onglet par défaut
+   *  VIDE d'un classeur neuf) s'il manque. */
+  private async ensureNamedTab(
+    sheets: sheets_v4.Sheets,
+    spreadsheetId: string,
+    tabName: string,
+  ): Promise<number> {
+    const meta = await this.callWithRetry('get tabs', () =>
+      sheets.spreadsheets.get({
+        spreadsheetId,
+        fields: 'sheets.properties(sheetId,title)',
+      }),
+    );
+    const tabs = (meta.data.sheets ?? []).map((s) => s.properties ?? {});
+    const found = tabs.find((t) => t.title === tabName);
+    if (typeof found?.sheetId === 'number') return found.sheetId;
+
+    const only = tabs.length === 1 ? tabs[0] : null;
+    if (
+      only &&
+      typeof only.sheetId === 'number' &&
+      /^(Sheet1|Feuille 1|Feuil1)$/i.test(only.title ?? '')
+    ) {
+      const probe = await this.callWithRetry('probe default tab', () =>
+        sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `'${only.title}'!A1:Z20`,
+        }),
+      );
+      if (!(probe.data.values ?? []).length) {
+        await this.callWithRetry(`rename default tab → ${tabName}`, () =>
+          sheets.spreadsheets.batchUpdate({
+            spreadsheetId,
+            requestBody: {
+              requests: [
+                {
+                  updateSheetProperties: {
+                    properties: { sheetId: only.sheetId, title: tabName },
+                    fields: 'title',
+                  },
+                },
+              ],
+            },
+          }),
+        );
+        this.logger.log(`Renamed empty default tab "${only.title}" → "${tabName}"`);
+        return only.sheetId;
+      }
+    }
+
+    const res = await this.callWithRetry(`add tab ${tabName}`, () =>
+      sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: [{ addSheet: { properties: { title: tabName } } }] },
+      }),
+    );
+    const id = res.data.replies?.[0]?.addSheet?.properties?.sheetId;
+    if (typeof id !== 'number') throw new Error(`addSheet "${tabName}" sans sheetId`);
+    this.logger.log(`Created tab "${tabName}" (${id})`);
+    return id;
+  }
+
+  private toCellData(c: SheetCell): sheets_v4.Schema$CellData {
+    const fmt: sheets_v4.Schema$CellFormat = {
+      verticalAlignment: 'MIDDLE',
+      wrapStrategy: c.overflow ? 'OVERFLOW_CELL' : 'WRAP',
+    };
+    if (c.background) fmt.backgroundColor = hexColor(c.background);
+    if (c.align) fmt.horizontalAlignment = c.align;
+    if (c.bold || c.fontSize) {
+      fmt.textFormat = {
+        ...(c.bold ? { bold: true } : {}),
+        ...(c.fontSize ? { fontSize: c.fontSize } : {}),
+      };
+    }
+    const cell: sheets_v4.Schema$CellData = { userEnteredFormat: fmt };
+    const v = c.value;
+    if (v instanceof Date) {
+      cell.userEnteredValue = { numberValue: toSheetSerial(v) };
+      fmt.numberFormat = { type: 'DATE', pattern: 'dd/mm/yyyy' };
+    } else if (typeof v === 'number') {
+      cell.userEnteredValue = { numberValue: v };
+    } else if (v !== null && v !== undefined && v !== '') {
+      const text = String(v);
+      cell.userEnteredValue = { stringValue: text };
+      const runs = this.linkRuns(text, c.links ?? []);
+      if (runs.length) cell.textFormatRuns = runs;
+    }
+    return cell;
+  }
+
+  /** Runs de lien : chaque `text` lié à son url, le reste sans lien. */
+  private linkRuns(
+    text: string,
+    links: Array<{ text: string; url: string }>,
+  ): sheets_v4.Schema$TextFormatRun[] {
+    const runs: sheets_v4.Schema$TextFormatRun[] = [];
+    let from = 0;
+    for (const l of links) {
+      const at = text.indexOf(l.text, from);
+      if (at < 0 || !l.url) continue;
+      if (at > from) runs.push({ startIndex: from, format: {} });
+      runs.push({ startIndex: at, format: { link: { uri: l.url } } });
+      from = at + l.text.length;
+    }
+    if (runs.length && from < text.length) runs.push({ startIndex: from, format: {} });
+    // L'API refuse un run qui démarre à la fin du texte, ou deux runs au même index.
+    return runs.filter(
+      (r, i) => (r.startIndex ?? 0) < text.length && runs.findIndex((x) => x.startIndex === r.startIndex) === i,
+    );
   }
 
   /**

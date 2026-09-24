@@ -125,6 +125,11 @@ export class DiLogsDocument extends Document {
     string,
     { driveFileId: string; webViewLink: string; name: string }
   >;
+  // N° métier de chaque document (« 130/26 », BC client…), clé = DocType
+  // (Devis/BC/BL/Facture). À part de `driveDocs` : un numéro sans PDF (repris
+  // de l'ancien Excel) ne compte jamais comme document présent.
+  @Prop({ type: Object, default: {} })
+  docNumeros: Partial<Record<'Devis' | 'BC' | 'BL' | 'Facture', string>>;
 
   // Bornes du cycle. `closedAt` est pose a l'ouverture du cycle SUIVANT : il
   // rend verifiable l'invariant « on n'ecrit jamais dans un cycle clos ».

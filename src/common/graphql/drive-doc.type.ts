@@ -21,4 +21,7 @@ export class DriveDoc {
   name: string;
   @Field({ nullable: true })
   webViewLink: string;
+  // N° métier saisi à l'upload (« 130/26 ») — `docNumeros.<type>`.
+  @Field({ nullable: true })
+  numero?: string;
 }

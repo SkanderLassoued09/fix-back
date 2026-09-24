@@ -661,18 +661,11 @@ export class DiResolver {
   ) {
     // Resume-into-repair is a tech work-action → assignee only.
     await this.statService.assertTechOwnsDi(_id, user, 'rep');
-    // TEMP-LOG: trace resume mutation entry to confirm the resolver fires
-    // and that the `_id` arrived intact from the GraphQL query.
-    console.log('[changeStatusInRepair][resolver] called with _id=', _id);
     try {
       // Properly await the service so any error surfaces to the GraphQL
       // response instead of being swallowed. The previous fire-and-forget
       // shape returned `true` immediately even when the service threw.
       const result = await this.diService.changeStatusInRepair(_id);
-      console.log(
-        '[changeStatusInRepair][resolver] success status=',
-        (result as any)?.status,
-      );
       return !!result;
     } catch (err) {
       console.error('[changeStatusInRepair][resolver] error:', err);

@@ -1367,6 +1367,51 @@ export class DiscordHookService {
   }
 
   /**
+   * EXPORT « ACTIONS EN COURS » (12 h / 17 h) ÉCHOUÉ. Seul l'échec part sur
+   * Discord : deux lignes de succès par jour seraient du bruit, et le fichier
+   * qui remplace l'Excel papier ne doit jamais cesser de se mettre à jour en
+   * silence.
+   */
+  async sendActionsEnCoursExportFailure(info: {
+    reason: string;
+    fileName?: string;
+    env?: string;
+  }): Promise<void> {
+    const envUpper = (info.env || process.env.NODE_ENV || 'development')
+      .trim()
+      .toUpperCase();
+    const when = new Intl.DateTimeFormat('fr-FR', {
+      timeZone: process.env.APP_TIMEZONE || 'Africa/Tunis',
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(new Date());
+
+    await this.deliverEmbed('APP_ALERT', {
+      embeds: [
+        {
+          title: `🚨 ÉCHEC export ACTIONS EN COURS — [${envUpper}]`,
+          description: `Le fichier Drive n'a PAS été mis à jour · ${when} (Africa/Tunis).`,
+          color: 15158332, // red
+          fields: [
+            {
+              name: '📄 Fichier',
+              value: info.fileName || 'inconnu',
+              inline: true,
+            },
+            {
+              name: '❌ Motif',
+              value: (info.reason || 'inconnu').slice(0, 1024),
+              inline: false,
+            },
+          ],
+          footer: { text: 'Fixtronix · Export ACTIONS EN COURS' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+  }
+
+  /**
    * Operational stagnation alert. Reads everything from the persisted
    * alert document — no Di / Profile / Company lookups needed, so this
    * works inside the ACTION runtime with the same fidelity as the
