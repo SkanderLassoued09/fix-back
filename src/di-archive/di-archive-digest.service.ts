@@ -5,6 +5,7 @@ import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { DiArchiveDocument } from './entities/di-archive.entity';
 import { DigestSnapshotDocument } from './entities/digest-snapshot.entity';
 import { isDocMissing } from './di-archive-filter.util';
+import { withErrorContext } from '../common/error-context';
 
 // The « document manquant » rule now lives in `di-archive-filter.util` so the
 // digest AND the /archives filter share ONE definition. Re-exported here to keep
@@ -63,117 +64,121 @@ export class DiArchiveDigestService {
     trendWeek: number | null; // sevenDaysAgo − today (positive = improvement)
     posted: boolean;
   }> {
-    // ── 1. Read metrics ────────────────────────────────────────────
-    // Single pass over the whole collection. `.lean()` returns plain
-    // objects (no Mongoose overhead) and we project only the 4 text refs
-    // we need — the `DriveDocRef` slots are intentionally IGNORED here
-    // (uploads are tracked by a separate future job).
-    //
-    // Read-only: no writes on DiArchive anywhere in this flow.
-    const rows = await this.diArchiveModel
-      .find({}, { bcRef: 1, blRef: 1, devisRef: 1, factureRef: 1 })
-      .lean();
+    try {
+      // ── 1. Read metrics ────────────────────────────────────────────
+      // Single pass over the whole collection. `.lean()` returns plain
+      // objects (no Mongoose overhead) and we project only the 4 text refs
+      // we need — the `DriveDocRef` slots are intentionally IGNORED here
+      // (uploads are tracked by a separate future job).
+      //
+      // Read-only: no writes on DiArchive anywhere in this flow.
+      const rows = await this.diArchiveModel
+        .find({}, { bcRef: 1, blRef: 1, devisRef: 1, factureRef: 1 })
+        .lean();
 
-    const total = rows.length;
-    const missing = { bc: 0, bl: 0, devis: 0, facture: 0 };
-    let totalIncompletes = 0;
-    for (const r of rows as Array<any>) {
-      // Per-doc missing → per-doc counter (the 4 counters can and should
-      // differ, because the missing pattern is different per column).
-      const bcMissing = isDocMissing(r?.bcRef);
-      const blMissing = isDocMissing(r?.blRef);
-      const devisMissing = isDocMissing(r?.devisRef);
-      const factureMissing = isDocMissing(r?.factureRef);
-      if (bcMissing) missing.bc++;
-      if (blMissing) missing.bl++;
-      if (devisMissing) missing.devis++;
-      if (factureMissing) missing.facture++;
-      // Complétude d'une DI : au moins un manquant ⇒ INCOMPLET.
-      if (bcMissing || blMissing || devisMissing || factureMissing) {
-        totalIncompletes++;
+      const total = rows.length;
+      const missing = { bc: 0, bl: 0, devis: 0, facture: 0 };
+      let totalIncompletes = 0;
+      for (const r of rows as Array<any>) {
+        // Per-doc missing → per-doc counter (the 4 counters can and should
+        // differ, because the missing pattern is different per column).
+        const bcMissing = isDocMissing(r?.bcRef);
+        const blMissing = isDocMissing(r?.blRef);
+        const devisMissing = isDocMissing(r?.devisRef);
+        const factureMissing = isDocMissing(r?.factureRef);
+        if (bcMissing) missing.bc++;
+        if (blMissing) missing.bl++;
+        if (devisMissing) missing.devis++;
+        if (factureMissing) missing.facture++;
+        // Complétude d'une DI : au moins un manquant ⇒ INCOMPLET.
+        if (bcMissing || blMissing || devisMissing || factureMissing) {
+          totalIncompletes++;
+        }
       }
-    }
 
-    // Guard division-by-zero: empty archive = trivially 100% complete.
-    const completudePct =
-      total === 0 ? 100 : Math.round(((total - totalIncompletes) / total) * 100);
+      // Guard division-by-zero: empty archive = trivially 100% complete.
+      const completudePct =
+        total === 0 ? 100 : Math.round(((total - totalIncompletes) / total) * 100);
 
-    // ── 2. Fetch trend snapshots ───────────────────────────────────
-    const todayKey = this.startOfTunisDay(new Date());
-    const yesterdayKey = new Date(todayKey.getTime() - 24 * 60 * 60 * 1000);
-    const weekAgoKey = new Date(todayKey.getTime() - 7 * 24 * 60 * 60 * 1000);
+      // ── 2. Fetch trend snapshots ───────────────────────────────────
+      const todayKey = this.startOfTunisDay(new Date());
+      const yesterdayKey = new Date(todayKey.getTime() - 24 * 60 * 60 * 1000);
+      const weekAgoKey = new Date(todayKey.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-    // Day trend: most-recent snapshot strictly before today. Even if the
-    // cron missed a day, the previous existing snapshot still yields a
-    // meaningful "depuis hier" delta (the label stays « depuis hier » per
-    // spec; users understand it as « depuis la dernière mesure »).
-    const previous = await this.snapshotModel
-      .findOne({ date: { $lt: todayKey } })
-      .sort({ date: -1 })
-      .lean();
-    const trendDay =
-      previous != null ? previous.totalIncompletes - totalIncompletes : null;
+      // Day trend: most-recent snapshot strictly before today. Even if the
+      // cron missed a day, the previous existing snapshot still yields a
+      // meaningful "depuis hier" delta (the label stays « depuis hier » per
+      // spec; users understand it as « depuis la dernière mesure »).
+      const previous = await this.snapshotModel
+        .findOne({ date: { $lt: todayKey } })
+        .sort({ date: -1 })
+        .lean();
+      const trendDay =
+        previous != null ? previous.totalIncompletes - totalIncompletes : null;
 
-    // Week trend: the nearest snapshot within (weekAgo ≤ date < today).
-    // We pick the OLDEST match so ~7d back is closest to "a week ago"
-    // even if the exact day is missing.
-    const weekSnap = await this.snapshotModel
-      .findOne({ date: { $gte: weekAgoKey, $lt: todayKey } })
-      .sort({ date: 1 })
-      .lean();
-    const trendWeek =
-      weekSnap != null ? weekSnap.totalIncompletes - totalIncompletes : null;
+      // Week trend: the nearest snapshot within (weekAgo ≤ date < today).
+      // We pick the OLDEST match so ~7d back is closest to "a week ago"
+      // even if the exact day is missing.
+      const weekSnap = await this.snapshotModel
+        .findOne({ date: { $gte: weekAgoKey, $lt: todayKey } })
+        .sort({ date: 1 })
+        .lean();
+      const trendWeek =
+        weekSnap != null ? weekSnap.totalIncompletes - totalIncompletes : null;
 
-    // ── 3. Build embed description (code block for alignment) ──────
-    const description = this.buildDescription({
-      total,
-      totalIncompletes,
-      completudePct,
-      missing,
-      trendDay,
-      trendWeek,
-    });
+      // ── 3. Build embed description (code block for alignment) ──────
+      const description = this.buildDescription({
+        total,
+        totalIncompletes,
+        completudePct,
+        missing,
+        trendDay,
+        trendWeek,
+      });
 
-    // Sender TYPÉ et HORS GATE : ce digest n'a aucun autre canal (ni cloche,
-    // ni journal). Il passait par `postEmbed`, donc coupé par le gate Discord :
-    // le cron tournait, calculait, et ne publiait rien.
-    await this.discord.sendDiArchiveDigest(description);
+      // Sender TYPÉ et HORS GATE : ce digest n'a aucun autre canal (ni cloche,
+      // ni journal). Il passait par `postEmbed`, donc coupé par le gate Discord :
+      // le cron tournait, calculait, et ne publiait rien.
+      await this.discord.sendDiArchiveDigest(description);
 
-    // ── 4. Upsert today's snapshot (idempotent, ONLY write) ────────
-    // findOneAndUpdate with upsert:true is atomic + idempotent; a second
-    // run today mutates the same doc via the unique `date` index.
-    await this.snapshotModel.updateOne(
-      { date: todayKey },
-      {
-        $set: {
-          totalDiArchive: total,
-          totalIncompletes,
-          completudePct,
-          missingFacture: missing.facture,
-          missingBc: missing.bc,
-          missingBl: missing.bl,
-          missingDevis: missing.devis,
+      // ── 4. Upsert today's snapshot (idempotent, ONLY write) ────────
+      // findOneAndUpdate with upsert:true is atomic + idempotent; a second
+      // run today mutates the same doc via the unique `date` index.
+      await this.snapshotModel.updateOne(
+        { date: todayKey },
+        {
+          $set: {
+            totalDiArchive: total,
+            totalIncompletes,
+            completudePct,
+            missingFacture: missing.facture,
+            missingBc: missing.bc,
+            missingBl: missing.bl,
+            missingDevis: missing.devis,
+          },
+          $setOnInsert: { date: todayKey },
         },
-        $setOnInsert: { date: todayKey },
-      },
-      { upsert: true },
-    );
+        { upsert: true },
+      );
 
-    this.logger.log(
-      `DiArchive digest sent: total=${total} incompletes=${totalIncompletes} pct=${completudePct}% ` +
-        `facture=${missing.facture} bc=${missing.bc} bl=${missing.bl} devis=${missing.devis} ` +
-        `trendDay=${trendDay ?? 'n/a'} trendWeek=${trendWeek ?? 'n/a'}`,
-    );
+      this.logger.log(
+        `DiArchive digest sent: total=${total} incompletes=${totalIncompletes} pct=${completudePct}% ` +
+          `facture=${missing.facture} bc=${missing.bc} bl=${missing.bl} devis=${missing.devis} ` +
+          `trendDay=${trendDay ?? 'n/a'} trendWeek=${trendWeek ?? 'n/a'}`,
+      );
 
-    return {
-      total,
-      totalIncompletes,
-      completudePct,
-      missing,
-      trendDay,
-      trendWeek,
-      posted: true,
-    };
+      return {
+        total,
+        totalIncompletes,
+        completudePct,
+        missing,
+        trendDay,
+        trendWeek,
+        posted: true,
+      };
+    } catch (error) {
+      throw withErrorContext(error, 'DiArchiveDigestService.buildAndSend');
+    }
   }
 
   // ── Description builder ──────────────────────────────────────────
@@ -186,79 +191,87 @@ export class DiArchiveDigestService {
     trendDay: number | null;
     trendWeek: number | null;
   }): string {
-    const {
-      total,
-      totalIncompletes,
-      completudePct,
-      missing,
-      trendDay,
-      trendWeek,
-    } = input;
-    const complete = total - totalIncompletes;
-    const sep = '━'.repeat(30);
+    try {
+      const {
+        total,
+        totalIncompletes,
+        completudePct,
+        missing,
+        trendDay,
+        trendWeek,
+      } = input;
+      const complete = total - totalIncompletes;
+      const sep = '━'.repeat(30);
 
-    // ✅ / ⚠️ header emoji reacts to the completion percentage. Kept in
-    // the description (not the embed color) so it never fights the amber
-    // brand.
-    const headerEmoji = completudePct >= 90 ? '✅' : completudePct >= 70 ? '🟡' : '⚠️';
+      // ✅ / ⚠️ header emoji reacts to the completion percentage. Kept in
+      // the description (not the embed color) so it never fights the amber
+      // brand.
+      const headerEmoji = completudePct >= 90 ? '✅' : completudePct >= 70 ? '🟡' : '⚠️';
 
-    const arrow = this.formatDayArrow(trendDay);
+      const arrow = this.formatDayArrow(trendDay);
 
-    // The breakdown lines live inside a ``` block so Discord renders
-    // them in monospace and the dot-padding stays aligned.
-    const line = (
-      emoji: string,
-      label: string,
-      count: number,
-      suffix = '',
-    ): string => {
-      const dots = '.'.repeat(
-        Math.max(1, DiArchiveDigestService.LABEL_WIDTH - label.length),
-      );
-      const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
-      const countCol = String(count).padStart(4, ' ');
-      return `${emoji} ${label} ${dots} ${countCol} (${pct}%)${suffix ? '  ' + suffix : ''}`;
-    };
+      // The breakdown lines live inside a ``` block so Discord renders
+      // them in monospace and the dot-padding stays aligned.
+      const line = (
+        emoji: string,
+        label: string,
+        count: number,
+        suffix = '',
+      ): string => {
+        const dots = '.'.repeat(
+          Math.max(1, DiArchiveDigestService.LABEL_WIDTH - label.length),
+        );
+        const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
+        const countCol = String(count).padStart(4, ' ');
+        return `${emoji} ${label} ${dots} ${countCol} (${pct}%)${suffix ? '  ' + suffix : ''}`;
+      };
 
-    const parts: string[] = [];
-    parts.push(sep);
-    parts.push(`${headerEmoji} Complétude globale : ${completudePct}% (${complete}/${total})`);
+      const parts: string[] = [];
+      parts.push(sep);
+      parts.push(`${headerEmoji} Complétude globale : ${completudePct}% (${complete}/${total})`);
 
-    if (totalIncompletes > 0) {
-      parts.push(`📉 ${totalIncompletes} DI incomplètes  ${arrow}`);
-    } else {
-      parts.push('🎉 0 DI incomplète');
-    }
-    parts.push('');
-    parts.push('Répartition des manquants :');
-    parts.push('```');
-    parts.push(
-      line('🔴', 'Facture', missing.facture, '⚠️ facturation à risque'),
-    );
-    parts.push(line('🟠', 'BC', missing.bc));
-    parts.push(line('🟠', 'BL', missing.bl));
-    parts.push(line('🟡', 'Devis', missing.devis));
-    parts.push('```');
-
-    // Weekly progress — only when we have a positive delta (business win).
-    // A negative or zero delta gets omitted per spec ("adapter le message
-    // ou l'omettre") — silence is preferable to celebrating a regression.
-    if (trendWeek != null && trendWeek > 0) {
+      if (totalIncompletes > 0) {
+        parts.push(`📉 ${totalIncompletes} DI incomplètes  ${arrow}`);
+      } else {
+        parts.push('🎉 0 DI incomplète');
+      }
+      parts.push('');
+      parts.push('Répartition des manquants :');
+      parts.push('```');
       parts.push(
-        `🎯 En bonne voie : ${trendWeek} DI complétée${trendWeek > 1 ? 's' : ''} cette semaine`,
+        line('🔴', 'Facture', missing.facture, '⚠️ facturation à risque'),
       );
-    }
-    parts.push(sep);
+      parts.push(line('🟠', 'BC', missing.bc));
+      parts.push(line('🟠', 'BL', missing.bl));
+      parts.push(line('🟡', 'Devis', missing.devis));
+      parts.push('```');
 
-    return parts.join('\n').slice(0, 2000); // Discord description hard cap
+      // Weekly progress — only when we have a positive delta (business win).
+      // A negative or zero delta gets omitted per spec ("adapter le message
+      // ou l'omettre") — silence is preferable to celebrating a regression.
+      if (trendWeek != null && trendWeek > 0) {
+        parts.push(
+          `🎯 En bonne voie : ${trendWeek} DI complétée${trendWeek > 1 ? 's' : ''} cette semaine`,
+        );
+      }
+      parts.push(sep);
+
+      return parts.join('\n').slice(0, 2000); // Discord description hard cap
+    } catch (error) {
+      throw withErrorContext(error, 'DiArchiveDigestService.buildDescription');
+    }
   }
 
   /** Day-over-day arrow. Positive delta = fewer incompletes = improvement (▼). */
   private formatDayArrow(delta: number | null): string {
-    if (delta == null) return '(première mesure)';
-    if (delta === 0) return '(= depuis hier)';
-    if (delta > 0) return `▼ ${delta} depuis hier`;
-    return `▲ ${Math.abs(delta)} depuis hier`;
+    try {
+      if (delta == null) return '(première mesure)';
+      if (delta === 0) return '(= depuis hier)';
+      if (delta > 0) return `▼ ${delta} depuis hier`;
+      return `▲ ${Math.abs(delta)} depuis hier`;
+    } catch (error) {
+      throw withErrorContext(error, 'DiArchiveDigestService.formatDayArrow');
+    }
   }
 
   /**
@@ -267,20 +280,24 @@ export class DiArchiveDigestService {
    * Hardcoded so we don't depend on an external tz library.
    */
   private startOfTunisDay(now: Date): Date {
-    const TUNIS_OFFSET_MIN = 60;
-    // Shift into Tunis time, floor to start of that day, shift back to UTC.
-    const shifted = new Date(now.getTime() + TUNIS_OFFSET_MIN * 60_000);
-    const shiftedMidnight = new Date(
-      Date.UTC(
-        shifted.getUTCFullYear(),
-        shifted.getUTCMonth(),
-        shifted.getUTCDate(),
-        0,
-        0,
-        0,
-        0,
-      ),
-    );
-    return new Date(shiftedMidnight.getTime() - TUNIS_OFFSET_MIN * 60_000);
+    try {
+      const TUNIS_OFFSET_MIN = 60;
+      // Shift into Tunis time, floor to start of that day, shift back to UTC.
+      const shifted = new Date(now.getTime() + TUNIS_OFFSET_MIN * 60_000);
+      const shiftedMidnight = new Date(
+        Date.UTC(
+          shifted.getUTCFullYear(),
+          shifted.getUTCMonth(),
+          shifted.getUTCDate(),
+          0,
+          0,
+          0,
+          0,
+        ),
+      );
+      return new Date(shiftedMidnight.getTime() - TUNIS_OFFSET_MIN * 60_000);
+    } catch (error) {
+      throw withErrorContext(error, 'DiArchiveDigestService.startOfTunisDay');
+    }
   }
 }

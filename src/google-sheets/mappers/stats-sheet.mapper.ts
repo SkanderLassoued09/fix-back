@@ -5,6 +5,7 @@ import { DiDocument } from 'src/di/entities/di.entity';
 import { StatDocument } from 'src/stat/entities/stat.entity';
 import { formatDateForSheet } from '../utils/format.util';
 import { IGoogleSheetMapper } from './google-sheet-mapper.interface';
+import { withErrorContext } from '../../common/error-context';
 
 /**
  * Daily aggregated KPI row written to a separate tab. Demonstrates the
@@ -42,48 +43,52 @@ export class StatsSheetMapper
   ) {}
 
   async fetch(): Promise<StatsSheetMapper.AggregateRow[]> {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const base = { isDeleted: { $ne: true } };
+    try {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const base = { isDeleted: { $ne: true } };
 
-    const [createdToday, finishedToday, inProgress, paused, statsTotal] =
-      await Promise.all([
-        this.diModel.countDocuments({ ...base, createdAt: { $gte: since } }),
-        this.diModel.countDocuments({
-          ...base,
-          status: 'FINISHED',
-          updatedAt: { $gte: since },
-        }),
-        this.diModel.countDocuments({
-          ...base,
-          status: {
-            $nin: [
-              'CREATED',
-              'FINISHED',
-              'IRREPARABLE',
-              'ANNULER',
-              'RETOUR1',
-              'RETOUR2',
-              'RETOUR3',
-            ],
-          },
-        }),
-        this.diModel.countDocuments({
-          ...base,
-          status: { $in: ['DIAGNOSTIC_Pause', 'REPARATION_Pause'] },
-        }),
-        this.statModel.estimatedDocumentCount(),
-      ]);
+      const [createdToday, finishedToday, inProgress, paused, statsTotal] =
+        await Promise.all([
+          this.diModel.countDocuments({ ...base, createdAt: { $gte: since } }),
+          this.diModel.countDocuments({
+            ...base,
+            status: 'FINISHED',
+            updatedAt: { $gte: since },
+          }),
+          this.diModel.countDocuments({
+            ...base,
+            status: {
+              $nin: [
+                'CREATED',
+                'FINISHED',
+                'IRREPARABLE',
+                'ANNULER',
+                'RETOUR1',
+                'RETOUR2',
+                'RETOUR3',
+              ],
+            },
+          }),
+          this.diModel.countDocuments({
+            ...base,
+            status: { $in: ['DIAGNOSTIC_Pause', 'REPARATION_Pause'] },
+          }),
+          this.statModel.estimatedDocumentCount(),
+        ]);
 
-    return [
-      {
-        date: new Date(),
-        createdToday,
-        finishedToday,
-        inProgress,
-        paused,
-        statsTotal,
-      },
-    ];
+      return [
+        {
+          date: new Date(),
+          createdToday,
+          finishedToday,
+          inProgress,
+          paused,
+          statsTotal,
+        },
+      ];
+    } catch (error) {
+      throw withErrorContext(error, 'StatsSheetMapper.fetch');
+    }
   }
 
   mapToSheetRow(r: StatsSheetMapper.AggregateRow): (string | number)[] {
@@ -105,9 +110,13 @@ export class StatsSheetMapper
   }
 
   uniqueKey(r: StatsSheetMapper.AggregateRow): string {
-    // One snapshot per calendar day — natural dedupe target.
-    const d = r.date;
-    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+    try {
+      // One snapshot per calendar day — natural dedupe target.
+      const d = r.date;
+      return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+    } catch (error) {
+      throw withErrorContext(error, 'StatsSheetMapper.uniqueKey');
+    }
   }
 }
 

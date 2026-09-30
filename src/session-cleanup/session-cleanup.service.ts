@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Profile, ProfileDocument } from '../profile/entities/profile.entity';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * LIBÉRATION NOCTURNE DES SESSIONS — remet `isConnected` à `false` sur tous les
@@ -35,24 +36,28 @@ export class SessionCleanupService {
    * Libère les sessions bloquées. Retourne un résumé pour le log du cron.
    */
   async run(): Promise<{ released: number }> {
-    this.logger.log('START libération des sessions bloquées');
+    try {
+      this.logger.log('START libération des sessions bloquées');
 
-    // ⚠️ Le filtre `{ isConnected: true }` est INDISPENSABLE — ne jamais le
-    // remplacer par `{}`. Mongoose applique `timestamps` aux `updateMany`, donc
-    // un filtre vide réécrirait `updatedAt` sur TOUS les profils chaque nuit :
-    // on détruirait le seul indicateur d'ancienneté de session dont on dispose
-    // (il n'existe pas de `connectedAt`). Le filtre rend en prime
-    // `modifiedCount` significatif — c'est le nombre réel de comptes libérés.
-    //
-    // Les comptes en suppression logique gardent `isConnected: true` (leur
-    // suppression ne touche que `isDeleted`) : le filtre les couvre aussi.
-    const res = await this.profileModel.updateMany(
-      { isConnected: true },
-      { $set: { isConnected: false } },
-    );
+      // ⚠️ Le filtre `{ isConnected: true }` est INDISPENSABLE — ne jamais le
+      // remplacer par `{}`. Mongoose applique `timestamps` aux `updateMany`, donc
+      // un filtre vide réécrirait `updatedAt` sur TOUS les profils chaque nuit :
+      // on détruirait le seul indicateur d'ancienneté de session dont on dispose
+      // (il n'existe pas de `connectedAt`). Le filtre rend en prime
+      // `modifiedCount` significatif — c'est le nombre réel de comptes libérés.
+      //
+      // Les comptes en suppression logique gardent `isConnected: true` (leur
+      // suppression ne touche que `isDeleted`) : le filtre les couvre aussi.
+      const res = await this.profileModel.updateMany(
+        { isConnected: true },
+        { $set: { isConnected: false } },
+      );
 
-    const released = res?.modifiedCount ?? 0;
-    this.logger.log(`END libération des sessions · libérées=${released}`);
-    return { released };
+      const released = res?.modifiedCount ?? 0;
+      this.logger.log(`END libération des sessions · libérées=${released}`);
+      return { released };
+    } catch (error) {
+      throw withErrorContext(error, 'SessionCleanupService.run');
+    }
   }
 }

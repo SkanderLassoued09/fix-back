@@ -4,14 +4,19 @@ import { LogsDi } from './entities/logs-di.entity';
 import { UpdateLogsDiInput } from './dto/update-logs-di.input';
 import { ComposantStructureInput } from 'src/di/dto/create-di.input';
 import { DiagUpdateLogs } from './dto/create-logs-di.input';
+import { withErrorContext } from '../common/error-context';
 
 @Resolver(() => LogsDi)
 export class LogsDiResolver {
   constructor(private readonly logsDiService: LogsDiService) {}
 
   @Mutation(() => LogsDi)
-  createLogsDi(@Args('_id') _id: string, @Args('_idDi') _idDi: number) {
-    return this.logsDiService.create(_id, _idDi);
+  async createLogsDi(@Args('_id') _id: string, @Args('_idDi') _idDi: number) {
+    try {
+      return await this.logsDiService.create(_id, _idDi);
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiResolver.createLogsDi');
+    }
   }
 
   @Mutation(() => LogsDi)
@@ -20,36 +25,60 @@ export class LogsDiResolver {
     @Args('_idDi') _idDi: number,
     @Args('diag') diag: DiagUpdateLogs,
   ) {
-    return await this.logsDiService.tech_startDiagnostic(_id, _idDi, diag);
+    try {
+      return await this.logsDiService.tech_startDiagnostic(_id, _idDi, diag);
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiResolver.tech_startDiagnosticLogs');
+    }
   }
 
   @Query(() => [LogsDi], { name: 'logsDi' })
   findAll() {
-    return this.logsDiService.findAll();
+    try {
+      return this.logsDiService.findAll();
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiResolver.findAll');
+    }
   }
 
   @Query(() => LogsDi)
-  getLigsById(
+  async getLigsById(
     @Args('id') id: string,
     @Args('_idDi', { type: () => Int }) _idDi: number,
   ) {
-    return this.logsDiService.getLogsById(_idDi, id);
+    try {
+      return await this.logsDiService.getLogsById(_idDi, id);
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiResolver.getLigsById');
+    }
   }
 
   @Query(() => [LogsDi])
-  getAllLogsByDi(@Args('_idDi') _idDi: string) {
-    return this.logsDiService.getAllLogsByDi(_idDi);
+  async getAllLogsByDi(@Args('_idDi') _idDi: string) {
+    try {
+      return await this.logsDiService.getAllLogsByDi(_idDi);
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiResolver.getAllLogsByDi');
+    }
   }
 
   @Mutation(() => LogsDi)
   updateLogsDi(
     @Args('updateLogsDiInput') updateLogsDiInput: UpdateLogsDiInput,
   ) {
-    return this.logsDiService.update(updateLogsDiInput.id, updateLogsDiInput);
+    try {
+      return this.logsDiService.update(updateLogsDiInput.id, updateLogsDiInput);
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiResolver.updateLogsDi');
+    }
   }
 
   @Mutation(() => LogsDi)
   removeLogsDi(@Args('id', { type: () => Int }) id: number) {
-    return this.logsDiService.remove(id);
+    try {
+      return this.logsDiService.remove(id);
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiResolver.removeLogsDi');
+    }
   }
 }

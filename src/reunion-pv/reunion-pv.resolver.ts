@@ -9,6 +9,7 @@ import { ReunionPVService } from './reunion-pv.service';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 import { RolesGuard } from 'src/auth/role-guard';
 import { Role, Roles } from 'src/profile/role-decorator';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * Rôles autorisés à gérer les Réunions (menu, route, ET création serveur) :
@@ -41,13 +42,17 @@ export class ReunionPVResolver {
     @Args('input') input: CreateReunionPVInput,
     @Context() ctx: any,
   ) {
-    const headers = ctx?.req?.headers ?? {};
-    const testRun =
-      String(headers['x-test-run'] ?? headers['X-Test-Run'] ?? '') === '1';
-    return this.service.create(input, {
-      skipDiscord: testRun,
-      skipJira: testRun,
-    });
+    try {
+      const headers = ctx?.req?.headers ?? {};
+      const testRun =
+        String(headers['x-test-run'] ?? headers['X-Test-Run'] ?? '') === '1';
+      return await this.service.create(input, {
+        skipDiscord: testRun,
+        skipJira: testRun,
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'ReunionPVResolver.createReunionPV');
+    }
   }
 
   /**
@@ -60,15 +65,25 @@ export class ReunionPVResolver {
     @Args('input') input: UpdateReunionPVDetailsInput,
     @Context() ctx: any,
   ) {
-    const headers = ctx?.req?.headers ?? {};
-    const testRun =
-      String(headers['x-test-run'] ?? headers['X-Test-Run'] ?? '') === '1';
-    return this.service.updateReunionDetails(input, { skipJira: testRun });
+    try {
+      const headers = ctx?.req?.headers ?? {};
+      const testRun =
+        String(headers['x-test-run'] ?? headers['X-Test-Run'] ?? '') === '1';
+      return await this.service.updateReunionDetails(input, {
+        skipJira: testRun,
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'ReunionPVResolver.updateReunionPVDetails');
+    }
   }
 
   @Query(() => ReunionPV)
   async reunionPV(@Args('_id') _id: string) {
-    return this.service.findById(_id);
+    try {
+      return await this.service.findById(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'ReunionPVResolver.reunionPV');
+    }
   }
 
   /**
@@ -81,8 +96,12 @@ export class ReunionPVResolver {
     @Args('diId', { nullable: true }) diId?: string,
     @Args('createdById', { nullable: true }) createdById?: string,
   ) {
-    if (diId) return this.service.findByDi(diId);
-    if (createdById) return this.service.findByCreatedBy(createdById);
-    return this.service.findAll();
+    try {
+      if (diId) return await this.service.findByDi(diId);
+      if (createdById) return await this.service.findByCreatedBy(createdById);
+      return await this.service.findAll();
+    } catch (error) {
+      throw withErrorContext(error, 'ReunionPVResolver.reunionPVs');
+    }
   }
 }

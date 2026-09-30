@@ -7,6 +7,7 @@ import { AlertSeverity, AlertType } from './alert.enums';
 import { CreateAlertInput, ListAlertsInput } from './dto/alert.input';
 import { DiAlertDocument } from './entities/di-alert.entity';
 import { NotificationService } from 'src/notifications/notification.service';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * Centralized alert service. The rest of the system creates alerts through
@@ -33,82 +34,86 @@ export class DiAlertService {
     input: CreateAlertInput,
     opts?: { silent?: boolean },
   ): Promise<DiAlertDocument> {
-    let metadata: Record<string, any> = {};
-    if (input.metadataJson) {
+    try {
+      let metadata: Record<string, any> = {};
+      if (input.metadataJson) {
+        try {
+          metadata = JSON.parse(input.metadataJson);
+        } catch (err) {
+          this.logger.warn(
+            `Ignoring invalid metadataJson for alert on di=${input.diId}: ${err}`,
+          );
+        }
+      }
+
+      const doc = await this.alertModel.create({
+        // _id: `ALR_${nanoid(8)}`,
+        diId: input.diId,
+        type: input.type,
+        severity: input.severity ?? AlertSeverity.INFO,
+        message: input.message,
+        assignedRoles: input.assignedRoles ?? [],
+        metadata,
+        escalationLevel: input.escalationLevel ?? 0,
+      });
+
+      this.logger.log(
+        `Alert created · _id=${doc._id} diId=${doc.diId} type=${doc.type} severity=${doc.severity}`,
+      );
+
+      // FUSION cloche/historique : chaque NOUVELLE alerte devient un événement ERP
+      // + une notification ciblée par rôle. Les 215 alertes EXISTANTES ne passent
+      // pas ici → le badge démarre à 0 (aucune migration nécessaire).
+      // Le vocabulaire de rôles des alertes (`Coordinator`/`Manager`) est aligné
+      // sur les valeurs profil réelles (`COORDIANTOR`/`MANAGER`) par la table
+      // centralisée `role-mapping.ts`, appliquée dans `NotificationService`.
       try {
-        metadata = JSON.parse(input.metadataJson);
+        await this.notificationService.emit({
+          type: `ALERT_${doc.type}`,
+          diId: doc.diId,
+          actorId: null, // alerte système (monitor/cron) → acteur inconnu
+          message: doc.message,
+          payload: { severity: doc.severity, alertId: String(doc._id) },
+          notify: { roles: doc.assignedRoles ?? [] },
+        });
       } catch (err) {
         this.logger.warn(
-          `Ignoring invalid metadataJson for alert on di=${input.diId}: ${err}`,
-        );
-      }
-    }
-
-    const doc = await this.alertModel.create({
-      // _id: `ALR_${nanoid(8)}`,
-      diId: input.diId,
-      type: input.type,
-      severity: input.severity ?? AlertSeverity.INFO,
-      message: input.message,
-      assignedRoles: input.assignedRoles ?? [],
-      metadata,
-      escalationLevel: input.escalationLevel ?? 0,
-    });
-
-    this.logger.log(
-      `Alert created · _id=${doc._id} diId=${doc.diId} type=${doc.type} severity=${doc.severity}`,
-    );
-
-    // FUSION cloche/historique : chaque NOUVELLE alerte devient un événement ERP
-    // + une notification ciblée par rôle. Les 215 alertes EXISTANTES ne passent
-    // pas ici → le badge démarre à 0 (aucune migration nécessaire).
-    // Le vocabulaire de rôles des alertes (`Coordinator`/`Manager`) est aligné
-    // sur les valeurs profil réelles (`COORDIANTOR`/`MANAGER`) par la table
-    // centralisée `role-mapping.ts`, appliquée dans `NotificationService`.
-    try {
-      await this.notificationService.emit({
-        type: `ALERT_${doc.type}`,
-        diId: doc.diId,
-        actorId: null, // alerte système (monitor/cron) → acteur inconnu
-        message: doc.message,
-        payload: { severity: doc.severity, alertId: String(doc._id) },
-        notify: { roles: doc.assignedRoles ?? [] },
-      });
-    } catch (err) {
-      this.logger.warn(
-        `ERP notification (alert fusion) failed · _id=${doc._id}: ${
-          (err as Error)?.message ?? err
-        }`,
-      );
-    }
-
-    // Discord broadcast — best-effort. A failed webhook NEVER fails the alert
-    // (persistence is the source of truth) and never breaks the caller flow.
-    // `silent` skips the per-alert embed: the stagnation monitor now sends ONE
-    // grouped DAILY digest instead of one embed per DI. Future alert generators
-    // can still get a per-alert ping by omitting the flag.
-    if (!opts?.silent) {
-      try {
-        await this.discordHookService.sendStagnationAlert({
-          _id: doc._id as string,
-          diId: doc.diId,
-          type: doc.type,
-          severity: doc.severity,
-          message: doc.message,
-          metadata: doc.metadata,
-          createdAt: doc.createdAt,
-        });
-        this.logger.log(`Discord notification sent · _id=${doc._id}`);
-      } catch (err) {
-        this.logger.error(
-          `Discord notification failed · _id=${doc._id}: ${
-            (err as Error).message ?? err
+          `ERP notification (alert fusion) failed · _id=${doc._id}: ${
+            (err as Error)?.message ?? err
           }`,
         );
       }
-    }
 
-    return doc;
+      // Discord broadcast — best-effort. A failed webhook NEVER fails the alert
+      // (persistence is the source of truth) and never breaks the caller flow.
+      // `silent` skips the per-alert embed: the stagnation monitor now sends ONE
+      // grouped DAILY digest instead of one embed per DI. Future alert generators
+      // can still get a per-alert ping by omitting the flag.
+      if (!opts?.silent) {
+        try {
+          await this.discordHookService.sendStagnationAlert({
+            _id: doc._id as string,
+            diId: doc.diId,
+            type: doc.type,
+            severity: doc.severity,
+            message: doc.message,
+            metadata: doc.metadata,
+            createdAt: doc.createdAt,
+          });
+          this.logger.log(`Discord notification sent · _id=${doc._id}`);
+        } catch (err) {
+          this.logger.error(
+            `Discord notification failed · _id=${doc._id}: ${
+              (err as Error).message ?? err
+            }`,
+          );
+        }
+      }
+
+      return doc;
+    } catch (error) {
+      throw withErrorContext(error, 'DiAlertService.createAlert');
+    }
   }
 
   /**
@@ -121,30 +126,38 @@ export class DiAlertService {
     input: CreateAlertInput,
     opts?: { silent?: boolean },
   ): Promise<{ alert: DiAlertDocument; created: boolean }> {
-    const existing = await this.alertModel.findOne({
-      diId: input.diId,
-      type: input.type,
-      resolvedAt: null,
-    });
-    if (existing) {
-      this.logger.log(
-        `Alert skipped (already exists) · diId=${input.diId} type=${input.type}`,
-      );
-      return { alert: existing, created: false };
+    try {
+      const existing = await this.alertModel.findOne({
+        diId: input.diId,
+        type: input.type,
+        resolvedAt: null,
+      });
+      if (existing) {
+        this.logger.log(
+          `Alert skipped (already exists) · diId=${input.diId} type=${input.type}`,
+        );
+        return { alert: existing, created: false };
+      }
+      const created = await this.createAlert(input, opts);
+      return { alert: created, created: true };
+    } catch (error) {
+      throw withErrorContext(error, 'DiAlertService.createAlertIfMissing');
     }
-    const created = await this.createAlert(input, opts);
-    return { alert: created, created: true };
   }
 
   async resolveAlert(
     alertId: string,
     resolvedBy: string | null,
   ): Promise<DiAlertDocument | null> {
-    return this.alertModel.findByIdAndUpdate(
-      alertId,
-      { $set: { resolvedAt: new Date(), resolvedBy } },
-      { new: true },
-    );
+    try {
+      return await this.alertModel.findByIdAndUpdate(
+        alertId,
+        { $set: { resolvedAt: new Date(), resolvedBy } },
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiAlertService.resolveAlert');
+    }
   }
 
   /**
@@ -157,24 +170,32 @@ export class DiAlertService {
     types: AlertType[],
     resolvedBy: string | null,
   ): Promise<number> {
-    const result = await this.alertModel.updateMany(
-      { diId, type: { $in: types }, resolvedAt: null },
-      { $set: { resolvedAt: new Date(), resolvedBy } },
-    );
-    return result.modifiedCount ?? 0;
+    try {
+      const result = await this.alertModel.updateMany(
+        { diId, type: { $in: types }, resolvedAt: null },
+        { $set: { resolvedAt: new Date(), resolvedBy } },
+      );
+      return result.modifiedCount ?? 0;
+    } catch (error) {
+      throw withErrorContext(error, 'DiAlertService.resolveOpenAlertsForDi');
+    }
   }
 
   async listAlerts(input: ListAlertsInput = {}): Promise<DiAlertDocument[]> {
-    const filter: FilterQuery<DiAlertDocument> = {};
-    if (input.diId) filter.diId = input.diId;
-    if (input.type) filter.type = input.type;
-    if (input.role) filter.assignedRoles = input.role;
-    if (input.openOnly !== false) filter.resolvedAt = null;
+    try {
+      const filter: FilterQuery<DiAlertDocument> = {};
+      if (input.diId) filter.diId = input.diId;
+      if (input.type) filter.type = input.type;
+      if (input.role) filter.assignedRoles = input.role;
+      if (input.openOnly !== false) filter.resolvedAt = null;
 
-    return this.alertModel
-      .find(filter)
-      .sort({ createdAt: -1 })
-      .limit(Math.min(input.limit ?? 200, 500))
-      .exec();
+      return await this.alertModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .limit(Math.min(input.limit ?? 200, 500))
+        .exec();
+    } catch (error) {
+      throw withErrorContext(error, 'DiAlertService.listAlerts');
+    }
   }
 }

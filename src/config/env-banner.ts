@@ -1,4 +1,5 @@
 import { describeEnv, envFileName, EnvColor } from './environments';
+import { withErrorContext } from '../common/error-context';
 
 /** ANSI color per environment (zero-dependency; no chalk). */
 const ANSI: Record<EnvColor, string> = {
@@ -16,14 +17,18 @@ const RESET = '\x1b[0m';
  * Falls back to '—' when absent/unparseable.
  */
 export function extractDbName(uri?: string): string {
-  if (!uri) return '—';
   try {
-    const afterScheme = uri.replace(/^[a-z][a-z+.-]*:\/\//i, '');
-    const pathPart = afterScheme.split('/').slice(1).join('/'); // drop host[:port]
-    const db = (pathPart.split('?')[0] || '').trim();
-    return db || '—';
-  } catch {
-    return '—';
+    if (!uri) return '—';
+    try {
+      const afterScheme = uri.replace(/^[a-z][a-z+.-]*:\/\//i, '');
+      const pathPart = afterScheme.split('/').slice(1).join('/'); // drop host[:port]
+      const db = (pathPart.split('?')[0] || '').trim();
+      return db || '—';
+    } catch {
+      return '—';
+    }
+  } catch (error) {
+    throw withErrorContext(error, 'extractDbName');
   }
 }
 
@@ -46,21 +51,25 @@ export interface BannerMeta {
  *   └──────────────────────────────────────────┘
  */
 export function buildStartupBanner(meta: BannerMeta): string {
-  const d = describeEnv(meta.nodeEnv);
-  const color = ANSI[d.color];
-  const lines = [
-    `FIXTRONIX — ENVIRONNEMENT : ${d.label}`,
-    `Fichier chargé : ${envFileName(meta.nodeEnv)}`,
-    `DB : ${extractDbName(meta.mongoUri)}`,
-    `Port : ${meta.port}`,
-  ];
-  const inner = Math.max(...lines.map((l) => l.length)) + 2;
-  const top = '┌' + '─'.repeat(inner) + '┐';
-  const bottom = '└' + '─'.repeat(inner) + '┘';
-  const body = lines
-    .map((l) => '│ ' + l + ' '.repeat(inner - l.length - 1) + '│')
-    .join('\n');
-  return `${color}${BOLD}${top}\n${body}\n${bottom}${RESET}`;
+  try {
+    const d = describeEnv(meta.nodeEnv);
+    const color = ANSI[d.color];
+    const lines = [
+      `FIXTRONIX — ENVIRONNEMENT : ${d.label}`,
+      `Fichier chargé : ${envFileName(meta.nodeEnv)}`,
+      `DB : ${extractDbName(meta.mongoUri)}`,
+      `Port : ${meta.port}`,
+    ];
+    const inner = Math.max(...lines.map((l) => l.length)) + 2;
+    const top = '┌' + '─'.repeat(inner) + '┐';
+    const bottom = '└' + '─'.repeat(inner) + '┘';
+    const body = lines
+      .map((l) => '│ ' + l + ' '.repeat(inner - l.length - 1) + '│')
+      .join('\n');
+    return `${color}${BOLD}${top}\n${body}\n${bottom}${RESET}`;
+  } catch (error) {
+    throw withErrorContext(error, 'buildStartupBanner');
+  }
 }
 
 /**
@@ -68,6 +77,10 @@ export function buildStartupBanner(meta: BannerMeta): string {
  *   [FIXTRONIX][PRODUCTION] ACTION: SYNC_JIRA_DUE_SOON
  */
 export function buildActionBanner(nodeEnv: string, action: string): string {
-  const d = describeEnv(nodeEnv);
-  return `${ANSI[d.color]}${BOLD}[FIXTRONIX][${d.label}] ACTION: ${action}${RESET}`;
+  try {
+    const d = describeEnv(nodeEnv);
+    return `${ANSI[d.color]}${BOLD}[FIXTRONIX][${d.label}] ACTION: ${action}${RESET}`;
+  } catch (error) {
+    throw withErrorContext(error, 'buildActionBanner');
+  }
 }

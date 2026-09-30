@@ -233,6 +233,63 @@ describe('Séparation des flux — entrée en retour', () => {
     expect(carry[2]).toEqual({ price: 0 });
   });
 
+  it('reporte TOUT le dossier du miroir (remarques, verdict, documents), pas seulement l’argent', async () => {
+    // Cas constaté (T1532) : la remarque de réparation n'était que sur la DI et
+    // disparaissait du flux original à l'ouverture du retour.
+    const svc = makeSvc({
+      _id: 'DI1',
+      _idnum: 'T1',
+      ignoreCount: 0,
+      remarque_tech_repair: 'Condensateur remplacé, tests OK',
+      remarque_manager: 'Client pressé',
+      type_client: 'CLIENT',
+      can_be_repaired: false,
+      bon_de_livraison: 'http://d/bl0',
+      driveDocs: { BL: REF, Image: { driveFileId: 'img' } },
+      // Drapeau de pilotage : jamais reporté.
+      isOpenedOnce: true,
+    });
+    svc.logsDiService.getLogsById.mockResolvedValue({ _idDi: 'DI1', idIgnore: 0 });
+
+    await svc.openRetourCycle('DI1', 'panne revenue');
+
+    const carry = svc.logsDiService.upsertCycle.mock.calls.find(
+      (c: any[]) => c[1] === 0,
+    );
+    expect(carry[2]).toEqual({
+      remarque_tech_repair: 'Condensateur remplacé, tests OK',
+      remarque_manager: 'Client pressé',
+      type_client: 'CLIENT',
+      // false est un verdict (non réparable), pas une absence.
+      can_be_repaired: false,
+      bon_de_livraison: 'http://d/bl0',
+      'driveDocs.BL': REF,
+    });
+  });
+
+  it('n’écrase jamais ce que la ligne porte déjà (remarque, document)', async () => {
+    const svc = makeSvc({
+      _id: 'DI1',
+      _idnum: 'T1',
+      ignoreCount: 0,
+      remarque_tech_diagnostic: 'valeur du miroir',
+      driveDocs: { Devis: REF },
+    });
+    svc.logsDiService.getLogsById.mockResolvedValue({
+      _idDi: 'DI1',
+      idIgnore: 0,
+      remarque_tech_diagnostic: 'valeur de la ligne',
+      driveDocs: { Devis: { driveFileId: 'autre', webViewLink: 'x', name: 'y' } },
+    });
+
+    await svc.openRetourCycle('DI1', 'motif');
+
+    const carry = svc.logsDiService.upsertCycle.mock.calls.find(
+      (c: any[]) => c[1] === 0,
+    );
+    expect(carry).toBeUndefined();
+  });
+
   it('rien à reporter → aucune écriture sur la ligne sortante', async () => {
     const svc = makeSvc({ _id: 'DI1', _idnum: 'T1', ignoreCount: 0 });
 
@@ -302,6 +359,16 @@ describe('Séparation des flux — sûreté du vidage du miroir', () => {
     expect(MAGASIN_STATUS_DI_VALUES).not.toContain(STATUS_DI.Retour1.status);
     expect(MAGASIN_STATUS_DI_VALUES).not.toContain(STATUS_DI.Retour2.status);
     expect(MAGASIN_STATUS_DI_VALUES).not.toContain(STATUS_DI.Retour3.status);
+  });
+
+  // La clôture documentaire porte le rôle Magasin (notifications + dépôt BL /
+  // Facture depuis ticket-list) mais ne doit PAS remplir la liste magasin.
+  it('la clôture documentaire reste hors de la liste magasin', () => {
+    expect(STATUS_DI.WaitingBl.role).toContain('Magasin');
+    expect(MAGASIN_STATUS_DI_VALUES).not.toContain(STATUS_DI.WaitingBl.status);
+    expect(MAGASIN_STATUS_DI_VALUES).not.toContain(
+      STATUS_DI.WaitingFacture.status,
+    );
   });
 });
 

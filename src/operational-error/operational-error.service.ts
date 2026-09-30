@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as fs from 'fs';
 import { join } from 'path';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * Severity ordering matches the captured-error spec:
@@ -55,57 +56,61 @@ export class OperationalErrorService {
   constructor(private readonly discordHookService: DiscordHookService) {}
 
   async capture(input: OperationalErrorInput): Promise<void> {
-    const entry = {
-      timestamp: new Date().toISOString(),
-      module: input.module,
-      submodule: input.submodule,
-      method: input.method,
-      severity: input.severity,
-      error: input.error,
-      message: input.message,
-      payload: input.payload ?? {},
-    };
-
-    // 1. Append to /logs/YYYY-MM/errors-YYYY-MM-DD.log
-    //    Both fs.mkdirSync and fs.appendFileSync are wrapped — any IO error
-    //    is logged through Nest and never bubbles to the caller.
     try {
-      const now = new Date();
-      const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
-      const ymd = `${ym}-${String(now.getUTCDate()).padStart(2, '0')}`;
-      const dir = join(process.cwd(), 'logs', ym);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.appendFileSync(
-        join(dir, `errors-${ymd}.log`),
-        JSON.stringify(entry) + '\n',
-        { encoding: 'utf8' },
-      );
-    } catch (fsErr) {
-      this.logger.error(
-        `Filesystem persistence failed for operational error ${input.module}/${input.method}: ${(fsErr as Error).message ?? fsErr}`,
-      );
-    }
+      const entry = {
+        timestamp: new Date().toISOString(),
+        module: input.module,
+        submodule: input.submodule,
+        method: input.method,
+        severity: input.severity,
+        error: input.error,
+        message: input.message,
+        payload: input.payload ?? {},
+      };
 
-    // 2. Discord notification — reuse existing webhook. Best-effort, and
-    //    GUARDED: skipped for expected errors (notify === false) and
-    //    rate-limited/deduped per (module/method/error) window.
-    if (input.notify !== false && this.shouldNotify(input)) {
+      // 1. Append to /logs/YYYY-MM/errors-YYYY-MM-DD.log
+      //    Both fs.mkdirSync and fs.appendFileSync are wrapped — any IO error
+      //    is logged through Nest and never bubbles to the caller.
       try {
-        await this.discordHookService.sendOperationalError(entry);
-      } catch (discordErr) {
+        const now = new Date();
+        const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+        const ymd = `${ym}-${String(now.getUTCDate()).padStart(2, '0')}`;
+        const dir = join(process.cwd(), 'logs', ym);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.appendFileSync(
+          join(dir, `errors-${ymd}.log`),
+          JSON.stringify(entry) + '\n',
+          { encoding: 'utf8' },
+        );
+      } catch (fsErr) {
         this.logger.error(
-          `Discord operational-error notification failed (${input.module}/${input.method}): ${(discordErr as Error).message ?? discordErr}`,
+          `Filesystem persistence failed for operational error ${input.module}/${input.method}: ${(fsErr as Error).message ?? fsErr}`,
         );
       }
-    }
 
-    // 3. Always emit a Nest log line too — level by severity so EXPECTED/LOW
-    //    errors stay quiet (debug) and operational ones are loud (error).
-    const tag = `${input.module}/${input.submodule}/${input.method}`;
-    const line = `[${input.severity}] ${tag} · ${input.error} · ${input.message}`;
-    if (input.severity === 'LOW') this.logger.debug(line);
-    else if (input.severity === 'MEDIUM') this.logger.warn(line);
-    else this.logger.error(line);
+      // 2. Discord notification — reuse existing webhook. Best-effort, and
+      //    GUARDED: skipped for expected errors (notify === false) and
+      //    rate-limited/deduped per (module/method/error) window.
+      if (input.notify !== false && this.shouldNotify(input)) {
+        try {
+          await this.discordHookService.sendOperationalError(entry);
+        } catch (discordErr) {
+          this.logger.error(
+            `Discord operational-error notification failed (${input.module}/${input.method}): ${(discordErr as Error).message ?? discordErr}`,
+          );
+        }
+      }
+
+      // 3. Always emit a Nest log line too — level by severity so EXPECTED/LOW
+      //    errors stay quiet (debug) and operational ones are loud (error).
+      const tag = `${input.module}/${input.submodule}/${input.method}`;
+      const line = `[${input.severity}] ${tag} · ${input.error} · ${input.message}`;
+      if (input.severity === 'LOW') this.logger.debug(line);
+      else if (input.severity === 'MEDIUM') this.logger.warn(line);
+      else this.logger.error(line);
+    } catch (error) {
+      throw withErrorContext(error, 'OperationalErrorService.capture');
+    }
   }
 
   // ── Validation channel (separate webhook, dev-only, anti-storm) ──────────
@@ -130,9 +135,13 @@ export class OperationalErrorService {
   /** A validation message that should NEVER reach the back if the front gates
    *  correctly → front↔back DRIFT (not a user typo). */
   private isDriftSignal(m: string): boolean {
-    return /should not be empty|should not exist|must be a (string|number|boolean|array|object)/i.test(
-      m,
-    );
+    try {
+      return /should not be empty|should not exist|must be a (string|number|boolean|array|object)/i.test(
+        m,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'OperationalErrorService.isDriftSignal');
+    }
   }
 
   /**
@@ -343,16 +352,20 @@ export class OperationalErrorService {
 
   /** Dedup gate: true at most once per DEDUP_WINDOW_MS per (module/method/error). */
   private shouldNotify(input: OperationalErrorInput): boolean {
-    const key = `${input.module}/${input.method}/${input.error}`;
-    const now = Date.now();
-    const last = this.lastNotifiedAt.get(key) ?? 0;
-    if (now - last < OperationalErrorService.DEDUP_WINDOW_MS) {
-      this.logger.debug(`Discord notify deduped for ${key}`);
-      return false;
+    try {
+      const key = `${input.module}/${input.method}/${input.error}`;
+      const now = Date.now();
+      const last = this.lastNotifiedAt.get(key) ?? 0;
+      if (now - last < OperationalErrorService.DEDUP_WINDOW_MS) {
+        this.logger.debug(`Discord notify deduped for ${key}`);
+        return false;
+      }
+      this.lastNotifiedAt.set(key, now);
+      // Bound the map so a long-running process can't leak unbounded keys.
+      if (this.lastNotifiedAt.size > 500) this.lastNotifiedAt.clear();
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'OperationalErrorService.shouldNotify');
     }
-    this.lastNotifiedAt.set(key, now);
-    // Bound the map so a long-running process can't leak unbounded keys.
-    if (this.lastNotifiedAt.size > 500) this.lastNotifiedAt.clear();
-    return true;
   }
 }

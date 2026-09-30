@@ -10,12 +10,17 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
+import { withErrorContext } from '../../common/error-context';
 
 /** Trim string inputs so whitespace-only values fail @IsNotEmpty. */
 function Trim() {
-  return Transform(({ value }) =>
-    typeof value === 'string' ? value.trim() : value,
-  );
+  try {
+    return Transform(({ value }) =>
+      typeof value === 'string' ? value.trim() : value,
+    );
+  } catch (error) {
+    throw withErrorContext(error, 'Trim');
+  }
 }
 
 /**

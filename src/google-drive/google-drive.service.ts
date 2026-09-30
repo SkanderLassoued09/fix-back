@@ -9,6 +9,7 @@ import {
   isInvalidGrant,
   isTransientError,
 } from '../google-auth/google-oauth.errors';
+import { withErrorContext } from '../common/error-context';
 
 export interface DriveFolder {
   id: string;
@@ -83,47 +84,51 @@ export class GoogleDriveService {
     label: string,
     fn: () => Promise<T>,
   ): Promise<T> {
-    let lastErr: unknown;
-    for (
-      let attempt = 1;
-      attempt <= GoogleDriveService.MAX_ATTEMPTS;
-      attempt++
-    ) {
-      try {
-        return await fn();
-      } catch (err) {
-        lastErr = err;
-        if (isInvalidGrant(err)) {
-          this.drive = null; // force rebuild after a token fix
-          // Persist the unhealthy state + drop the shared OAuth cache so a
-          // re-auth (POST /admin/google/reauthorize or GET /auth/google) takes
-          // effect without a restart. Best-effort — never masks the diagnostic.
-          void this.oauth
-            .markReauthFromError(err)
-            .catch((e) =>
-              this.logger.warn(
-                `markReauthFromError non fatal: ${(e as Error).message}`,
-              ),
-            );
-          throw buildInvalidGrantDiagnostic(err);
-        }
-        const info = extractGoogleError(err);
-        if (
-          !isTransientError(err) ||
-          attempt === GoogleDriveService.MAX_ATTEMPTS
-        ) {
-          break;
-        }
-        const backoffMs = 2 ** (attempt - 1) * 1000;
-        this.logger.warn(
-          `Drive ${label} tentative ${attempt} échouée (http=${
+    try {
+      let lastErr: unknown;
+      for (
+        let attempt = 1;
+        attempt <= GoogleDriveService.MAX_ATTEMPTS;
+        attempt++
+      ) {
+        try {
+          return await fn();
+        } catch (err) {
+          lastErr = err;
+          if (isInvalidGrant(err)) {
+            this.drive = null; // force rebuild after a token fix
+            // Persist the unhealthy state + drop the shared OAuth cache so a
+            // re-auth (POST /admin/google/reauthorize or GET /auth/google) takes
+            // effect without a restart. Best-effort — never masks the diagnostic.
+            void this.oauth
+              .markReauthFromError(err)
+              .catch((e) =>
+                this.logger.warn(
+                  `markReauthFromError non fatal: ${(e as Error).message}`,
+                ),
+              );
+            throw buildInvalidGrantDiagnostic(err);
+          }
+          const info = extractGoogleError(err);
+          if (
+            !isTransientError(err) ||
+            attempt === GoogleDriveService.MAX_ATTEMPTS
+          ) {
+            break;
+          }
+          const backoffMs = 2 ** (attempt - 1) * 1000;
+          this.logger.warn(
+            `Drive ${label} tentative ${attempt} échouée (http=${
             info.httpStatus ?? 'n/a'
           }); nouvelle tentative dans ${backoffMs}ms`,
-        );
-        await new Promise((r) => setTimeout(r, backoffMs));
+          );
+          await new Promise((r) => setTimeout(r, backoffMs));
+        }
       }
+      throw lastErr;
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.callWithRetry');
     }
-    throw lastErr;
   }
 
   /** OAuth is centralized in `GoogleOAuthService` (shared with Google Sheets):
@@ -134,28 +139,44 @@ export class GoogleDriveService {
    *  parent folder is OPTIONAL — when empty, the app creates its own `CLIENTS`
    *  folder. Delegated to the shared OAuth factory. */
   async isConfigured(): Promise<boolean> {
-    return this.oauth.isConfigured();
+    try {
+      return await this.oauth.isConfigured();
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.isConfigured');
+    }
   }
 
   /** Consent URL for the one-time setup (`GET /auth/google` redirects here).
    *  Delegated to the shared factory, which requests the Drive + Sheets scopes. */
   generateAuthUrl(): string {
-    return this.oauth.generateAuthUrl();
+    try {
+      return this.oauth.generateAuthUrl();
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.generateAuthUrl');
+    }
   }
 
   /** Exchange the `code` from the OAuth callback for tokens (incl. the refresh
    *  token to paste into `.env`). Delegated to the shared factory. */
   async exchangeCodeForTokens(code: string) {
-    return this.oauth.exchangeCodeForTokens(code);
+    try {
+      return await this.oauth.exchangeCodeForTokens(code);
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.exchangeCodeForTokens');
+    }
   }
 
   private async ensureClient(): Promise<drive_v3.Drive> {
-    if (this.drive) return this.drive;
-    // Shared OAuth2 client (refresh token set) — same grant as Google Sheets.
-    // Async now: the refresh token is read from MongoDB (oauth_tokens).
-    const auth = await this.oauth.getAuthenticatedClient();
-    this.drive = google.drive({ version: 'v3', auth });
-    return this.drive;
+    try {
+      if (this.drive) return this.drive;
+      // Shared OAuth2 client (refresh token set) — same grant as Google Sheets.
+      // Async now: the refresh token is read from MongoDB (oauth_tokens).
+      const auth = await this.oauth.getAuthenticatedClient();
+      this.drive = google.drive({ version: 'v3', auth });
+      return this.drive;
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.ensureClient');
+    }
   }
 
   // ───────────────────────────────────────────────────────────────────────
@@ -168,12 +189,16 @@ export class GoogleDriveService {
    * desktop-sync filesystems (`/ \ : * ? " < > |`). Collapses whitespace.
    */
   sanitizeFolderName(name: string): string {
-    const cleaned = (name || '')
-      .replace(/[\/\\:*?"<>|]/g, '')
-      .replace(/[\x00-\x1f\x7f]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    return cleaned || 'Entity';
+    try {
+      const cleaned = (name || '')
+        .replace(/[\/\\:*?"<>|]/g, '')
+        .replace(/[\x00-\x1f\x7f]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return cleaned || 'Entity';
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.sanitizeFolderName');
+    }
   }
 
   /**
@@ -182,22 +207,26 @@ export class GoogleDriveService {
    * e.g. `Excubia Skandér` → `ExcubiaSkander`.
    */
   sanitizeFileNamePart(name: string): string {
-    // NFD decomposes accents into base char + combining mark; drop the marks
-    // (U+0300–U+036F) by codepoint so the source stays plain-ASCII.
-    const noAccents = (name || '')
-      .normalize('NFD')
-      .split('')
-      .filter((ch) => {
-        const code = ch.charCodeAt(0);
-        return code < 0x0300 || code > 0x036f;
-      })
-      .join('');
-    const cleaned = noAccents
-      .replace(/[\/\\:*?"<>|]/g, '')
-      .replace(/[\x00-\x1f\x7f]/g, '')
-      .replace(/\s+/g, '')
-      .trim();
-    return cleaned || 'Doc';
+    try {
+      // NFD decomposes accents into base char + combining mark; drop the marks
+      // (U+0300–U+036F) by codepoint so the source stays plain-ASCII.
+      const noAccents = (name || '')
+        .normalize('NFD')
+        .split('')
+        .filter((ch) => {
+          const code = ch.charCodeAt(0);
+          return code < 0x0300 || code > 0x036f;
+        })
+        .join('');
+      const cleaned = noAccents
+        .replace(/[\/\\:*?"<>|]/g, '')
+        .replace(/[\x00-\x1f\x7f]/g, '')
+        .replace(/\s+/g, '')
+        .trim();
+      return cleaned || 'Doc';
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.sanitizeFileNamePart');
+    }
   }
 
   /**
@@ -213,11 +242,15 @@ export class GoogleDriveService {
     ext: string,
     createdAt: Date = new Date(),
   ): string {
-    const tz = process.env.APP_TIMEZONE || 'Africa/Tunis';
-    const stamp = this.formatTimestamp(createdAt, tz, 'DD-MM-YYYY_HH-mm-ss');
-    const cleanName = this.sanitizeFileNamePart(name);
-    const cleanExt = (ext || 'bin').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-    return `${cleanName}_${docType}_${stamp}.${cleanExt || 'bin'}`;
+    try {
+      const tz = process.env.APP_TIMEZONE || 'Africa/Tunis';
+      const stamp = this.formatTimestamp(createdAt, tz, 'DD-MM-YYYY_HH-mm-ss');
+      const cleanName = this.sanitizeFileNamePart(name);
+      const cleanExt = (ext || 'bin').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+      return `${cleanName}_${docType}_${stamp}.${cleanExt || 'bin'}`;
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.buildDocFileName');
+    }
   }
 
   /**
@@ -229,33 +262,41 @@ export class GoogleDriveService {
    * chars dropped) so it stays Drive- and desktop-safe.
    */
   buildEntityFolderName(name: string, createdAt: Date = new Date()): string {
-    const tz = process.env.APP_TIMEZONE || 'Africa/Tunis';
-    const stamp = this.formatTimestamp(createdAt, tz, 'DD-MM-YYYY_HH-mm-ss');
-    return `${this.sanitizeFileNamePart(name)}_${stamp}`;
+    try {
+      const tz = process.env.APP_TIMEZONE || 'Africa/Tunis';
+      const stamp = this.formatTimestamp(createdAt, tz, 'DD-MM-YYYY_HH-mm-ss');
+      return `${this.sanitizeFileNamePart(name)}_${stamp}`;
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.buildEntityFolderName');
+    }
   }
 
   private formatTimestamp(date: Date, tz: string, fmt: string): string {
-    const parts: Record<string, string> = {};
-    for (const p of new Intl.DateTimeFormat('en-GB', {
-      timeZone: tz,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    }).formatToParts(date)) {
-      parts[p.type] = p.value;
+    try {
+      const parts: Record<string, string> = {};
+      for (const p of new Intl.DateTimeFormat('en-GB', {
+        timeZone: tz,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).formatToParts(date)) {
+        parts[p.type] = p.value;
+      }
+      const hour = parts.hour === '24' ? '00' : parts.hour; // some envs emit 24 at midnight
+      return fmt
+        .replace(/YYYY/g, parts.year)
+        .replace(/MM/g, parts.month)
+        .replace(/DD/g, parts.day)
+        .replace(/HH/g, hour)
+        .replace(/mm/g, parts.minute)
+        .replace(/ss/g, parts.second);
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.formatTimestamp');
     }
-    const hour = parts.hour === '24' ? '00' : parts.hour; // some envs emit 24 at midnight
-    return fmt
-      .replace(/YYYY/g, parts.year)
-      .replace(/MM/g, parts.month)
-      .replace(/DD/g, parts.day)
-      .replace(/HH/g, hour)
-      .replace(/mm/g, parts.minute)
-      .replace(/ss/g, parts.second);
   }
 
   // ───────────────────────────────────────────────────────────────────────
@@ -268,24 +309,28 @@ export class GoogleDriveService {
     name: string,
     parentId: string,
   ): Promise<DriveFolder | null> {
-    const escaped = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    const q = [
-      `name = '${escaped}'`,
-      `'${parentId}' in parents`,
-      `mimeType = 'application/vnd.google-apps.folder'`,
-      'trashed = false',
-    ].join(' and ');
-    const res = await this.callWithRetry('findFolder', () =>
-      drive.files.list({
-        q,
-        fields: 'files(id, webViewLink)',
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true,
-        pageSize: 1,
-      }),
-    );
-    const f = res.data.files?.[0];
-    return f?.id ? { id: f.id, webViewLink: f.webViewLink ?? '' } : null;
+    try {
+      const escaped = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      const q = [
+        `name = '${escaped}'`,
+        `'${parentId}' in parents`,
+        `mimeType = 'application/vnd.google-apps.folder'`,
+        'trashed = false',
+      ].join(' and ');
+      const res = await this.callWithRetry('findFolder', () =>
+        drive.files.list({
+          q,
+          fields: 'files(id, webViewLink)',
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true,
+          pageSize: 1,
+        }),
+      );
+      const f = res.data.files?.[0];
+      return f?.id ? { id: f.id, webViewLink: f.webViewLink ?? '' } : null;
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.findFolder');
+    }
   }
 
   /**
@@ -310,39 +355,43 @@ export class GoogleDriveService {
     namePrefix: string,
     parentId: string,
   ): Promise<DriveFolder[]> {
-    const probe = `${namePrefix}_`;
-    const escaped = probe.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    const q = [
-      `name contains '${escaped}'`,
-      `'${parentId}' in parents`,
-      `mimeType = 'application/vnd.google-apps.folder'`,
-      'trashed = false',
-    ].join(' and ');
-    const res = await this.callWithRetry('findFoldersByNamePrefix', () =>
-      drive.files.list({
-        q,
-        fields: 'files(id, name, createdTime, webViewLink)',
-        orderBy: 'createdTime',
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true,
-        pageSize: 100,
-      }),
-    );
-    const files = res.data.files ?? [];
-    const matches = files
-      .filter((f) => typeof f.name === 'string' && f.name.startsWith(probe))
-      .map((f) => ({
-        id: f.id as string,
-        webViewLink: f.webViewLink ?? '',
-        createdTime: f.createdTime ?? '',
-      }))
-      .filter((f) => !!f.id);
-    // `orderBy` already sorts ASC, but defensively re-sort: createdTime can
-    // be missing in some edge cases and we want a deterministic "first" pick.
-    matches.sort((a, b) =>
-      (a.createdTime || '').localeCompare(b.createdTime || ''),
-    );
-    return matches.map(({ id, webViewLink }) => ({ id, webViewLink }));
+    try {
+      const probe = `${namePrefix}_`;
+      const escaped = probe.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      const q = [
+        `name contains '${escaped}'`,
+        `'${parentId}' in parents`,
+        `mimeType = 'application/vnd.google-apps.folder'`,
+        'trashed = false',
+      ].join(' and ');
+      const res = await this.callWithRetry('findFoldersByNamePrefix', () =>
+        drive.files.list({
+          q,
+          fields: 'files(id, name, createdTime, webViewLink)',
+          orderBy: 'createdTime',
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true,
+          pageSize: 100,
+        }),
+      );
+      const files = res.data.files ?? [];
+      const matches = files
+        .filter((f) => typeof f.name === 'string' && f.name.startsWith(probe))
+        .map((f) => ({
+          id: f.id as string,
+          webViewLink: f.webViewLink ?? '',
+          createdTime: f.createdTime ?? '',
+        }))
+        .filter((f) => !!f.id);
+      // `orderBy` already sorts ASC, but defensively re-sort: createdTime can
+      // be missing in some edge cases and we want a deterministic "first" pick.
+      matches.sort((a, b) =>
+        (a.createdTime || '').localeCompare(b.createdTime || ''),
+      );
+      return matches.map(({ id, webViewLink }) => ({ id, webViewLink }));
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.findFoldersByNamePrefix');
+    }
   }
 
   /** Create a sub-folder by name under `parentId` (no find — always creates). */
@@ -351,19 +400,23 @@ export class GoogleDriveService {
     name: string,
     parentId: string,
   ): Promise<DriveFolder> {
-    const res = await this.callWithRetry('createSubFolder', () =>
-      drive.files.create({
-        requestBody: {
-          name,
-          mimeType: 'application/vnd.google-apps.folder',
-          parents: [parentId],
-        },
-        fields: 'id, webViewLink',
-        supportsAllDrives: true,
-      }),
-    );
-    if (!res.data.id) throw new Error('Drive folder create returned no id');
-    return { id: res.data.id, webViewLink: res.data.webViewLink ?? '' };
+    try {
+      const res = await this.callWithRetry('createSubFolder', () =>
+        drive.files.create({
+          requestBody: {
+            name,
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: [parentId],
+          },
+          fields: 'id, webViewLink',
+          supportsAllDrives: true,
+        }),
+      );
+      if (!res.data.id) throw new Error('Drive folder create returned no id');
+      return { id: res.data.id, webViewLink: res.data.webViewLink ?? '' };
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.createSubFolder');
+    }
   }
 
   /** Find-or-create a sub-folder by name under `parentId` (idempotent). Used for
@@ -373,9 +426,13 @@ export class GoogleDriveService {
     name: string,
     parentId: string,
   ): Promise<DriveFolder> {
-    const existing = await this.findFolder(drive, name, parentId);
-    if (existing) return existing;
-    return this.createSubFolder(drive, name, parentId);
+    try {
+      const existing = await this.findFolder(drive, name, parentId);
+      if (existing) return existing;
+      return await this.createSubFolder(drive, name, parentId);
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.ensureFolder');
+    }
   }
 
   /**
@@ -393,18 +450,22 @@ export class GoogleDriveService {
   private async ensureRootClientsFolder(
     drive: drive_v3.Drive,
   ): Promise<string> {
-    const rootName =
-      process.env.GOOGLE_DRIVE_ROOT_FOLDER_NAME?.trim() || 'CLIENTS';
-    const cacheKey = `__root:${rootName}`;
-    const cached = this.containerCache.get(cacheKey);
-    if (cached) return cached;
-    const folder = await this.ensureFolder(drive, rootName, 'root');
-    this.containerCache.set(cacheKey, folder.id);
-    this.logger.log(
-      `Root folder "${rootName}" ready (id=${folder.id}). ` +
-        `Set GOOGLE_DRIVE_PARENT_FOLDER_ID=${folder.id} to freeze it.`,
-    );
-    return folder.id;
+    try {
+      const rootName =
+        process.env.GOOGLE_DRIVE_ROOT_FOLDER_NAME?.trim() || 'CLIENTS';
+      const cacheKey = `__root:${rootName}`;
+      const cached = this.containerCache.get(cacheKey);
+      if (cached) return cached;
+      const folder = await this.ensureFolder(drive, rootName, 'root');
+      this.containerCache.set(cacheKey, folder.id);
+      this.logger.log(
+        `Root folder "${rootName}" ready (id=${folder.id}). ` +
+          `Set GOOGLE_DRIVE_PARENT_FOLDER_ID=${folder.id} to freeze it.`,
+      );
+      return folder.id;
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.ensureRootClientsFolder');
+    }
   }
 
   /**
@@ -415,9 +476,13 @@ export class GoogleDriveService {
    *     always visible under `drive.file`.
    */
   private async resolveParentId(drive: drive_v3.Drive): Promise<string> {
-    const configured = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID?.trim();
-    if (configured) return configured;
-    return this.ensureRootClientsFolder(drive);
+    try {
+      const configured = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID?.trim();
+      if (configured) return configured;
+      return await this.ensureRootClientsFolder(drive);
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.resolveParentId');
+    }
   }
 
   /** Resolve (create if missing) the `company`/`client` container under the
@@ -426,12 +491,16 @@ export class GoogleDriveService {
     drive: drive_v3.Drive,
     type: DriveEntityType,
   ): Promise<string> {
-    const cached = this.containerCache.get(type);
-    if (cached) return cached;
-    const parent = await this.resolveParentId(drive);
-    const container = await this.ensureFolder(drive, type, parent);
-    this.containerCache.set(type, container.id);
-    return container.id;
+    try {
+      const cached = this.containerCache.get(type);
+      if (cached) return cached;
+      const parent = await this.resolveParentId(drive);
+      const container = await this.ensureFolder(drive, type, parent);
+      this.containerCache.set(type, container.id);
+      return container.id;
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.ensureTypeContainer');
+    }
   }
 
   /**
@@ -461,40 +530,44 @@ export class GoogleDriveService {
     name: string,
     createdAt: Date = new Date(),
   ): Promise<DriveFolder> {
-    const drive = await this.ensureClient();
-    const containerId = await this.ensureTypeContainer(drive, type);
-    const sanitizedName = this.sanitizeFileNamePart(name);
+    try {
+      const drive = await this.ensureClient();
+      const containerId = await this.ensureTypeContainer(drive, type);
+      const sanitizedName = this.sanitizeFileNamePart(name);
 
-    const matches = await this.findFoldersByNamePrefix(
-      drive,
-      sanitizedName,
-      containerId,
-    );
-    if (matches.length > 0) {
-      const oldest = matches[0];
-      if (matches.length > 1) {
-        const extras = matches
-          .slice(1)
-          .map((m) => m.id)
-          .join(', ');
-        this.logger.warn(
-          `Entity has ${matches.length} folders matching ${type}/${sanitizedName}_*. ` +
-            `Reusing oldest (${oldest.id}); duplicate ids: ${extras}.`,
-        );
-      } else {
-        this.logger.log(
-          `Entity Drive folder REUSED by prefix: ${type}/${sanitizedName}_* (${oldest.id})`,
-        );
+      const matches = await this.findFoldersByNamePrefix(
+        drive,
+        sanitizedName,
+        containerId,
+      );
+      if (matches.length > 0) {
+        const oldest = matches[0];
+        if (matches.length > 1) {
+          const extras = matches
+            .slice(1)
+            .map((m) => m.id)
+            .join(', ');
+          this.logger.warn(
+            `Entity has ${matches.length} folders matching ${type}/${sanitizedName}_*. ` +
+              `Reusing oldest (${oldest.id}); duplicate ids: ${extras}.`,
+          );
+        } else {
+          this.logger.log(
+            `Entity Drive folder REUSED by prefix: ${type}/${sanitizedName}_* (${oldest.id})`,
+          );
+        }
+        return oldest;
       }
-      return oldest;
-    }
 
-    const folderName = this.buildEntityFolderName(name, createdAt);
-    const folder = await this.createSubFolder(drive, folderName, containerId);
-    this.logger.log(
-      `Entity Drive folder created: ${type}/${folderName} (${folder.id})`,
-    );
-    return folder;
+      const folderName = this.buildEntityFolderName(name, createdAt);
+      const folder = await this.createSubFolder(drive, folderName, containerId);
+      this.logger.log(
+        `Entity Drive folder created: ${type}/${folderName} (${folder.id})`,
+      );
+      return folder;
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.ensureEntityFolder');
+    }
   }
 
   /**
@@ -503,14 +576,18 @@ export class GoogleDriveService {
    * aren't tied to a company/client. Cached. Idempotent.
    */
   async ensureNamedContainer(name: string): Promise<string> {
-    const cacheKey = `__container:${name}`;
-    const cached = this.containerCache.get(cacheKey);
-    if (cached) return cached;
-    const drive = await this.ensureClient();
-    const parent = await this.resolveParentId(drive);
-    const folder = await this.ensureFolder(drive, name, parent);
-    this.containerCache.set(cacheKey, folder.id);
-    return folder.id;
+    try {
+      const cacheKey = `__container:${name}`;
+      const cached = this.containerCache.get(cacheKey);
+      if (cached) return cached;
+      const drive = await this.ensureClient();
+      const parent = await this.resolveParentId(drive);
+      const folder = await this.ensureFolder(drive, name, parent);
+      this.containerCache.set(cacheKey, folder.id);
+      return folder.id;
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.ensureNamedContainer');
+    }
   }
 
   // ───────────────────────────────────────────────────────────────────────
@@ -529,59 +606,63 @@ export class GoogleDriveService {
     buffer: Buffer,
     mimeType?: string,
   ): Promise<DriveFile> {
-    const drive = await this.ensureClient();
-    let res;
     try {
-      // Retries transient failures (429/5xx/network); rethrows invalid_grant as
-      // the actionable auth diagnostic (never retried).
-      res = await this.callWithRetry('uploadFile', () =>
-        drive.files.create({
-          requestBody: { name: fileName, parents: [folderId] },
-          media: {
-            mimeType: mimeType || 'application/octet-stream',
-            body: Readable.from(buffer),
-          },
-          fields: 'id, webViewLink, name',
-          supportsAllDrives: true,
-        }),
-      );
-    } catch (err) {
-      // invalid_grant already mapped to its diagnostic by callWithRetry — let it
-      // through unchanged so the operator sees the re-auth instructions.
-      if (isInvalidGrant(err) || (err as any)?.name === 'GoogleOAuthGrantError') {
-        throw err;
-      }
-      // A service account has NO storage quota, so it can CREATE folders (0
-      // bytes) but cannot STORE a file unless the parent lives in a Shared
-      // Drive (storage billed to the Workspace org). If the parent is in a
-      // personal My Drive, the upload is billed to the SA → this error. Turn
-      // Google's cryptic message into an actionable one.
-      if (this.isQuotaError(err)) {
-        throw new GoogleDriveUploadError(
-          'Upload Drive refusé : le compte de service n’a pas de quota de stockage. ' +
-            'Le dossier parent (GOOGLE_DRIVE_PARENT_FOLDER_ID) doit être DANS un Shared Drive ' +
-            'dont le service account est membre (Content Manager) — pas un My Drive personnel. ' +
-            `Détail Google : ${(err as Error)?.message ?? String(err)}`,
-          extractGoogleError(err).httpStatus,
-          'storageQuotaExceeded',
+      const drive = await this.ensureClient();
+      let res;
+      try {
+        // Retries transient failures (429/5xx/network); rethrows invalid_grant as
+        // the actionable auth diagnostic (never retried).
+        res = await this.callWithRetry('uploadFile', () =>
+          drive.files.create({
+            requestBody: { name: fileName, parents: [folderId] },
+            media: {
+              mimeType: mimeType || 'application/octet-stream',
+              body: Readable.from(buffer),
+            },
+            fields: 'id, webViewLink, name',
+            supportsAllDrives: true,
+          }),
         );
-      }
-      const info = extractGoogleError(err);
-      throw new GoogleDriveUploadError(
-        `Upload Drive "${fileName}" échoué (http=${
+      } catch (err) {
+        // invalid_grant already mapped to its diagnostic by callWithRetry — let it
+        // through unchanged so the operator sees the re-auth instructions.
+        if (isInvalidGrant(err) || (err as any)?.name === 'GoogleOAuthGrantError') {
+          throw err;
+        }
+        // A service account has NO storage quota, so it can CREATE folders (0
+        // bytes) but cannot STORE a file unless the parent lives in a Shared
+        // Drive (storage billed to the Workspace org). If the parent is in a
+        // personal My Drive, the upload is billed to the SA → this error. Turn
+        // Google's cryptic message into an actionable one.
+        if (this.isQuotaError(err)) {
+          throw new GoogleDriveUploadError(
+            'Upload Drive refusé : le compte de service n’a pas de quota de stockage. ' +
+              'Le dossier parent (GOOGLE_DRIVE_PARENT_FOLDER_ID) doit être DANS un Shared Drive ' +
+              'dont le service account est membre (Content Manager) — pas un My Drive personnel. ' +
+              `Détail Google : ${(err as Error)?.message ?? String(err)}`,
+            extractGoogleError(err).httpStatus,
+            'storageQuotaExceeded',
+          );
+        }
+        const info = extractGoogleError(err);
+        throw new GoogleDriveUploadError(
+          `Upload Drive "${fileName}" échoué (http=${
           info.httpStatus ?? 'n/a'
         }) : ${info.message}`,
-        info.httpStatus,
-      );
+          info.httpStatus,
+        );
+      }
+      const id = res.data.id;
+      if (!id) throw new Error('Drive file create returned no id');
+      this.logger.log(`Uploaded "${fileName}" to folder ${folderId} (${id})`);
+      return {
+        id,
+        webViewLink: res.data.webViewLink ?? '',
+        name: res.data.name ?? fileName,
+      };
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.uploadFile');
     }
-    const id = res.data.id;
-    if (!id) throw new Error('Drive file create returned no id');
-    this.logger.log(`Uploaded "${fileName}" to folder ${folderId} (${id})`);
-    return {
-      id,
-      webViewLink: res.data.webViewLink ?? '',
-      name: res.data.name ?? fileName,
-    };
   }
 
   /**
@@ -601,30 +682,34 @@ export class GoogleDriveService {
     folderId: string,
     pageSize = 1000,
   ): Promise<Array<{ id: string; name: string; createdTime: string; size: number }>> {
-    const drive = await this.ensureClient();
-    const q = [
-      `'${folderId}' in parents`,
-      `mimeType != 'application/vnd.google-apps.folder'`,
-      'trashed = false',
-    ].join(' and ');
-    const res = await this.callWithRetry('listFilesInFolder', () =>
-      drive.files.list({
-        q,
-        fields: 'files(id, name, createdTime, size)',
-        orderBy: 'createdTime desc',
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true,
-        pageSize: Math.min(Math.max(pageSize, 1), 1000),
-      }),
-    );
-    return (res.data.files ?? [])
-      .filter((f) => !!f.id)
-      .map((f) => ({
-        id: f.id as string,
-        name: f.name ?? '',
-        createdTime: f.createdTime ?? '',
-        size: Number(f.size ?? 0),
-      }));
+    try {
+      const drive = await this.ensureClient();
+      const q = [
+        `'${folderId}' in parents`,
+        `mimeType != 'application/vnd.google-apps.folder'`,
+        'trashed = false',
+      ].join(' and ');
+      const res = await this.callWithRetry('listFilesInFolder', () =>
+        drive.files.list({
+          q,
+          fields: 'files(id, name, createdTime, size)',
+          orderBy: 'createdTime desc',
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true,
+          pageSize: Math.min(Math.max(pageSize, 1), 1000),
+        }),
+      );
+      return (res.data.files ?? [])
+        .filter((f) => !!f.id)
+        .map((f) => ({
+          id: f.id as string,
+          name: f.name ?? '',
+          createdTime: f.createdTime ?? '',
+          size: Number(f.size ?? 0),
+        }));
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.listFilesInFolder');
+    }
   }
 
   /**
@@ -634,11 +719,15 @@ export class GoogleDriveService {
    * instead of silently believing the folder is bounded.
    */
   async deleteFile(fileId: string): Promise<void> {
-    const drive = await this.ensureClient();
-    await this.callWithRetry('deleteFile', () =>
-      drive.files.delete({ fileId, supportsAllDrives: true }),
-    );
-    this.logger.log(`Deleted Drive file ${fileId}`);
+    try {
+      const drive = await this.ensureClient();
+      await this.callWithRetry('deleteFile', () =>
+        drive.files.delete({ fileId, supportsAllDrives: true }),
+      );
+      this.logger.log(`Deleted Drive file ${fileId}`);
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.deleteFile');
+    }
   }
 
   /**
@@ -651,23 +740,27 @@ export class GoogleDriveService {
     isPublic: boolean;
     permissions: Array<{ id: string; type: string; role: string }>;
   }> {
-    const drive = await this.ensureClient();
-    const res = await this.callWithRetry('getFilePermissions', () =>
-      drive.permissions.list({
-        fileId,
-        fields: 'permissions(id, type, role)',
-        supportsAllDrives: true,
-      }),
-    );
-    const permissions = (res.data.permissions ?? []).map((p) => ({
-      id: p.id ?? '',
-      type: p.type ?? '',
-      role: p.role ?? '',
-    }));
-    return {
-      isPublic: permissions.some((p) => p.type === 'anyone'),
-      permissions,
-    };
+    try {
+      const drive = await this.ensureClient();
+      const res = await this.callWithRetry('getFilePermissions', () =>
+        drive.permissions.list({
+          fileId,
+          fields: 'permissions(id, type, role)',
+          supportsAllDrives: true,
+        }),
+      );
+      const permissions = (res.data.permissions ?? []).map((p) => ({
+        id: p.id ?? '',
+        type: p.type ?? '',
+        role: p.role ?? '',
+      }));
+      return {
+        isPublic: permissions.some((p) => p.type === 'anyone'),
+        permissions,
+      };
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.getFilePermissions');
+    }
   }
 
   /**
@@ -679,40 +772,48 @@ export class GoogleDriveService {
   async downloadFile(
     fileId: string,
   ): Promise<{ stream: Readable; mimeType: string; name: string }> {
-    const drive = await this.ensureClient();
-    const meta = await this.callWithRetry('downloadFile.meta', () =>
-      drive.files.get({
-        fileId,
-        fields: 'mimeType, name',
-        supportsAllDrives: true,
-      }),
-    );
-    const res = await this.callWithRetry('downloadFile.media', () =>
-      drive.files.get(
-        { fileId, alt: 'media', supportsAllDrives: true },
-        { responseType: 'stream' },
-      ),
-    );
-    return {
-      stream: res.data as unknown as Readable,
-      mimeType: meta.data.mimeType || 'application/octet-stream',
-      name: meta.data.name || 'file',
-    };
+    try {
+      const drive = await this.ensureClient();
+      const meta = await this.callWithRetry('downloadFile.meta', () =>
+        drive.files.get({
+          fileId,
+          fields: 'mimeType, name',
+          supportsAllDrives: true,
+        }),
+      );
+      const res = await this.callWithRetry('downloadFile.media', () =>
+        drive.files.get(
+          { fileId, alt: 'media', supportsAllDrives: true },
+          { responseType: 'stream' },
+        ),
+      );
+      return {
+        stream: res.data as unknown as Readable,
+        mimeType: meta.data.mimeType || 'application/octet-stream',
+        name: meta.data.name || 'file',
+      };
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.downloadFile');
+    }
   }
 
   /** Recognize the service-account "no storage quota" failure (any of the shapes
    *  googleapis surfaces it as). */
   private isQuotaError(err: unknown): boolean {
-    const reason = (err as any)?.errors?.[0]?.reason ?? (err as any)?.reason;
-    const message =
-      (err as any)?.errors?.[0]?.message ??
-      (err as any)?.response?.data?.error?.message ??
-      (err as any)?.message ??
-      '';
-    return (
-      reason === 'storageQuotaExceeded' ||
-      /storage quota|do not have storage/i.test(String(message))
-    );
+    try {
+      const reason = (err as any)?.errors?.[0]?.reason ?? (err as any)?.reason;
+      const message =
+        (err as any)?.errors?.[0]?.message ??
+        (err as any)?.response?.data?.error?.message ??
+        (err as any)?.message ??
+        '';
+      return (
+        reason === 'storageQuotaExceeded' ||
+        /storage quota|do not have storage/i.test(String(message))
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.isQuotaError');
+    }
   }
 
   /**
@@ -721,22 +822,26 @@ export class GoogleDriveService {
    * account, invisible to the OAuth account, or deleted).
    */
   isNotFoundError(err: unknown): boolean {
-    const code = (err as any)?.code ?? (err as any)?.response?.status;
-    const reason = (err as any)?.errors?.[0]?.reason ?? (err as any)?.reason;
-    const message =
-      (err as any)?.errors?.[0]?.message ??
-      (err as any)?.response?.data?.error?.message ??
-      (err as any)?.message ??
-      '';
-    // Anchored "^File not found" matches Drive's canonical 404 ("File not found:
-    // {id}") without catching arbitrary errors that merely mention "not found"
-    // somewhere in the message — the previous broad regex turned every
-    // unrelated upload failure into a forceRecreate, which is one of the paths
-    // that produced duplicate entity folders.
-    return (
-      code === 404 ||
-      reason === 'notFound' ||
-      /^file not found\b/i.test(String(message).trim())
-    );
+    try {
+      const code = (err as any)?.code ?? (err as any)?.response?.status;
+      const reason = (err as any)?.errors?.[0]?.reason ?? (err as any)?.reason;
+      const message =
+        (err as any)?.errors?.[0]?.message ??
+        (err as any)?.response?.data?.error?.message ??
+        (err as any)?.message ??
+        '';
+      // Anchored "^File not found" matches Drive's canonical 404 ("File not found:
+      // {id}") without catching arbitrary errors that merely mention "not found"
+      // somewhere in the message — the previous broad regex turned every
+      // unrelated upload failure into a forceRecreate, which is one of the paths
+      // that produced duplicate entity folders.
+      return (
+        code === 404 ||
+        reason === 'notFound' ||
+        /^file not found\b/i.test(String(message).trim())
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveService.isNotFoundError');
+    }
   }
 }

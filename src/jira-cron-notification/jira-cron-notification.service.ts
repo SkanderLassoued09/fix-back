@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import { JiraSearchIssue, JiraService } from 'src/jira/jira.service';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { JiraCronNotificationDocument } from './entities/jira-cron-notification.entity';
+import { withErrorContext } from '../common/error-context';
 
 export interface SyncResult {
   /** Issues returned by Jira for the due-soon window. */
@@ -59,9 +60,13 @@ export class JiraCronNotificationService {
   /** `YYYY-MM-DD` for "today" in Africa/Tunis. `en-CA` formats ISO order; no tz
    *  library needed. Isolated as a method so tests can pin it. */
   private todayTunis(): string {
-    return new Date().toLocaleDateString('en-CA', {
-      timeZone: 'Africa/Tunis',
-    });
+    try {
+      return new Date().toLocaleDateString('en-CA', {
+        timeZone: 'Africa/Tunis',
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'JiraCronNotificationService.todayTunis');
+    }
   }
 
   /**
@@ -69,18 +74,25 @@ export class JiraCronNotificationService {
    * robust to custom status names) whose due date is within the window.
    */
   private buildTasksJql(): string {
-    const project = (process.env.JIRA_PROJECT_KEY ?? '').trim();
-    const windowExpr = (process.env.JIRA_DUE_WINDOW ?? '1d').trim();
-    // Label filter is OPT-IN (default: none). Set JIRA_DUE_LABEL to scope.
-    const label = (process.env.JIRA_DUE_LABEL ?? '').trim();
-    const clauses = [
-      'statusCategory in ("To Do", "In Progress")',
-      project ? `project = "${project}"` : '',
-      'duedate >= now()',
-      `duedate <= ${windowExpr}`,
-      label ? `labels = "${label}"` : '',
-    ].filter(Boolean);
-    return `${clauses.join(' AND ')} ORDER BY duedate ASC`;
+    try {
+      const project = (process.env.JIRA_PROJECT_KEY ?? '').trim();
+      const windowExpr = (process.env.JIRA_DUE_WINDOW ?? '1d').trim();
+      // Label filter is OPT-IN (default: none). Set JIRA_DUE_LABEL to scope.
+      const label = (process.env.JIRA_DUE_LABEL ?? '').trim();
+      const clauses = [
+        'statusCategory in ("To Do", "In Progress")',
+        project ? `project = "${project}"` : '',
+        'duedate >= now()',
+        `duedate <= ${windowExpr}`,
+        label ? `labels = "${label}"` : '',
+      ].filter(Boolean);
+      return `${clauses.join(' AND ')} ORDER BY duedate ASC`;
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'JiraCronNotificationService.buildTasksJql',
+      );
+    }
   }
 
   /**
@@ -92,37 +104,44 @@ export class JiraCronNotificationService {
     issues: JiraSearchIssue[],
     day: string,
   ): Promise<number> {
-    let inserted = 0;
-    for (const issue of issues) {
-      if (!issue?.issueKey) continue;
-      const dedupeKey = `${issue.issueKey}:${day}`;
-      try {
-        const res: any = await this.model.updateOne(
-          { dedupeKey },
-          {
-            $setOnInsert: {
-              status: 'PENDING',
-              source: 'JIRA',
-              dedupeKey,
-              issueKey: issue.issueKey,
-              titre: issue.titre,
-              responsable: issue.responsable ?? null,
-              echeance: issue.echeance ?? null,
-              url: issue.url,
-              attempts: 0,
+    try {
+      let inserted = 0;
+      for (const issue of issues) {
+        if (!issue?.issueKey) continue;
+        const dedupeKey = `${issue.issueKey}:${day}`;
+        try {
+          const res: any = await this.model.updateOne(
+            { dedupeKey },
+            {
+              $setOnInsert: {
+                status: 'PENDING',
+                source: 'JIRA',
+                dedupeKey,
+                issueKey: issue.issueKey,
+                titre: issue.titre,
+                responsable: issue.responsable ?? null,
+                echeance: issue.echeance ?? null,
+                url: issue.url,
+                attempts: 0,
+              },
             },
-          },
-          { upsert: true },
-        );
-        if ((res?.upsertedCount ?? 0) > 0 || res?.upsertedId) inserted++;
-      } catch (e: any) {
-        // 11000 = unique-index race on a concurrent run → the row exists, fine.
-        if (e?.code !== 11000) {
-          this.logger.error(`Upsert ${dedupeKey} échoué: ${e?.message ?? e}`);
+            { upsert: true },
+          );
+          if ((res?.upsertedCount ?? 0) > 0 || res?.upsertedId) inserted++;
+        } catch (e: any) {
+          // 11000 = unique-index race on a concurrent run → the row exists, fine.
+          if (e?.code !== 11000) {
+            this.logger.error(`Upsert ${dedupeKey} échoué: ${e?.message ?? e}`);
+          }
         }
       }
+      return inserted;
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'JiraCronNotificationService.upsertIssuesAsPending',
+      );
     }
-    return inserted;
   }
 
   /**
@@ -131,43 +150,51 @@ export class JiraCronNotificationService {
    * `{ skipped: true }`.
    */
   private async run(jql: string, label: string): Promise<SyncResult> {
-    if (!this.jiraService.isConfigured) {
-      this.logger.warn(
-        'Jira non configuré (JIRA_*) — synchronisation ignorée.',
-      );
-      return { fetched: 0, inserted: 0, skipped: true };
-    }
-
-    let issues: JiraSearchIssue[];
     try {
-      issues = await this.jiraService.searchIssues(jql);
-    } catch (err) {
-      const message = (err as Error)?.message ?? String(err);
-      this.logger.error(`Recherche Jira échouée (${jql}): ${message}`);
-      return { fetched: 0, inserted: 0, error: message };
-    }
+      if (!this.jiraService.isConfigured) {
+        this.logger.warn(
+          'Jira non configuré (JIRA_*) — synchronisation ignorée.',
+        );
+        return { fetched: 0, inserted: 0, skipped: true };
+      }
 
-    if (!issues.length) {
-      this.logger.log(`${label}: aucune issue — rien à insérer.`);
-      return { fetched: 0, inserted: 0 };
-    }
+      let issues: JiraSearchIssue[];
+      try {
+        issues = await this.jiraService.searchIssues(jql);
+      } catch (err) {
+        const message = (err as Error)?.message ?? String(err);
+        this.logger.error(`Recherche Jira échouée (${jql}): ${message}`);
+        return { fetched: 0, inserted: 0, error: message };
+      }
 
-    const inserted = await this.upsertIssuesAsPending(
-      issues,
-      this.todayTunis(),
-    );
-    this.logger.log(
-      `${label}: ${issues.length} issue(s) vue(s), ${inserted} nouvelle(s) PENDING.`,
-    );
-    return { fetched: issues.length, inserted };
+      if (!issues.length) {
+        this.logger.log(`${label}: aucune issue — rien à insérer.`);
+        return { fetched: 0, inserted: 0 };
+      }
+
+      const inserted = await this.upsertIssuesAsPending(
+        issues,
+        this.todayTunis(),
+      );
+      this.logger.log(
+        `${label}: ${issues.length} issue(s) vue(s), ${inserted} nouvelle(s) PENDING.`,
+      );
+      return { fetched: issues.length, inserted };
+    } catch (error) {
+      throw withErrorContext(error, 'JiraCronNotificationService.run');
+    }
   }
 
   /** SYNC_JIRA_TASKS — OPEN (TODO/IN-PROGRESS) tasks due within ~24h. */
   async syncTaches(): Promise<SyncResult> {
-    return await this.run(
-      this.buildTasksJql(),
-      'Jira tasks (TODO/IN-PROGRESS)',
-    );
+    try {
+      return await this.run(
+        this.buildTasksJql(),
+        'Jira tasks (TODO/IN-PROGRESS)',
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'JiraCronNotificationService.syncTaches');
+    }
   }
 
   /**
@@ -185,81 +212,96 @@ export class JiraCronNotificationService {
    *      JIRA_NOTIF_MAX_ATTEMPTS goes FAILED instead, to stop looping forever.
    */
   async envoyerNotifications(): Promise<NotifyResult> {
-    if (!this.discordHook.isPvConfigured) {
-      this.logger.warn(
-        'Discord (DISCORD_PV_WEBHOOK_URL) non configuré — envoi ignoré.',
-      );
-      return { claimed: 0, processed: 0, failed: 0, skipped: true };
-    }
-
-    const pendings: any[] = await this.model.find({ status: 'PENDING' }).lean();
-    if (!pendings.length) {
-      this.logger.log('Aucune notification PENDING — rien à envoyer.');
-      return { claimed: 0, processed: 0, failed: 0 };
-    }
-
-    // Atomic claim, one row at a time (PENDING → PROCESSING).
-    const claimed: any[] = [];
-    for (const p of pendings) {
-      const row: any = await this.model.findOneAndUpdate(
-        { _id: p._id, status: 'PENDING' },
-        { $set: { status: 'PROCESSING' } },
-        { new: true },
-      );
-      if (row) claimed.push(row.toObject ? row.toObject() : row);
-    }
-    if (!claimed.length) {
-      this.logger.log('Tous les PENDING déjà claimés par une autre exécution.');
-      return { claimed: 0, processed: 0, failed: 0 };
-    }
-
-    const ids = claimed.map((c) => c._id);
     try {
-      await this.discordHook.sendJiraTasksDigest(claimed);
-      await this.model.updateMany(
-        { _id: { $in: ids } },
-        { $set: { status: 'PROCESSED' } },
-      );
-      this.logger.log(
-        `Jira notif: ${claimed.length} tâche(s) notifiée(s) → PROCESSED.`,
-      );
-      return { claimed: claimed.length, processed: claimed.length, failed: 0 };
-    } catch (err) {
-      const message = (err as Error)?.message ?? String(err);
-      const max = Number(process.env.JIRA_NOTIF_MAX_ATTEMPTS ?? 5) || 5;
-      const toFail = claimed
-        .filter((c) => (c.attempts ?? 0) + 1 >= max)
-        .map((c) => c._id);
-      const toRetry = claimed
-        .filter((c) => (c.attempts ?? 0) + 1 < max)
-        .map((c) => c._id);
-      if (toRetry.length) {
-        await this.model.updateMany(
-          { _id: { $in: toRetry } },
-          {
-            $set: { status: 'PENDING', lastError: message },
-            $inc: { attempts: 1 },
-          },
+      if (!this.discordHook.isPvConfigured) {
+        this.logger.warn(
+          'Discord (DISCORD_PV_WEBHOOK_URL) non configuré — envoi ignoré.',
         );
+        return { claimed: 0, processed: 0, failed: 0, skipped: true };
       }
-      if (toFail.length) {
-        await this.model.updateMany(
-          { _id: { $in: toFail } },
-          {
-            $set: { status: 'FAILED', lastError: message },
-            $inc: { attempts: 1 },
-          },
+
+      const pendings: any[] = await this.model
+        .find({ status: 'PENDING' })
+        .lean();
+      if (!pendings.length) {
+        this.logger.log('Aucune notification PENDING — rien à envoyer.');
+        return { claimed: 0, processed: 0, failed: 0 };
+      }
+
+      // Atomic claim, one row at a time (PENDING → PROCESSING).
+      const claimed: any[] = [];
+      for (const p of pendings) {
+        const row: any = await this.model.findOneAndUpdate(
+          { _id: p._id, status: 'PENDING' },
+          { $set: { status: 'PROCESSING' } },
+          { new: true },
         );
+        if (row) claimed.push(row.toObject ? row.toObject() : row);
       }
-      this.logger.error(
-        `Envoi Discord échoué: ${message} — ${claimed.length} revert PENDING (${toFail.length} → FAILED).`,
+      if (!claimed.length) {
+        this.logger.log(
+          'Tous les PENDING déjà claimés par une autre exécution.',
+        );
+        return { claimed: 0, processed: 0, failed: 0 };
+      }
+
+      const ids = claimed.map((c) => c._id);
+      try {
+        await this.discordHook.sendJiraTasksDigest(claimed);
+        await this.model.updateMany(
+          { _id: { $in: ids } },
+          { $set: { status: 'PROCESSED' } },
+        );
+        this.logger.log(
+          `Jira notif: ${claimed.length} tâche(s) notifiée(s) → PROCESSED.`,
+        );
+        return {
+          claimed: claimed.length,
+          processed: claimed.length,
+          failed: 0,
+        };
+      } catch (err) {
+        const message = (err as Error)?.message ?? String(err);
+        const max = Number(process.env.JIRA_NOTIF_MAX_ATTEMPTS ?? 5) || 5;
+        const toFail = claimed
+          .filter((c) => (c.attempts ?? 0) + 1 >= max)
+          .map((c) => c._id);
+        const toRetry = claimed
+          .filter((c) => (c.attempts ?? 0) + 1 < max)
+          .map((c) => c._id);
+        if (toRetry.length) {
+          await this.model.updateMany(
+            { _id: { $in: toRetry } },
+            {
+              $set: { status: 'PENDING', lastError: message },
+              $inc: { attempts: 1 },
+            },
+          );
+        }
+        if (toFail.length) {
+          await this.model.updateMany(
+            { _id: { $in: toFail } },
+            {
+              $set: { status: 'FAILED', lastError: message },
+              $inc: { attempts: 1 },
+            },
+          );
+        }
+        this.logger.error(
+          `Envoi Discord échoué: ${message} — ${claimed.length} revert PENDING (${toFail.length} → FAILED).`,
+        );
+        return {
+          claimed: claimed.length,
+          processed: 0,
+          failed: claimed.length,
+          error: message,
+        };
+      }
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'JiraCronNotificationService.envoyerNotifications',
       );
-      return {
-        claimed: claimed.length,
-        processed: 0,
-        failed: claimed.length,
-        error: message,
-      };
     }
   }
 }

@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import { DiDocument } from 'src/di/entities/di.entity';
 import { firstNonEmpty, formatDateForSheet, safeCell } from '../utils/format.util';
 import { IGoogleSheetMapper } from './google-sheet-mapper.interface';
+import { withErrorContext } from '../../common/error-context';
 
 /**
  * "Actions en cours" → live snapshot of every DI currently in the workshop
@@ -48,17 +49,21 @@ export class ActionsEnCoursSheetMapper implements IGoogleSheetMapper<DiDocument>
   constructor(@InjectModel('Di') private readonly diModel: Model<DiDocument>) {}
 
   async fetch(): Promise<DiDocument[]> {
-    return this.diModel
-      .find({
-        isDeleted: { $ne: true },
-        status: { $nin: ActionsEnCoursSheetMapper.CLOSED },
-      })
-      .populate('client_id', 'first_name last_name')
-      .populate('company_id', 'name')
-      .populate('location_id', 'location_name')
-      .sort({ createdAt: -1 })
-      .lean()
-      .exec();
+    try {
+      return await this.diModel
+        .find({
+          isDeleted: { $ne: true },
+          status: { $nin: ActionsEnCoursSheetMapper.CLOSED },
+        })
+        .populate('client_id', 'first_name last_name')
+        .populate('company_id', 'name')
+        .populate('location_id', 'location_name')
+        .sort({ createdAt: -1 })
+        .lean()
+        .exec();
+    } catch (error) {
+      throw withErrorContext(error, 'ActionsEnCoursSheetMapper.fetch');
+    }
   }
 
   mapToSheetRow(di: DiDocument): string[] {
@@ -81,26 +86,38 @@ export class ActionsEnCoursSheetMapper implements IGoogleSheetMapper<DiDocument>
   }
 
   uniqueKey(di: DiDocument): string | null {
-    return di?._idnum ?? di?._id ?? null;
+    try {
+      return di?._idnum ?? di?._id ?? null;
+    } catch (error) {
+      throw withErrorContext(error, 'ActionsEnCoursSheetMapper.uniqueKey');
+    }
   }
 
   private buildClientName(di: DiDocument): string {
-    const c: any = di.client_id;
-    if (c && typeof c === 'object') {
-      const full = [c.first_name, c.last_name].filter(Boolean).join(' ').trim();
-      if (full) return full;
+    try {
+      const c: any = di.client_id;
+      if (c && typeof c === 'object') {
+        const full = [c.first_name, c.last_name].filter(Boolean).join(' ').trim();
+        if (full) return full;
+      }
+      const co: any = di.company_id;
+      if (co && typeof co === 'object' && co.name) return String(co.name);
+      return firstNonEmpty(
+        typeof c === 'string' ? c : '',
+        typeof co === 'string' ? co : '',
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'ActionsEnCoursSheetMapper.buildClientName');
     }
-    const co: any = di.company_id;
-    if (co && typeof co === 'object' && co.name) return String(co.name);
-    return firstNonEmpty(
-      typeof c === 'string' ? c : '',
-      typeof co === 'string' ? co : '',
-    );
   }
 
   private buildLocation(di: DiDocument): string {
-    const l: any = (di as any).location_id;
-    if (l && typeof l === 'object' && l.location_name) return String(l.location_name);
-    return firstNonEmpty(typeof l === 'string' ? l : '', (di as any).location_name);
+    try {
+      const l: any = (di as any).location_id;
+      if (l && typeof l === 'object' && l.location_name) return String(l.location_name);
+      return firstNonEmpty(typeof l === 'string' ? l : '', (di as any).location_name);
+    } catch (error) {
+      throw withErrorContext(error, 'ActionsEnCoursSheetMapper.buildLocation');
+    }
   }
 }

@@ -1,3 +1,4 @@
+import { withErrorContext } from '../common/error-context';
 /**
  * ALIGNEMENT du vocabulaire de rôles — SOURCE UNIQUE.
  *
@@ -43,10 +44,15 @@ export const HUMAN_ROLE_TO_PROFILE_ROLE: Record<string, string> = {
  * Retourne `null` si le rôle n'est pas reconnu (jamais deviné).
  */
 export function toProfileRole(role: string | null | undefined): string | null {
-  if (!role) return null;
-  if (PROFILE_ROLE_SET.has(role)) return role; // déjà une valeur profil
-  if (HUMAN_ROLE_TO_PROFILE_ROLE[role]) return HUMAN_ROLE_TO_PROFILE_ROLE[role];
-  return null; // inconnu → non résolu (l'appelant loggue, ne devine pas)
+  try {
+    if (!role) return null;
+    if (PROFILE_ROLE_SET.has(role)) return role; // déjà une valeur profil
+    if (HUMAN_ROLE_TO_PROFILE_ROLE[role])
+      return HUMAN_ROLE_TO_PROFILE_ROLE[role];
+    return null; // inconnu → non résolu (l'appelant loggue, ne devine pas)
+  } catch (error) {
+    throw withErrorContext(error, 'toProfileRole');
+  }
 }
 
 /**
@@ -57,12 +63,16 @@ export function toProfileRoles(roles: string[]): {
   resolved: string[];
   unresolved: string[];
 } {
-  const resolved = new Set<string>();
-  const unresolved: string[] = [];
-  for (const r of roles ?? []) {
-    const m = toProfileRole(r);
-    if (m) resolved.add(m);
-    else unresolved.push(r);
+  try {
+    const resolved = new Set<string>();
+    const unresolved: string[] = [];
+    for (const r of roles ?? []) {
+      const m = toProfileRole(r);
+      if (m) resolved.add(m);
+      else unresolved.push(r);
+    }
+    return { resolved: [...resolved], unresolved };
+  } catch (error) {
+    throw withErrorContext(error, 'toProfileRoles');
   }
-  return { resolved: [...resolved], unresolved };
 }

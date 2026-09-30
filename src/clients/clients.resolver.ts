@@ -7,17 +7,22 @@ import {
 } from './dto/create-client.input';
 import { PaginationConfig } from 'src/company/dto/create-company.input';
 import { SearchInput } from 'src/stat/dto/create-stat.input';
+import { withErrorContext } from '../common/error-context';
 
 @Resolver(() => Client)
 export class ClientsResolver {
   constructor(private readonly clientsService: ClientsService) {}
 
   @Mutation(() => Client)
-  createClient(
+  async createClient(
     @Args('createClientInput')
     createClientInput: CreateClientInput,
   ) {
-    return this.clientsService.createClient(createClientInput);
+    try {
+      return await this.clientsService.createClient(createClientInput);
+    } catch (error) {
+      throw withErrorContext(error, 'ClientsResolver.createClient');
+    }
   }
 
   @Mutation(() => Client)
@@ -44,38 +49,66 @@ export class ClientsResolver {
 
   @Query(() => Client)
   async findOneClient(@Args('_id') _id: string): Promise<Client> {
-    return await this.clientsService.findOneClient(_id);
+    try {
+      return await this.clientsService.findOneClient(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'ClientsResolver.findOneClient');
+    }
   }
 
   @Query(() => [Client])
   async getAllClient(): Promise<any> {
-    return await this.clientsService.getAllClient();
+    try {
+      return await this.clientsService.getAllClient();
+    } catch (error) {
+      throw withErrorContext(error, 'ClientsResolver.getAllClient');
+    }
   }
 
   @Query(() => ClientTableData)
   async findAllClient(
     @Args('PaginationConfig') paginationConfig: PaginationConfig,
   ): Promise<ClientTableData> {
-    return await this.clientsService.findAllClients(paginationConfig);
+    try {
+      return await this.clientsService.findAllClients(paginationConfig);
+    } catch (error) {
+      throw withErrorContext(error, 'ClientsResolver.findAllClient');
+    }
   }
   @Query(() => ClientTableData)
   async searchClient(
     @Args('paginationConfig') paginationConfig: PaginationConfig,
     @Args('search') search: SearchInput,
   ): Promise<ClientTableData> {
-    return await this.clientsService.searchClient(paginationConfig, search);
+    try {
+      return await this.clientsService.searchClient(paginationConfig, search);
+    } catch (error) {
+      throw withErrorContext(error, 'ClientsResolver.searchClient');
+    }
   }
 
   /** (Re)create the client's Drive folder when it has none. Idempotent. */
   @Mutation(() => Client)
-  ensureClientDriveFolder(@Args('clientId') clientId: string): Promise<Client> {
-    return this.clientsService.ensureClientDriveFolder(clientId);
+  async ensureClientDriveFolder(
+    @Args('clientId') clientId: string,
+  ): Promise<Client> {
+    try {
+      return await this.clientsService.ensureClientDriveFolder(clientId);
+    } catch (error) {
+      throw withErrorContext(error, 'ClientsResolver.ensureClientDriveFolder');
+    }
   }
 
   /** Force-recreate a client's Drive folder (clears the stale id then recreates
    *  under the current OAuth account). For the SA→OAuth migration. */
   @Mutation(() => Client)
-  resetClientDriveFolder(@Args('clientId') clientId: string): Promise<Client> {
-    return this.clientsService.resetClientDriveFolder(clientId);
+  async resetClientDriveFolder(
+    @Args('clientId') clientId: string,
+  ): Promise<Client> {
+    try {
+      return await this.clientsService.resetClientDriveFolder(clientId);
+    } catch (error) {
+      throw withErrorContext(error, 'ClientsResolver.resetClientDriveFolder');
+    }
   }
 }

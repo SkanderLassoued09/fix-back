@@ -1,3 +1,4 @@
+import { withErrorContext } from '../common/error-context';
 export const STATUS_DI = {
   Created: {
     status: 'CREATED',
@@ -178,15 +179,17 @@ export const STATUS_DI = {
     // Le Tech a FINI sa réparation : dès WAITING_BL, la DI sort de sa vue (le
     // BL est uploadé par la coordination). Retirer 'Tech' l'exclut de
     // `TECH_STATUS_DI_VALUES` → la DI n'apparaît plus dans la liste technicien.
-    role: ['Manager', 'Admin_Tech', 'Admin_Manager'],
+    // 'Magasin' : le magasin dépose aussi BL / Facture (depuis ticket-list) et
+    // est prévenu ; exclu de `MAGASIN_STATUS_DI_VALUES` (voir plus bas).
+    role: ['Manager', 'Admin_Tech', 'Admin_Manager', 'Magasin'],
     future_status: ['WaitingFacture'],
   },
   WaitingFacture: {
     status: 'WAITING_FACTURE',
     description: 'Clôture — attente de la facture',
     // Même règle que WAITING_BL : le Tech ne voit JAMAIS la clôture documentaire
-    // (liste, recherche, compteurs — cf. `getDiStatusCounts`).
-    role: ['Manager', 'Admin_Tech', 'Admin_Manager'],
+    // (liste, recherche, compteurs — cf. `getDiStatusCounts`). Magasin : idem WAITING_BL.
+    role: ['Manager', 'Admin_Tech', 'Admin_Manager', 'Magasin'],
     future_status: ['Finished'],
   },
   Finished: {
@@ -252,7 +255,11 @@ export const APPROVAL_DOC_STATUS_VALUES: readonly string[] = [
 /** True si le statut est dans la phase Approval documentaire (tolérant aux
  *  valeurs legacy `ATTENTE_BC_DEVIS`/`NEGOTIATION1` non encore migrées). */
 export function isApprovalDocStatus(status?: string | null): boolean {
-  return APPROVAL_DOC_STATUS_VALUES.includes(status ?? '');
+  try {
+    return APPROVAL_DOC_STATUS_VALUES.includes(status ?? '');
+  } catch (error) {
+    throw withErrorContext(error, 'isApprovalDocStatus');
+  }
 }
 
 /**
@@ -270,15 +277,23 @@ export const CLOSING_STATUS_VALUES: readonly string[] = [
 /** True si le statut correspond à la phase de clôture documentaire (tolérant
  *  aux anciennes valeurs `CLOSING`/`ATTENTE_BL_FACTURE` non encore migrées). */
 export function isClosingStatus(status: string | null | undefined): boolean {
-  return CLOSING_STATUS_VALUES.includes(status ?? '');
+  try {
+    return CLOSING_STATUS_VALUES.includes(status ?? '');
+  } catch (error) {
+    throw withErrorContext(error, 'isClosingStatus');
+  }
 }
 
 export const TECH_STATUS_DI_VALUES = Object.values(STATUS_DI)
   .filter((status) => status.role.includes('Tech'))
   .map((status) => status.status);
 
+// La clôture documentaire (WAITING_BL / WAITING_FACTURE) porte 'Magasin' pour
+// les notifications et le dépôt BL / Facture, mais n'appartient PAS à la liste
+// magasin (préparation des composants) : elle se traite depuis ticket-list.
 export const MAGASIN_STATUS_DI_VALUES = Object.values(STATUS_DI)
   .filter((status) => status.role.includes('Magasin'))
+  .filter((status) => !CLOSING_STATUS_VALUES.includes(status.status))
   .map((status) => status.status);
 
 export const COORDINATOR_STATUS_DI_VALUES = Object.values(STATUS_DI)
@@ -310,6 +325,10 @@ export const COORDINATOR_STATUS_DI_VALUES = Object.values(STATUS_DI)
  * Renvoie une COPIE : l'appelant peut concaténer sans muter `STATUS_DI`.
  */
 export function rolesForStatus(status?: string | null): string[] {
-  const def = Object.values(STATUS_DI).find((s) => s.status === status);
-  return [...(def?.role ?? ['Coordinator'])];
+  try {
+    const def = Object.values(STATUS_DI).find((s) => s.status === status);
+    return [...(def?.role ?? ['Coordinator'])];
+  } catch (error) {
+    throw withErrorContext(error, 'rolesForStatus');
+  }
 }

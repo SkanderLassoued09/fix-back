@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'async_hooks';
 import { JwtService } from '@nestjs/jwt';
 import { JWT_SECRET } from '../auth/jwt.constants';
+import { withErrorContext } from './error-context';
 
 /**
  * Contexte de requête (AsyncLocalStorage) — permet à un service profond
@@ -29,7 +30,11 @@ const storage = new AsyncLocalStorage<RequestStore>();
 const jwt = new JwtService({ secret: JWT_SECRET });
 
 export function runWithRequest<T>(req: any, next: () => T): T {
-  return storage.run({ req }, next);
+  try {
+    return storage.run({ req }, next);
+  } catch (error) {
+    throw withErrorContext(error, 'runWithRequest');
+  }
 }
 
 /**
@@ -41,24 +46,30 @@ export function runWithRequest<T>(req: any, next: () => T): T {
  *   - `undefined` hors requête (mode ACTION, cron) : pas d'acteur humain.
  */
 export function currentActor(): RequestActor | null | undefined {
-  const store = storage.getStore();
-  if (!store) return undefined;
-  const req = store.req;
-  if (req?.user) return req.user;
-
-  const header = req?.headers?.authorization;
-  const match =
-    typeof header === 'string' ? /^Bearer\s+(.+)$/i.exec(header.trim()) : null;
-  if (!match) return null;
   try {
-    const payload: any = jwt.verify(match[1]);
-    return {
-      _id: payload?._id,
-      role: payload?.role,
-      username: payload?.username,
-      email: payload?.email,
-    };
-  } catch {
-    return null;
+    const store = storage.getStore();
+    if (!store) return undefined;
+    const req = store.req;
+    if (req?.user) return req.user;
+
+    const header = req?.headers?.authorization;
+    const match =
+      typeof header === 'string'
+        ? /^Bearer\s+(.+)$/i.exec(header.trim())
+        : null;
+    if (!match) return null;
+    try {
+      const payload: any = jwt.verify(match[1]);
+      return {
+        _id: payload?._id,
+        role: payload?.role,
+        username: payload?.username,
+        email: payload?.email,
+      };
+    } catch {
+      return null;
+    }
+  } catch (error) {
+    throw withErrorContext(error, 'currentActor');
   }
 }

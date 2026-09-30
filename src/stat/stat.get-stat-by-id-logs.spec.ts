@@ -46,9 +46,12 @@ describe('StatService.getStatByIdlogs — pas de crash sans logs', () => {
     expect(res.id_tech_diag).toBe('Tech Name');
   });
 
-  it('lève toujours quand AUCUN stat n’existe (comportement inchangé)', async () => {
+  it('DI sans aucun Stat (pas encore affectée) : null, sans alerte', async () => {
+    // Avant : « Stat not found » levé → 2 alertes Discord (MEDIUM + HIGH
+    // INTERNAL_SERVER_ERROR) à chaque ouverture du détail d'une DI en
+    // CREATED/PENDING1. Le front gère déjà `null` (`|| []`).
     const svc = makeSvc(null);
-    await expect(svc.getStatByIdlogs('DI4')).rejects.toThrow('Stat not found');
-    expect(svc.operationalErrorService.capture).toHaveBeenCalled();
+    await expect(svc.getStatByIdlogs('DI4')).resolves.toBeNull();
+    expect(svc.operationalErrorService.capture).not.toHaveBeenCalled();
   });
 });

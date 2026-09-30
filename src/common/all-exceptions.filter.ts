@@ -9,6 +9,7 @@ import { GqlArgumentsHost, GqlContextType } from '@nestjs/graphql';
 import { GraphQLError } from 'graphql';
 import { randomUUID } from 'crypto';
 import { OperationalErrorService } from '../operational-error/operational-error.service';
+import { errorOrigin } from './error-context';
 
 /**
  * Global safety net (Phase 3): every unhandled exception — GraphQL or HTTP —
@@ -67,6 +68,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
       payload: {
         code,
         correlationId,
+        // Innermost service/resolver method the error went through
+        // (tagged by withErrorContext) — the GraphQL field alone is too coarse.
+        ...(errorOrigin(exception) ? { origin: errorOrigin(exception) } : {}),
         ...(validationMessages.length ? { validationMessages } : {}),
         ...(isTest ? { test: true } : {}),
       },

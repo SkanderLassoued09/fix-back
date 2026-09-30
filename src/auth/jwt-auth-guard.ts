@@ -2,6 +2,7 @@ import { ExecutionContext, Injectable } from '@nestjs/common';
 import { GqlExecutionContext } from '@nestjs/graphql';
 import { AuthGuard } from '@nestjs/passport';
 import { GraphQLError } from 'graphql';
+import { withErrorContext } from '../common/error-context';
 
 /** Erreur d'authentification au format GraphQL du dépôt. `extensions.code` est
  *  lu par `AllExceptionsFilter`, qui classe `UNAUTHENTICATED` parmi les codes
@@ -14,12 +15,16 @@ const unauthenticated = () =>
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
   getRequest(context: ExecutionContext) {
-    const ctx = GqlExecutionContext.create(context);
-    const request = ctx.getContext().req;
-    if (!request) {
-      throw unauthenticated();
+    try {
+      const ctx = GqlExecutionContext.create(context);
+      const request = ctx.getContext().req;
+      if (!request) {
+        throw unauthenticated();
+      }
+      return request;
+    } catch (error) {
+      throw withErrorContext(error, 'JwtAuthGuard.getRequest');
     }
-    return request;
   }
 
   /**
@@ -38,9 +43,13 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
    * signature invalide) disparaissait silencieusement. On la propage.
    */
   handleRequest(err: any, user: any) {
-    if (err || !user) {
-      throw err || unauthenticated();
+    try {
+      if (err || !user) {
+        throw err || unauthenticated();
+      }
+      return user;
+    } catch (error) {
+      throw withErrorContext(error, 'JwtAuthGuard.handleRequest');
     }
-    return user;
   }
 }

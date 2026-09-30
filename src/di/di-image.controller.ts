@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import { Response } from 'express';
 import { Di, DiDocument } from './entities/di.entity';
 import { GoogleDriveService } from 'src/google-drive/google-drive.service';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * Read-only image proxy for a DI's creation photo.
@@ -34,45 +35,53 @@ export class DiImageController {
    * isn't a recognisable Drive URL (e.g. a legacy bare filename).
    */
   private extractDriveFileId(raw?: string): string {
-    if (!raw) return '';
-    const s = raw.toString().trim();
-    const byPath = s.match(/\/(?:file\/)?d\/([A-Za-z0-9_-]{10,})/);
-    if (byPath) return byPath[1];
-    const byQuery = s.match(/[?&]id=([A-Za-z0-9_-]{10,})/);
-    if (byQuery) return byQuery[1];
-    return '';
+    try {
+      if (!raw) return '';
+      const s = raw.toString().trim();
+      const byPath = s.match(/\/(?:file\/)?d\/([A-Za-z0-9_-]{10,})/);
+      if (byPath) return byPath[1];
+      const byQuery = s.match(/[?&]id=([A-Za-z0-9_-]{10,})/);
+      if (byQuery) return byQuery[1];
+      return '';
+    } catch (error) {
+      throw withErrorContext(error, 'DiImageController.extractDriveFileId');
+    }
   }
 
   @Get(':id/image')
   async getImage(@Param('id') id: string, @Res() res: Response): Promise<void> {
-    const di: any = await this.diModel
-      .findOne({ _id: id })
-      .select('driveDocs image')
-      .lean();
-    // Prefer the structured id; fall back to parsing the stored Drive URL so a
-    // DI whose driveDocs.Image was never populated still serves its photo.
-    const fileId =
-      di?.driveDocs?.Image?.driveFileId || this.extractDriveFileId(di?.image);
-    if (!fileId) {
-      res.status(404).json({ message: 'Aucune image jointe' });
-      return;
-    }
     try {
-      const { stream, mimeType } = await this.drive.downloadFile(fileId);
-      res.setHeader('Content-Type', mimeType);
-      res.setHeader('Cache-Control', 'private, max-age=3600');
-      stream.on('error', (err) => {
-        this.logger.warn(`DI image stream error (${id}): ${err?.message}`);
-        if (!res.headersSent) res.status(502).end();
-      });
-      stream.pipe(res);
-    } catch (err) {
-      this.logger.warn(
-        `DI image proxy failed (${id}): ${(err as Error)?.message ?? err}`,
-      );
-      if (!res.headersSent) {
-        res.status(502).json({ message: 'Image indisponible' });
+      const di: any = await this.diModel
+        .findOne({ _id: id })
+        .select('driveDocs image')
+        .lean();
+      // Prefer the structured id; fall back to parsing the stored Drive URL so a
+      // DI whose driveDocs.Image was never populated still serves its photo.
+      const fileId =
+        di?.driveDocs?.Image?.driveFileId || this.extractDriveFileId(di?.image);
+      if (!fileId) {
+        res.status(404).json({ message: 'Aucune image jointe' });
+        return;
       }
+      try {
+        const { stream, mimeType } = await this.drive.downloadFile(fileId);
+        res.setHeader('Content-Type', mimeType);
+        res.setHeader('Cache-Control', 'private, max-age=3600');
+        stream.on('error', (err) => {
+          this.logger.warn(`DI image stream error (${id}): ${err?.message}`);
+          if (!res.headersSent) res.status(502).end();
+        });
+        stream.pipe(res);
+      } catch (err) {
+        this.logger.warn(
+          `DI image proxy failed (${id}): ${(err as Error)?.message ?? err}`,
+        );
+        if (!res.headersSent) {
+          res.status(502).json({ message: 'Image indisponible' });
+        }
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'DiImageController.getImage');
     }
   }
 }

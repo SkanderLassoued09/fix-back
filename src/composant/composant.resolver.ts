@@ -13,13 +13,14 @@ import {
 } from './dto/browse-composant.input';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
 import { Profile } from 'src/profile/entities/profile.entity';
+import { withErrorContext } from '../common/error-context';
 
 @Resolver(() => Composant)
 export class ComposantResolver {
   constructor(private readonly composantService: ComposantService) {}
 
   @Mutation(() => Composant)
-  createComposant(
+  async createComposant(
     @Args('createComposantInput')
     createComposantInput: CreateComposantInput,
     // The Discord "catalog event" embed wants WHO created the part (tech name
@@ -27,22 +28,34 @@ export class ComposantResolver {
     // Optional: if no token (rare), the service falls back to "Auteur inconnu".
     @CurrentUser() profile: Profile,
   ) {
-    return this.composantService.createComposant(
-      createComposantInput,
-      profile,
-    );
+    try {
+      return await this.composantService.createComposant(
+        createComposantInput,
+        profile,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantResolver.createComposant');
+    }
   }
 
   @Mutation(() => Composant)
   async removeComposant(@Args('_id') _id: string): Promise<Composant> {
-    return await this.composantService.removeComposant(_id);
+    try {
+      return await this.composantService.removeComposant(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantResolver.removeComposant');
+    }
   }
 
   @Mutation(() => UpdateComposantResponse)
   async updateComposant(
     @Args('updateComposant') updateComposant: CreateComposantInput,
   ): Promise<UpdateComposantResponse> {
-    return await this.composantService.updateComposant(updateComposant);
+    try {
+      return await this.composantService.updateComposant(updateComposant);
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantResolver.updateComposant');
+    }
   }
 
   /**
@@ -54,34 +67,54 @@ export class ComposantResolver {
   async updateComposantPartial(
     @Args('updateComposantInput') updateComposantInput: UpdateComposantInput,
   ): Promise<UpdateComposantResponse> {
-    return (await this.composantService.updateComposantPartial(
-      updateComposantInput,
-    )) as unknown as UpdateComposantResponse;
+    try {
+      return (await this.composantService.updateComposantPartial(
+        updateComposantInput,
+      )) as unknown as UpdateComposantResponse;
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantResolver.updateComposantPartial');
+    }
   }
   @Mutation(() => UpdateComposantResponse)
   async addComposantInfo(
     @Args('updateComposant') updateComposant: CreateComposantInput,
   ): Promise<UpdateComposantResponse> {
-    // The service always returns the updated doc or throws a clean error
-    // (NOT_FOUND when no row matches). Don't wrap it in a generic Error — that
-    // erased the code and turned an expected 404 into a 500. Don't return
-    // undefined either: the field is non-nullable.
-    return await this.composantService.addComposantInfo(updateComposant);
+    try {
+      // The service always returns the updated doc or throws a clean error
+      // (NOT_FOUND when no row matches). Don't wrap it in a generic Error — that
+      // erased the code and turned an expected 404 into a 500. Don't return
+      // undefined either: the field is non-nullable.
+      return await this.composantService.addComposantInfo(updateComposant);
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantResolver.addComposantInfo');
+    }
   }
 
   @Query(() => Composant)
   async findOneComposant(@Args('name') name: string): Promise<Composant> {
-    return await this.composantService.findOneComposant(name);
+    try {
+      return await this.composantService.findOneComposant(name);
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantResolver.findOneComposant');
+    }
   }
 
   @Query(() => [Composant])
   async findAllComposant(): Promise<[Composant]> {
-    return await this.composantService.findAllComposants();
+    try {
+      return await this.composantService.findAllComposants();
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantResolver.findAllComposant');
+    }
   }
 
   @Query(() => [Composant])
   async searchComposants(@Args('name') name: string): Promise<any> {
-    return await this.composantService.searchComposants(name);
+    try {
+      return await this.composantService.searchComposants(name);
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantResolver.searchComposants');
+    }
   }
 
   /**
@@ -93,7 +126,11 @@ export class ComposantResolver {
   async browseComposants(
     @Args('input') input: ComposantBrowseInput,
   ): Promise<ComposantPage> {
-    return await this.composantService.browseComposants(input);
+    try {
+      return await this.composantService.browseComposants(input);
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantResolver.browseComposants');
+    }
   }
 
   /**
@@ -103,6 +140,10 @@ export class ComposantResolver {
    */
   @Query(() => [ComposantCategoryNode])
   async composantCategoryTree(): Promise<ComposantCategoryNode[]> {
-    return await this.composantService.composantCategoryTree();
+    try {
+      return await this.composantService.composantCategoryTree();
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantResolver.composantCategoryTree');
+    }
   }
 }

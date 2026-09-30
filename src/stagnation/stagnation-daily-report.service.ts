@@ -9,6 +9,7 @@ import {
   StagnationDispatch,
   StagnationDispatchDocument,
 } from './entities/stagnation-dispatch.entity';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * RAPPORT QUOTIDIEN DE STAGNATION (24h) — orchestration pure, déclenchée par le
@@ -63,9 +64,13 @@ export class StagnationDailyReportService {
 
   /** Date de génération `YYYY-MM-DD` en Africa/Tunis (fuseau applicatif). */
   private today(): string {
-    return new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Africa/Tunis',
-    }).format(new Date());
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Africa/Tunis',
+      }).format(new Date());
+    } catch (error) {
+      throw withErrorContext(error, 'StagnationDailyReportService.today');
+    }
   }
 
   /**
@@ -79,39 +84,55 @@ export class StagnationDailyReportService {
     unit: string;
     text: string;
   } {
-    const h = Math.max(0, Math.round(ageHours ?? 0));
-    if (h < 24) {
-      const unit = h > 1 ? 'heures' : 'heure';
-      return { value: h, unit, text: `${h} ${unit}` };
+    try {
+      const h = Math.max(0, Math.round(ageHours ?? 0));
+      if (h < 24) {
+        const unit = h > 1 ? 'heures' : 'heure';
+        return { value: h, unit, text: `${h} ${unit}` };
+      }
+      const days = Math.floor(h / 24);
+      const unit = days > 1 ? 'jours' : 'jour';
+      return { value: days, unit, text: `${days} ${unit}` };
+    } catch (error) {
+      throw withErrorContext(error, 'StagnationDailyReportService.humanizeAge');
     }
-    const days = Math.floor(h / 24);
-    const unit = days > 1 ? 'jours' : 'jour';
-    return { value: days, unit, text: `${days} ${unit}` };
   }
 
   /** Message FR — durée RÉELLE écoulée (pas le seuil), unité adaptée. Ex. :
    *  « DI DI46 stagnante dans le statut NEGOTIATION1 depuis 10 jours. » */
   private message(idNum: string, status: string, durationText: string): string {
-    return `DI ${idNum} stagnante dans le statut ${status} depuis ${durationText}.`;
+    try {
+      return `DI ${idNum} stagnante dans le statut ${status} depuis ${durationText}.`;
+    } catch (error) {
+      throw withErrorContext(error, 'StagnationDailyReportService.message');
+    }
   }
 
   /** Classeur cible : le classeur DÉDIÉ stagnation (`GOOGLE_SHEETS_SPREADSHEET_ID`)
    *  en priorité ; repli sur le classeur d'export existant (`GOOGLE_SHEETS_ID`). */
   private spreadsheetId(): string {
-    return (
-      process.env.GOOGLE_SHEETS_SPREADSHEET_ID ||
-      process.env.GOOGLE_STAGNATION_SHEETS_ID ||
-      process.env.GOOGLE_SHEETS_ID ||
-      ''
-    );
+    try {
+      return (
+        process.env.GOOGLE_SHEETS_SPREADSHEET_ID ||
+        process.env.GOOGLE_STAGNATION_SHEETS_ID ||
+        process.env.GOOGLE_SHEETS_ID ||
+        ''
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'StagnationDailyReportService.spreadsheetId');
+    }
   }
 
   /** Lien Google Sheets : PROFOND vers l'onglet (`?gid=<gid>#gid=<gid>`) quand
    *  le gid est connu, sinon lien classeur. Chaîne vide si pas de classeur. */
   private buildSheetUrl(spreadsheetId: string, gid: number | null): string {
-    if (!spreadsheetId) return '';
-    const base = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
-    return gid != null ? `${base}?gid=${gid}#gid=${gid}` : base;
+    try {
+      if (!spreadsheetId) return '';
+      const base = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
+      return gid != null ? `${base}?gid=${gid}#gid=${gid}` : base;
+    } catch (error) {
+      throw withErrorContext(error, 'StagnationDailyReportService.buildSheetUrl');
+    }
   }
 
   /**
@@ -123,144 +144,148 @@ export class StagnationDailyReportService {
     dispatched: number;
     skipped: number;
   }> {
-    const date = this.today();
-    this.logger.log(`START daily stagnation report · date=${date}`);
-
-    const stagnant = await this.stagnationService.getStagnantForDailyReport(
-      StagnationDailyReportService.THRESHOLD_HOURS,
-    );
-
-    // Idempotence : on RÉSERVE chaque DI (insert clé unique {date,idNum,status}).
-    // Un doublon (code 11000) signifie « déjà traité aujourd'hui » → on saute.
-    const fresh: typeof stagnant = [];
-    for (const di of stagnant) {
-      try {
-        await this.dispatchModel.create({
-          date,
-          idNum: di.idNum,
-          status: di.status,
-          ageHours: di.ageHours,
-        });
-        fresh.push(di);
-      } catch (err: any) {
-        if (err?.code === 11000) continue; // déjà dispatché aujourd'hui
-        throw err; // vraie erreur DB → remonte (le cron catch au-dessus)
-      }
-    }
-
-    if (!fresh.length) {
-      this.logger.log(
-        `END daily stagnation report · date=${date} · detected=${stagnant.length} · 0 new (idempotent no-op)`,
-      );
-      return {
-        date,
-        detected: stagnant.length,
-        dispatched: 0,
-        skipped: stagnant.length,
-      };
-    }
-
-    // 1) Feuille Google : onglet = date du jour. `appendRows` crée l'onglet +
-    //    l'entête (colorée) si absent (jamais d'écrasement des jours précédents).
-    const spreadsheetId = this.spreadsheetId();
     try {
-      const rows = fresh.map((di) => {
-        const age = this.humanizeAge(di.ageHours);
-        return [
-          di.idNum,
-          di.status,
-          age.value, // Durée RÉELLE (jours ou heures selon l'ancienneté)
-          age.unit, // « jours » / « jour » / « heures » / « heure »
-          this.message(di.idNum, di.status, age.text),
-        ];
-      });
-      await this.sheets.appendRows(
-        `${date}!A:E`,
-        rows,
-        StagnationDailyReportService.HEADER,
-        spreadsheetId,
-      );
-    } catch (err) {
-      this.logger.error(
-        `Feuille stagnation ${date} non écrite: ${(err as Error).message}`,
-      );
-    }
+      const date = this.today();
+      this.logger.log(`START daily stagnation report · date=${date}`);
 
-    // Lien PROFOND vers l'onglet du jour (`…/edit?gid=<gid>#gid=<gid>`) — pour
-    // le Discord et la cloche ERP. Best-effort : si le gid ne se résout pas, on
-    // retombe sur le lien classeur (voir `buildSheetUrl`).
-    let sheetUrl = '';
-    if (spreadsheetId) {
+      const stagnant = await this.stagnationService.getStagnantForDailyReport(
+        StagnationDailyReportService.THRESHOLD_HOURS,
+      );
+
+      // Idempotence : on RÉSERVE chaque DI (insert clé unique {date,idNum,status}).
+      // Un doublon (code 11000) signifie « déjà traité aujourd'hui » → on saute.
+      const fresh: typeof stagnant = [];
+      for (const di of stagnant) {
+        try {
+          await this.dispatchModel.create({
+            date,
+            idNum: di.idNum,
+            status: di.status,
+            ageHours: di.ageHours,
+          });
+          fresh.push(di);
+        } catch (err: any) {
+          if (err?.code === 11000) continue; // déjà dispatché aujourd'hui
+          throw err; // vraie erreur DB → remonte (le cron catch au-dessus)
+        }
+      }
+
+      if (!fresh.length) {
+        this.logger.log(
+          `END daily stagnation report · date=${date} · detected=${stagnant.length} · 0 new (idempotent no-op)`,
+        );
+        return {
+          date,
+          detected: stagnant.length,
+          dispatched: 0,
+          skipped: stagnant.length,
+        };
+      }
+
+      // 1) Feuille Google : onglet = date du jour. `appendRows` crée l'onglet +
+      //    l'entête (colorée) si absent (jamais d'écrasement des jours précédents).
+      const spreadsheetId = this.spreadsheetId();
       try {
-        const gid = await this.sheets.getSheetGid(spreadsheetId, date);
-        sheetUrl = this.buildSheetUrl(spreadsheetId, gid);
+        const rows = fresh.map((di) => {
+          const age = this.humanizeAge(di.ageHours);
+          return [
+            di.idNum,
+            di.status,
+            age.value, // Durée RÉELLE (jours ou heures selon l'ancienneté)
+            age.unit, // « jours » / « jour » / « heures » / « heure »
+            this.message(di.idNum, di.status, age.text),
+          ];
+        });
+        await this.sheets.appendRows(
+          `${date}!A:E`,
+          rows,
+          StagnationDailyReportService.HEADER,
+          spreadsheetId,
+        );
       } catch (err) {
-        sheetUrl = this.buildSheetUrl(spreadsheetId, null);
-        this.logger.warn(
-          `gid onglet ${date} non résolu: ${(err as Error).message}`,
+        this.logger.error(
+          `Feuille stagnation ${date} non écrite: ${(err as Error).message}`,
         );
       }
-    }
 
-    // 2) Notification ERP DAILY_REMINDER (cloche + toast + son) — UN RÉSUMÉ
-    //    par exécution (pas une notif par DI : avec des dizaines de DI stagnantes
-    //    ça noierait la cloche). Le détail par DI est dans la feuille du jour.
-    try {
-      const example = fresh
-        .slice(0, StagnationDailyReportService.DIGEST_EXAMPLES)
-        .map((di) => di.idNum)
-        .join(', ');
-      const summary =
-        `${fresh.length} DI stagnante(s) dans le même statut depuis plus de ` +
-        `${StagnationDailyReportService.SEUIL} ${StagnationDailyReportService.UNITE}` +
-        (example ? ` (${example}${fresh.length > StagnationDailyReportService.DIGEST_EXAMPLES ? '…' : ''})` : '') +
-        ` — voir la feuille ${date}.`;
-      await this.notificationService.emit({
-        type: 'DAILY_REMINDER',
-        diId: null,
-        actorId: null,
-        message: summary,
-        payload: {
+      // Lien PROFOND vers l'onglet du jour (`…/edit?gid=<gid>#gid=<gid>`) — pour
+      // le Discord et la cloche ERP. Best-effort : si le gid ne se résout pas, on
+      // retombe sur le lien classeur (voir `buildSheetUrl`).
+      let sheetUrl = '';
+      if (spreadsheetId) {
+        try {
+          const gid = await this.sheets.getSheetGid(spreadsheetId, date);
+          sheetUrl = this.buildSheetUrl(spreadsheetId, gid);
+        } catch (err) {
+          sheetUrl = this.buildSheetUrl(spreadsheetId, null);
+          this.logger.warn(
+            `gid onglet ${date} non résolu: ${(err as Error).message}`,
+          );
+        }
+      }
+
+      // 2) Notification ERP DAILY_REMINDER (cloche + toast + son) — UN RÉSUMÉ
+      //    par exécution (pas une notif par DI : avec des dizaines de DI stagnantes
+      //    ça noierait la cloche). Le détail par DI est dans la feuille du jour.
+      try {
+        const example = fresh
+          .slice(0, StagnationDailyReportService.DIGEST_EXAMPLES)
+          .map((di) => di.idNum)
+          .join(', ');
+        const summary =
+          `${fresh.length} DI stagnante(s) dans le même statut depuis plus de ` +
+          `${StagnationDailyReportService.SEUIL} ${StagnationDailyReportService.UNITE}` +
+          (example ? ` (${example}${fresh.length > StagnationDailyReportService.DIGEST_EXAMPLES ? '…' : ''})` : '') +
+          ` — voir la feuille ${date}.`;
+        await this.notificationService.emit({
+          type: 'DAILY_REMINDER',
+          diId: null,
+          actorId: null,
+          message: summary,
+          payload: {
+            date,
+            count: fresh.length,
+            seuil: StagnationDailyReportService.SEUIL,
+            unite: StagnationDailyReportService.UNITE,
+            url: sheetUrl || undefined, // lien feuille pour la cloche (front)
+          },
+          notify: { roles: StagnationDailyReportService.ROLES },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `DAILY_REMINDER emit échoué: ${(err as Error).message}`,
+        );
+      }
+
+      // 3) UN seul Discord vers APP_ALERT (chemin non-gated).
+      try {
+        await this.discord.sendDailyStagnationReminder({
           date,
           count: fresh.length,
           seuil: StagnationDailyReportService.SEUIL,
           unite: StagnationDailyReportService.UNITE,
-          url: sheetUrl || undefined, // lien feuille pour la cloche (front)
-        },
-        notify: { roles: StagnationDailyReportService.ROLES },
-      });
-    } catch (err) {
-      this.logger.warn(
-        `DAILY_REMINDER emit échoué: ${(err as Error).message}`,
-      );
-    }
+          examples: fresh
+            .slice(0, StagnationDailyReportService.DIGEST_EXAMPLES)
+            .map((di) => di.idNum),
+          spreadsheetUrl: sheetUrl || undefined,
+        });
+      } catch (err) {
+        this.logger.error(
+          `Discord rappel stagnation échoué: ${(err as Error).message}`,
+        );
+      }
 
-    // 3) UN seul Discord vers APP_ALERT (chemin non-gated).
-    try {
-      await this.discord.sendDailyStagnationReminder({
+      this.logger.log(
+        `END daily stagnation report · date=${date} · detected=${stagnant.length} · dispatched=${fresh.length}`,
+      );
+      return {
         date,
-        count: fresh.length,
-        seuil: StagnationDailyReportService.SEUIL,
-        unite: StagnationDailyReportService.UNITE,
-        examples: fresh
-          .slice(0, StagnationDailyReportService.DIGEST_EXAMPLES)
-          .map((di) => di.idNum),
-        spreadsheetUrl: sheetUrl || undefined,
-      });
-    } catch (err) {
-      this.logger.error(
-        `Discord rappel stagnation échoué: ${(err as Error).message}`,
-      );
+        detected: stagnant.length,
+        dispatched: fresh.length,
+        skipped: stagnant.length - fresh.length,
+      };
+    } catch (error) {
+      throw withErrorContext(error, 'StagnationDailyReportService.run');
     }
-
-    this.logger.log(
-      `END daily stagnation report · date=${date} · detected=${stagnant.length} · dispatched=${fresh.length}`,
-    );
-    return {
-      date,
-      detected: stagnant.length,
-      dispatched: fresh.length,
-      skipped: stagnant.length - fresh.length,
-    };
   }
 }

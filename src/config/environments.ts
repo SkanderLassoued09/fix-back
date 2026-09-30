@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * Multi-environment configuration — the SINGLE source of truth.
@@ -32,18 +33,26 @@ export const DEFAULT_NODE_ENV = 'development';
 
 /** Descriptor for a `nodeEnv`; unknown values degrade gracefully (amber). */
 export function describeEnv(nodeEnv: string): EnvDescriptor {
-  return (
-    ENVIRONMENTS.find((e) => e.nodeEnv === nodeEnv) ?? {
-      nodeEnv,
-      label: (nodeEnv || 'UNKNOWN').toUpperCase(),
-      color: 'amber',
-    }
-  );
+  try {
+    return (
+      ENVIRONMENTS.find((e) => e.nodeEnv === nodeEnv) ?? {
+        nodeEnv,
+        label: (nodeEnv || 'UNKNOWN').toUpperCase(),
+        color: 'amber',
+      }
+    );
+  } catch (error) {
+    throw withErrorContext(error, 'describeEnv');
+  }
 }
 
 /** `.env.<nodeEnv>` file name (no path). */
 export function envFileName(nodeEnv: string): string {
-  return `.env.${nodeEnv}`;
+  try {
+    return `.env.${nodeEnv}`;
+  } catch (error) {
+    throw withErrorContext(error, 'envFileName');
+  }
 }
 
 /**
@@ -54,13 +63,17 @@ export function resolveEnvFilePath(
   nodeEnv: string,
   cwd: string = process.cwd(),
 ): string {
-  const file = envFileName(nodeEnv);
-  const full = path.resolve(cwd, file);
-  if (!fs.existsSync(full)) {
-    throw new Error(
-      `Fichier ${file} introuvable (cherché : ${full}). ` +
-        `Crée-le, ou lance un autre environnement (dev / preprod / prod).`,
-    );
+  try {
+    const file = envFileName(nodeEnv);
+    const full = path.resolve(cwd, file);
+    if (!fs.existsSync(full)) {
+      throw new Error(
+        `Fichier ${file} introuvable (cherché : ${full}). ` +
+          `Crée-le, ou lance un autre environnement (dev / preprod / prod).`,
+      );
+    }
+    return full;
+  } catch (error) {
+    throw withErrorContext(error, 'resolveEnvFilePath');
   }
-  return full;
 }

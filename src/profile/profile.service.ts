@@ -11,6 +11,7 @@ import { ROLE } from 'src/auth/roles';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
 import * as bcrypt from 'bcrypt';
 import { GraphQLError } from 'graphql';
+import { withErrorContext } from '../common/error-context';
 // import { STATUS_TICKET } from 'src/ticket/ticket';
 
 @Injectable()
@@ -49,84 +50,96 @@ export class ProfileService {
   }
 
   deleteUser(_id: string) {
-    return this.profileModel.findOneAndUpdate(
-      { _id },
-      {
-        $set: {
-          isDeleted: true,
+    try {
+      return this.profileModel.findOneAndUpdate(
+        { _id },
+        {
+          $set: {
+            isDeleted: true,
+          },
         },
-      },
-      { new: true },
-    );
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileService.deleteUser');
+    }
   }
   async searchProfile(
     paginationConfig: PaginationConfigProfile,
     search: { field: string; value: string },
   ) {
-    const { first, rows } = paginationConfig;
-    const { field, value } = search;
+    try {
+      const { first, rows } = paginationConfig;
+      const { field, value } = search;
 
-    // Base filter
-    const filter: any = { isDeleted: false };
+      // Base filter
+      const filter: any = { isDeleted: false };
 
-    // Only apply search if value has 2+ characters
-    if (field && value && value.trim().length >= 2) {
-      const trimmedValue = value.trim();
-      const regex = { $regex: `${trimmedValue}`, $options: 'i' };
+      // Only apply search if value has 2+ characters
+      if (field && value && value.trim().length >= 2) {
+        const trimmedValue = value.trim();
+        const regex = { $regex: `${trimmedValue}`, $options: 'i' };
 
-      switch (field) {
-        case 'username':
-        case 'firstName':
-        case 'lastName':
-        case 'phone':
-        case 'email':
-        case 'role':
-          filter[field] = regex;
-          break;
+        switch (field) {
+          case 'username':
+          case 'firstName':
+          case 'lastName':
+          case 'phone':
+          case 'email':
+          case 'role':
+            filter[field] = regex;
+            break;
 
-        case 'createdAt':
-        case 'updatedAt':
-          // For date fields, try to parse and search
-          // This will match dates that contain the search string
-          // You might want to implement more sophisticated date search
-          const dateSearch = new Date(trimmedValue);
-          if (!isNaN(dateSearch.getTime())) {
-            filter[field] = {
-              $gte: new Date(dateSearch.setHours(0, 0, 0, 0)),
-              $lte: new Date(dateSearch.setHours(23, 59, 59, 999)),
-            };
-          }
-          break;
+          case 'createdAt':
+          case 'updatedAt':
+            // For date fields, try to parse and search
+            // This will match dates that contain the search string
+            // You might want to implement more sophisticated date search
+            const dateSearch = new Date(trimmedValue);
+            if (!isNaN(dateSearch.getTime())) {
+              filter[field] = {
+                $gte: new Date(dateSearch.setHours(0, 0, 0, 0)),
+                $lte: new Date(dateSearch.setHours(23, 59, 59, 999)),
+              };
+            }
+            break;
+        }
       }
+
+      // COUNT
+      const totalProfileCount = await this.profileModel.countDocuments(filter);
+
+      // FETCH
+      const profileRecord = await this.profileModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .limit(rows)
+        .skip(first)
+        .exec();
+
+      return { profileRecord, totalProfileCount };
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileService.searchProfile');
     }
-
-    // COUNT
-    const totalProfileCount = await this.profileModel.countDocuments(filter);
-
-    // FETCH
-    const profileRecord = await this.profileModel
-      .find(filter)
-      .sort({ createdAt: -1 })
-      .limit(rows)
-      .skip(first)
-      .exec();
-
-    return { profileRecord, totalProfileCount };
   }
   // for listing profiles pagination
   async getAllProfile(paginationConfig: PaginationConfigProfile) {
-    const { first, rows } = paginationConfig;
-    const totalProfileCount = await this.profileModel
-      .countDocuments({ isDeleted: false })
-      .exec();
-    const profileRecord = await this.profileModel
-      .find({ isDeleted: false })
-      .sort({ createdAt: -1 })
-      .limit(rows)
-      .skip(first)
-      .exec();
+    try {
+      const { first, rows } = paginationConfig;
+      const totalProfileCount = await this.profileModel
+        .countDocuments({ isDeleted: false })
+        .exec();
+      const profileRecord = await this.profileModel
+        .find({ isDeleted: false })
+        .sort({ createdAt: -1 })
+        .limit(rows)
+        .skip(first)
+        .exec();
 
-    return { profileRecord, totalProfileCount };
+      return { profileRecord, totalProfileCount };
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileService.getAllProfile');
+    }
   }
 
   async findOneForAuth(username: string): Promise<Profile | undefined> {
@@ -159,10 +172,14 @@ export class ProfileService {
    * ou l'utilisateur/hash introuvable, pour ne rien divulguer.
    */
   async verifyPassword(username: string, plain: string): Promise<boolean> {
-    if (!username || !plain) return false;
-    const user = (await this.findOneForAuth(username)) as any;
-    if (!user || !user.password) return false;
-    return bcrypt.compare(plain, user.password);
+    try {
+      if (!username || !plain) return false;
+      const user = (await this.findOneForAuth(username)) as any;
+      if (!user || !user.password) return false;
+      return await bcrypt.compare(plain, user.password);
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileService.verifyPassword');
+    }
   }
 
   /**
@@ -186,38 +203,42 @@ export class ProfileService {
     currentPassword: string,
     newPassword: string,
   ): Promise<boolean> {
-    const bad = (message: string) =>
-      new GraphQLError(message, {
-        extensions: { code: 'BAD_USER_INPUT' },
-      });
+    try {
+      const bad = (message: string) =>
+        new GraphQLError(message, {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
 
-    // Un nouveau mot de passe identique à l'ancien est un no-op déguisé :
-    // l'utilisateur croirait l'avoir changé.
-    if (currentPassword === newPassword) {
-      throw bad("Le nouveau mot de passe doit être différent de l'actuel.");
-    }
+      // Un nouveau mot de passe identique à l'ancien est un no-op déguisé :
+      // l'utilisateur croirait l'avoir changé.
+      if (currentPassword === newPassword) {
+        throw bad("Le nouveau mot de passe doit être différent de l'actuel.");
+      }
 
-    // Vérification de l'actuel AVANT toute écriture — réutilise le primitif
-    // bcrypt déjà en place (ne lève jamais, ne divulgue rien).
-    const ok = await this.verifyPassword(username, currentPassword);
-    if (!ok) {
-      throw bad('Mot de passe actuel incorrect.');
-    }
+      // Vérification de l'actuel AVANT toute écriture — réutilise le primitif
+      // bcrypt déjà en place (ne lève jamais, ne divulgue rien).
+      const ok = await this.verifyPassword(username, currentPassword);
+      if (!ok) {
+        throw bad('Mot de passe actuel incorrect.');
+      }
 
-    const doc = await this.profileModel.findOne({ username });
-    if (!doc) {
-      throw bad('Compte introuvable.');
-    }
-    // Le JWT vit 365 jours et ne porte pas `isDeleted` : un compte désactivé
-    // conserve un jeton valide. On re-vérifie donc ici, comme le fait le login.
-    if ((doc as any).isDeleted === true) {
-      throw bad('Compte désactivé.');
-    }
+      const doc = await this.profileModel.findOne({ username });
+      if (!doc) {
+        throw bad('Compte introuvable.');
+      }
+      // Le JWT vit 365 jours et ne porte pas `isDeleted` : un compte désactivé
+      // conserve un jeton valide. On re-vérifie donc ici, comme le fait le login.
+      if ((doc as any).isDeleted === true) {
+        throw bad('Compte désactivé.');
+      }
 
-    doc.password = newPassword;
-    // `isModified('password')` est vrai → le hook hache (bcrypt, coût 10).
-    await doc.save();
-    return true;
+      doc.password = newPassword;
+      // `isModified('password')` est vrai → le hook hache (bcrypt, coût 10).
+      await doc.save();
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileService.changeOwnPassword');
+    }
   }
 
   async getTech(_id: string) {
@@ -255,11 +276,15 @@ export class ProfileService {
   }
 
   async findProlileById(_id: string): Promise<Profile> {
-    const result = await this.profileModel.findById(_id);
-    if (!result) {
-      throw new NotFoundException(`Unable to find profile woth id:${_id}`);
+    try {
+      const result = await this.profileModel.findById(_id);
+      if (!result) {
+        throw new NotFoundException(`Unable to find profile woth id:${_id}`);
+      }
+      return result;
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileService.findProlileById');
     }
-    return result;
   }
   // async getAllTech() {
   // return await this.profileModel
@@ -303,12 +328,16 @@ export class ProfileService {
   // }
 
   async getAllTech() {
-    return await this.profileModel
-      .find({
-        role: { $in: [ROLE.ADMIN_TECH, ROLE.TECH] },
-        isDeleted: false,
-      })
-      .sort({ createdAt: -1 });
+    try {
+      return await this.profileModel
+        .find({
+          role: { $in: [ROLE.ADMIN_TECH, ROLE.TECH] },
+          isDeleted: false,
+        })
+        .sort({ createdAt: -1 });
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileService.getAllTech');
+    }
   }
 
   async getAllAdmins() {
@@ -425,11 +454,19 @@ export class ProfileService {
   }
 
   update(id: number, updateProfileInput: UpdateProfileInput) {
-    return `This action updates a #${id} profile`;
+    try {
+      return `This action updates a #${id} profile`;
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileService.update');
+    }
   }
 
   remove(id: number) {
-    return `This action removes a #${id} profile`;
+    try {
+      return `This action removes a #${id} profile`;
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileService.remove');
+    }
   }
   /**-------------- */
 
@@ -474,13 +511,17 @@ export class ProfileService {
    * and the caller returns a safe `[]` default.
    */
   private async captureSilentFailure(method: string, err: unknown) {
-    await this.operationalErrorService.capture({
-      module: 'profile',
-      submodule: 'profileService',
-      method,
-      severity: 'HIGH',
-      error: 'Query failed (was previously swallowed)',
-      message: (err as Error)?.message ?? String(err),
-    });
+    try {
+      await this.operationalErrorService.capture({
+        module: 'profile',
+        submodule: 'profileService',
+        method,
+        severity: 'HIGH',
+        error: 'Query failed (was previously swallowed)',
+        message: (err as Error)?.message ?? String(err),
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileService.captureSilentFailure');
+    }
   }
 }

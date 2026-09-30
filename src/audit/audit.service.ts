@@ -8,6 +8,7 @@ import { UpdateAuditInput } from './dto/update-audit.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Audit } from './entities/audit.entity';
 import { Model } from 'mongoose';
+import { withErrorContext } from '../common/error-context';
 
 @Injectable()
 export class AuditService {
@@ -29,7 +30,11 @@ export class AuditService {
   }
 
   async getAllNotification() {
-    return await this.auditModel.find({ isSeen: false }).sort({ createdAt: -1 });
+    try {
+      return await this.auditModel.find({ isSeen: false }).sort({ createdAt: -1 });
+    } catch (error) {
+      throw withErrorContext(error, 'AuditService.getAllNotification');
+    }
   }
 
   /**
@@ -39,45 +44,61 @@ export class AuditService {
    * enregistrement de qui a réactivé le dossier) étaient donc inatteignables.
    */
   async getAuditByDi(diId: string, limit = 200) {
-    return this.auditModel
-      .find({ _idDoc: diId })
-      .sort({ createdAt: -1 })
-      .limit(Math.min(Math.max(limit, 1), 500));
+    try {
+      return await this.auditModel
+        .find({ _idDoc: diId })
+        .sort({ createdAt: -1 })
+        .limit(Math.min(Math.max(limit, 1), 500));
+    } catch (error) {
+      throw withErrorContext(error, 'AuditService.getAuditByDi');
+    }
   }
 
   async updateConfirm(_id: string, confirmationComposant: string) {
-    return await this.auditModel.findOneAndUpdate(
-      { _id },
-      {
-        $set: {
-          message: confirmationComposant,
+    try {
+      return await this.auditModel.findOneAndUpdate(
+        { _id },
+        {
+          $set: {
+            message: confirmationComposant,
+          },
         },
-      },
-      { new: true },
-    );
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'AuditService.updateConfirm');
+    }
   }
 
   async markAsSeen(_id: string) {
-    return await this.auditModel.findOneAndUpdate(
-      { _id },
-      { $set: { isSeen: true } },
-      { new: true },
-    );
+    try {
+      return await this.auditModel.findOneAndUpdate(
+        { _id },
+        { $set: { isSeen: true } },
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'AuditService.markAsSeen');
+    }
   }
 
   async markReminderAsSeenForaudit(
     auditId: string,
     reminderId: string,
   ): Promise<Audit> {
-    return this.auditModel
-      .findOneAndUpdate(
-        { _id: auditId, 'reminder.data._id': reminderId }, // Find by audit _id and reminder _id
-        {
-          $set: { 'reminder.data.$.isSeen': true }, // Set isSeen to true for the matching reminder
-        },
-        { new: true }, // Return the updated document
-      )
-      .exec();
+    try {
+      return await this.auditModel
+        .findOneAndUpdate(
+          { _id: auditId, 'reminder.data._id': reminderId }, // Find by audit _id and reminder _id
+          {
+            $set: { 'reminder.data.$.isSeen': true }, // Set isSeen to true for the matching reminder
+          },
+          { new: true }, // Return the updated document
+        )
+        .exec();
+    } catch (error) {
+      throw withErrorContext(error, 'AuditService.markReminderAsSeenForaudit');
+    }
   }
 
   async getRemindernotOpenedTickets() {
@@ -117,29 +138,53 @@ export class AuditService {
 
   // Method to delete all documents containing the `reminder` field
   async deleteDocumentsWithReminderField(): Promise<{ deletedCount: number }> {
-    const result = await this.auditModel.deleteMany({
-      reminder: { $exists: true },
-    }); // Filter to match documents with `reminder` field
-    return { deletedCount: result.deletedCount };
+    try {
+      const result = await this.auditModel.deleteMany({
+        reminder: { $exists: true },
+      }); // Filter to match documents with `reminder` field
+      return { deletedCount: result.deletedCount };
+    } catch (error) {
+      throw withErrorContext(error, 'AuditService.deleteDocumentsWithReminderField');
+    }
   }
 
   // Method to find existing reminders by _id
   async findExistingReminders(ids: string[]): Promise<Audit[]> {
-    return this.auditModel.find({ 'reminder.data._id': { $in: ids } }).exec();
+    try {
+      return await this.auditModel.find({ 'reminder.data._id': { $in: ids } }).exec();
+    } catch (error) {
+      throw withErrorContext(error, 'AuditService.findExistingReminders');
+    }
   }
 
   async emptyAudit() {
-    return await this.auditModel.deleteMany({});
+    try {
+      return await this.auditModel.deleteMany({});
+    } catch (error) {
+      throw withErrorContext(error, 'AuditService.emptyAudit');
+    }
   }
   findOne(id: number) {
-    return `This action returns a #${id} audit`;
+    try {
+      return `This action returns a #${id} audit`;
+    } catch (error) {
+      throw withErrorContext(error, 'AuditService.findOne');
+    }
   }
 
   update(id: number, updateAuditInput: UpdateAuditInput) {
-    return `This action updates a #${id} audit`;
+    try {
+      return `This action updates a #${id} audit`;
+    } catch (error) {
+      throw withErrorContext(error, 'AuditService.update');
+    }
   }
 
   remove(id: number) {
-    return `This action removes a #${id} audit`;
+    try {
+      return `This action removes a #${id} audit`;
+    } catch (error) {
+      throw withErrorContext(error, 'AuditService.remove');
+    }
   }
 }

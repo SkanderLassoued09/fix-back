@@ -2,17 +2,22 @@ import { Resolver, Query, Mutation, Args, Int } from '@nestjs/graphql';
 import { Location } from './entities/location.entity';
 import { CreateLocationInput } from './dto/create-location.input';
 import { LocationService } from './location.service';
+import { withErrorContext } from '../common/error-context';
 
 @Resolver(() => Location)
 export class LocationResolver {
   constructor(private readonly locationService: LocationService) {}
 
   @Mutation(() => Location)
-  createLocation(
+  async createLocation(
     @Args('createLocationInput')
     createLocationInput: CreateLocationInput,
   ) {
-    return this.locationService.createlocation(createLocationInput);
+    try {
+      return await this.locationService.createlocation(createLocationInput);
+    } catch (error) {
+      throw withErrorContext(error, 'LocationResolver.createLocation');
+    }
   }
 
   @Mutation(() => Location)
@@ -27,11 +32,19 @@ export class LocationResolver {
 
   @Query(() => Location)
   async findOneLocation(@Args('_id') _id: string): Promise<Location> {
-    return await this.locationService.findOneLocation(_id);
+    try {
+      return await this.locationService.findOneLocation(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'LocationResolver.findOneLocation');
+    }
   }
 
   @Query(() => [Location])
   async findAllLocation(): Promise<Location[]> {
-    return await this.locationService.findAllLocations();
+    try {
+      return await this.locationService.findAllLocations();
+    } catch (error) {
+      throw withErrorContext(error, 'LocationResolver.findAllLocation');
+    }
   }
 }

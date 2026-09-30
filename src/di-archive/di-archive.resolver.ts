@@ -7,43 +7,60 @@ import {
   DiArchivesFilterInput,
   DiArchivesPageInput,
 } from './dto/di-archives-filter.input';
+import { withErrorContext } from '../common/error-context';
 
 @Resolver(() => DiArchive)
 export class DiArchiveResolver {
   constructor(private readonly diArchiveService: DiArchiveService) {}
 
   @Mutation(() => DiArchive)
-  createDiArchive(
+  async createDiArchive(
     @Args('createDiArchiveInput') createDiArchiveInput: CreateDiArchiveInput,
   ): Promise<DiArchive> {
-    return this.diArchiveService.create(createDiArchiveInput);
+    try {
+      return await this.diArchiveService.create(createDiArchiveInput);
+    } catch (error) {
+      throw withErrorContext(error, 'DiArchiveResolver.createDiArchive');
+    }
   }
 
   /** Upload one document (base64 data-URL) to Drive + re-derive statutCompletude. */
   @Mutation(() => DiArchive)
-  uploadDiArchiveDoc(
+  async uploadDiArchiveDoc(
     @Args('diArchiveId') diArchiveId: string,
     @Args('docType', { type: () => DiArchiveDocType }) docType: DiArchiveDocType,
     @Args('file') file: string,
   ): Promise<DiArchive> {
-    return this.diArchiveService.uploadDoc(diArchiveId, docType, file);
+    try {
+      return await this.diArchiveService.uploadDoc(diArchiveId, docType, file);
+    } catch (error) {
+      throw withErrorContext(error, 'DiArchiveResolver.uploadDiArchiveDoc');
+    }
   }
 
   /** Unlink one document (field → null) + re-derive statutCompletude. */
   @Mutation(() => DiArchive)
-  removeDiArchiveDoc(
+  async removeDiArchiveDoc(
     @Args('diArchiveId') diArchiveId: string,
     @Args('docType', { type: () => DiArchiveDocType }) docType: DiArchiveDocType,
   ): Promise<DiArchive> {
-    return this.diArchiveService.removeDoc(diArchiveId, docType);
+    try {
+      return await this.diArchiveService.removeDoc(diArchiveId, docType);
+    } catch (error) {
+      throw withErrorContext(error, 'DiArchiveResolver.removeDiArchiveDoc');
+    }
   }
 
   /** Clôture (admin/manager) — COMPLET → CLOTURE (terminal). */
   @Mutation(() => DiArchive)
-  clotureDiArchive(
+  async clotureDiArchive(
     @Args('diArchiveId') diArchiveId: string,
   ): Promise<DiArchive> {
-    return this.diArchiveService.cloture(diArchiveId);
+    try {
+      return await this.diArchiveService.cloture(diArchiveId);
+    } catch (error) {
+      throw withErrorContext(error, 'DiArchiveResolver.clotureDiArchive');
+    }
   }
 
   /**
@@ -52,23 +69,35 @@ export class DiArchiveResolver {
    * Returns the page rows + the total count matching the filter.
    */
   @Query(() => DiArchivePage)
-  diArchives(
+  async diArchives(
     @Args('filter', { type: () => DiArchivesFilterInput, nullable: true })
     filter?: DiArchivesFilterInput,
     @Args('page', { type: () => DiArchivesPageInput, nullable: true })
     page?: DiArchivesPageInput,
   ): Promise<DiArchivePage> {
-    return this.diArchiveService.findPage(filter, page);
+    try {
+      return await this.diArchiveService.findPage(filter, page);
+    } catch (error) {
+      throw withErrorContext(error, 'DiArchiveResolver.diArchives');
+    }
   }
 
   /** Distinct historical-status values — options for the « Statut » dropdown. */
   @Query(() => [String])
-  diArchiveStatuts(): Promise<string[]> {
-    return this.diArchiveService.distinctStatutsHistorique();
+  async diArchiveStatuts(): Promise<string[]> {
+    try {
+      return await this.diArchiveService.distinctStatutsHistorique();
+    } catch (error) {
+      throw withErrorContext(error, 'DiArchiveResolver.diArchiveStatuts');
+    }
   }
 
   @Query(() => DiArchive, { nullable: true })
-  diArchive(@Args('id') id: string): Promise<DiArchive | null> {
-    return this.diArchiveService.findOne(id);
+  async diArchive(@Args('id') id: string): Promise<DiArchive | null> {
+    try {
+      return await this.diArchiveService.findOne(id);
+    } catch (error) {
+      throw withErrorContext(error, 'DiArchiveResolver.diArchive');
+    }
   }
 }

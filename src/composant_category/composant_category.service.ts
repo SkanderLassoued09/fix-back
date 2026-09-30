@@ -8,6 +8,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Composant_Category } from './entities/composant_category.entity';
 import { CreateComposant_CategoryInput } from './dto/create-composant_category.input';
+import { withErrorContext } from '../common/error-context';
 
 @Injectable()
 export class Composant_CategoryService implements OnModuleInit {
@@ -89,101 +90,131 @@ export class Composant_CategoryService implements OnModuleInit {
    * est douce, un id supprimé reste occupé et ne doit jamais être réattribué.
    */
   async generateComposant_CategoryId(): Promise<number> {
-    const prefix = Composant_CategoryService.ID_PREFIX;
-    const rows = await this.Composant_CategoryModel.find(
-      { _id: { $regex: `^${prefix}\\d+$` } },
-      { _id: 1 },
-    ).lean();
+    try {
+      const prefix = Composant_CategoryService.ID_PREFIX;
+      const rows = await this.Composant_CategoryModel.find(
+        { _id: { $regex: `^${prefix}\\d+$` } },
+        { _id: 1 },
+      ).lean();
 
-    let maxIndex = -1;
-    for (const row of rows) {
-      const parsed = Number(String(row._id).slice(prefix.length));
-      if (Number.isFinite(parsed) && parsed > maxIndex) {
-        maxIndex = parsed;
+      let maxIndex = -1;
+      for (const row of rows) {
+        const parsed = Number(String(row._id).slice(prefix.length));
+        if (Number.isFinite(parsed) && parsed > maxIndex) {
+          maxIndex = parsed;
+        }
       }
+      // Collection vide (ou aucun id au format) → on repart de 0.
+      return maxIndex + 1;
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'Composant_CategoryService.generateComposant_CategoryId',
+      );
     }
-    // Collection vide (ou aucun id au format) → on repart de 0.
-    return maxIndex + 1;
   }
 
   async createComposant_Category(
     createComposant_CategoryInput: CreateComposant_CategoryInput,
   ): Promise<Composant_Category> {
-    const normalizedCategory =
-      createComposant_CategoryInput.category_composant?.trim();
-    if (!normalizedCategory) {
-      throw new Error('Composant category name is required');
-    }
-    const escapedCategory = normalizedCategory.replace(
-      /[.*+?^${}()|[\]\\]/g,
-      '\\$&',
-    );
-    const existing = await this.Composant_CategoryModel.findOne({
-      category_composant: { $regex: `^${escapedCategory}$`, $options: 'i' },
-      isDeleted: false,
-    });
-
-    // Doublon de nom : on LÈVE au lieu de renvoyer silencieusement l'existant.
-    // Avant, l'appelant recevait une catégorie et affichait « Catégorie créée »
-    // alors que rien n'avait été créé.
-    if (existing) {
-      throw new ConflictException('Cette catégorie existe déjà.');
-    }
-
-    createComposant_CategoryInput.category_composant = normalizedCategory;
-
-    // `generateComposant_CategoryId` (lecture) puis `save` (écriture) n'est pas
-    // atomique : deux créations simultanées calculent le même index. On retente
-    // sur E11000 en recalculant l'index — borné pour ne jamais boucler.
-    const MAX_ATTEMPTS = 3;
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const index = await this.generateComposant_CategoryId();
-      createComposant_CategoryInput._id = `${Composant_CategoryService.ID_PREFIX}${index}`;
-      try {
-        // `await` direct : le `.catch((err) => err)` d'origine renvoyait
-        // l'objet Error COMME s'il s'agissait de la catégorie. Tous les champs
-        // de l'ObjectType étant nullable, GraphQL le sérialisait en
-        // `{_id: null, category_composant: null}` SANS tableau `errors` — le
-        // front ne pouvait pas voir l'échec. Même correctif que celui déjà
-        // appliqué au module frère `composant.service.ts`.
-        return await new this.Composant_CategoryModel(
-          createComposant_CategoryInput,
-        ).save();
-      } catch (err) {
-        const isDuplicate = (err as { code?: number })?.code === 11000;
-        if (!isDuplicate || attempt === MAX_ATTEMPTS) {
-          throw err;
-        }
-        this.logger.warn(
-          `Collision d'_id sur « ${createComposant_CategoryInput._id} » (essai ${attempt}/${MAX_ATTEMPTS}) — nouvel index recalculé.`,
-        );
+    try {
+      const normalizedCategory =
+        createComposant_CategoryInput.category_composant?.trim();
+      if (!normalizedCategory) {
+        throw new Error('Composant category name is required');
       }
+      const escapedCategory = normalizedCategory.replace(
+        /[.*+?^${}()|[\]\\]/g,
+        '\\$&',
+      );
+      const existing = await this.Composant_CategoryModel.findOne({
+        category_composant: { $regex: `^${escapedCategory}$`, $options: 'i' },
+        isDeleted: false,
+      });
+
+      // Doublon de nom : on LÈVE au lieu de renvoyer silencieusement l'existant.
+      // Avant, l'appelant recevait une catégorie et affichait « Catégorie créée »
+      // alors que rien n'avait été créé.
+      if (existing) {
+        throw new ConflictException('Cette catégorie existe déjà.');
+      }
+
+      createComposant_CategoryInput.category_composant = normalizedCategory;
+
+      // `generateComposant_CategoryId` (lecture) puis `save` (écriture) n'est pas
+      // atomique : deux créations simultanées calculent le même index. On retente
+      // sur E11000 en recalculant l'index — borné pour ne jamais boucler.
+      const MAX_ATTEMPTS = 3;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const index = await this.generateComposant_CategoryId();
+        createComposant_CategoryInput._id = `${Composant_CategoryService.ID_PREFIX}${index}`;
+        try {
+          // `await` direct : le `.catch((err) => err)` d'origine renvoyait
+          // l'objet Error COMME s'il s'agissait de la catégorie. Tous les champs
+          // de l'ObjectType étant nullable, GraphQL le sérialisait en
+          // `{_id: null, category_composant: null}` SANS tableau `errors` — le
+          // front ne pouvait pas voir l'échec. Même correctif que celui déjà
+          // appliqué au module frère `composant.service.ts`.
+          return await new this.Composant_CategoryModel(
+            createComposant_CategoryInput,
+          ).save();
+        } catch (err) {
+          const isDuplicate = (err as { code?: number })?.code === 11000;
+          if (!isDuplicate || attempt === MAX_ATTEMPTS) {
+            throw err;
+          }
+          this.logger.warn(
+            `Collision d'_id sur « ${createComposant_CategoryInput._id} » (essai ${attempt}/${MAX_ATTEMPTS}) — nouvel index recalculé.`,
+          );
+        }
+      }
+      // Inatteignable : la boucle sort par `return` ou par `throw`.
+      throw new ConflictException(
+        "Impossible d'attribuer un identifiant de catégorie.",
+      );
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'Composant_CategoryService.createComposant_Category',
+      );
     }
-    // Inatteignable : la boucle sort par `return` ou par `throw`.
-    throw new ConflictException(
-      "Impossible d'attribuer un identifiant de catégorie.",
-    );
   }
 
   async removeComposant_Category(_id: string): Promise<Composant_Category> {
-    const data = await this.Composant_CategoryModel.findOneAndUpdate(
-      { _id },
-      {
-        $set: {
-          isDeleted: true,
+    try {
+      const data = await this.Composant_CategoryModel.findOneAndUpdate(
+        { _id },
+        {
+          $set: {
+            isDeleted: true,
+          },
         },
-      },
-      { new: true },
-    );
-    return data;
+        { new: true },
+      );
+      return data;
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'Composant_CategoryService.removeComposant_Category',
+      );
+    }
   }
 
   async findAllComposant_Categorys(): Promise<Composant_Category[]> {
-    // Même correctif que `createComposant_Category` : le `.catch((err) => err)`
-    // renvoyait un objet Error là où un tableau est attendu.
-    return await this.Composant_CategoryModel.find({ isDeleted: false }).sort({
-      createdAt: -1,
-    });
+    try {
+      // Même correctif que `createComposant_Category` : le `.catch((err) => err)`
+      // renvoyait un objet Error là où un tableau est attendu.
+      return await this.Composant_CategoryModel.find({ isDeleted: false }).sort(
+        {
+          createdAt: -1,
+        },
+      );
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'Composant_CategoryService.findAllComposant_Categorys',
+      );
+    }
   }
 
   async findOneComposant_Category(_id: string): Promise<Composant_Category> {

@@ -9,6 +9,7 @@ import {
   TrendPoint,
 } from './entities/dashboard-kpi.entity';
 import { TechAnalyticsService } from './tech-analytics.service';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * All dashboard reads. Every query accepts the same optional startDate/endDate
@@ -27,10 +28,14 @@ export class DashboardKpiResolver {
     @Args('startDate', { nullable: true }) startDate?: string,
     @Args('endDate', { nullable: true }) endDate?: string,
   ) {
-    return await this.dashboardKpiService.getDashboardOverview(
-      startDate,
-      endDate,
-    );
+    try {
+      return await this.dashboardKpiService.getDashboardOverview(
+        startDate,
+        endDate,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DashboardKpiResolver.dashboardKpi');
+    }
   }
 
   @Query(() => [TrendPoint])
@@ -40,11 +45,15 @@ export class DashboardKpiResolver {
     @Args('granularity', { type: () => TrendGranularity, nullable: true })
     granularity?: TrendGranularity,
   ): Promise<TrendPoint[]> {
-    return this.dashboardKpiService.getTrend(
-      startDate,
-      endDate,
-      granularity ?? TrendGranularity.WEEK,
-    );
+    try {
+      return await this.dashboardKpiService.getTrend(
+        startDate,
+        endDate,
+        granularity ?? TrendGranularity.WEEK,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DashboardKpiResolver.dashboardTrend');
+    }
   }
 
   @Query(() => [CategorySlice])
@@ -52,7 +61,11 @@ export class DashboardKpiResolver {
     @Args('startDate', { nullable: true }) startDate?: string,
     @Args('endDate', { nullable: true }) endDate?: string,
   ): Promise<CategorySlice[]> {
-    return this.dashboardKpiService.getDiByCategory(startDate, endDate);
+    try {
+      return await this.dashboardKpiService.getDiByCategory(startDate, endDate);
+    } catch (error) {
+      throw withErrorContext(error, 'DashboardKpiResolver.dashboardCategories');
+    }
   }
 
   @Query(() => [FinanceTrendPoint])
@@ -62,11 +75,18 @@ export class DashboardKpiResolver {
     @Args('granularity', { type: () => TrendGranularity, nullable: true })
     granularity?: TrendGranularity,
   ): Promise<FinanceTrendPoint[]> {
-    return this.dashboardKpiService.getFinanceTrend(
-      startDate,
-      endDate,
-      granularity ?? TrendGranularity.MONTH,
-    );
+    try {
+      return await this.dashboardKpiService.getFinanceTrend(
+        startDate,
+        endDate,
+        granularity ?? TrendGranularity.MONTH,
+      );
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'DashboardKpiResolver.dashboardFinanceTrend',
+      );
+    }
   }
 
   @Query(() => [TechLeaderRow])
@@ -75,10 +95,17 @@ export class DashboardKpiResolver {
     @Args('endDate', { nullable: true }) endDate?: string,
     @Args('limit', { type: () => Int, nullable: true }) limit?: number,
   ): Promise<TechLeaderRow[]> {
-    return this.techAnalyticsService.getTechLeaderboard(
-      startDate,
-      endDate,
-      limit ?? 20,
-    );
+    try {
+      return await this.techAnalyticsService.getTechLeaderboard(
+        startDate,
+        endDate,
+        limit ?? 20,
+      );
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'DashboardKpiResolver.dashboardTechLeaderboard',
+      );
+    }
   }
 }

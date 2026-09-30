@@ -8,6 +8,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { DiCategory } from './entities/di_category.entity';
 import { Model } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
+import { withErrorContext } from '../common/error-context';
 @Injectable()
 export class DiCategoryService {
   constructor(
@@ -16,20 +17,24 @@ export class DiCategoryService {
   ) {}
 
   async generateDiId(): Promise<number> {
-    let indexDi = 0;
-    const lastDi = await this.DiCategoryModel.findOne(
-      {},
-      {},
-      { sort: { createdAt: -1 } },
-    );
+    try {
+      let indexDi = 0;
+      const lastDi = await this.DiCategoryModel.findOne(
+        {},
+        {},
+        { sort: { createdAt: -1 } },
+      );
 
-    if (lastDi) {
-      indexDi = +lastDi._id.substring(4);
+      if (lastDi) {
+        indexDi = +lastDi._id.substring(4);
 
-      return indexDi + 1;
+        return indexDi + 1;
+      }
+
+      return indexDi;
+    } catch (error) {
+      throw withErrorContext(error, 'DiCategoryService.generateDiId');
     }
-
-    return indexDi;
   }
 
   /**
@@ -45,38 +50,46 @@ export class DiCategoryService {
   async createDiCategory(
     category: string,
   ): Promise<{ doc: DiCategory; created: boolean }> {
-    const normalizedCategory = category?.trim();
-    if (!normalizedCategory) {
-      throw new InternalServerErrorException('Category name is required');
+    try {
+      const normalizedCategory = category?.trim();
+      if (!normalizedCategory) {
+        throw new InternalServerErrorException('Category name is required');
+      }
+      const escapedCategory = normalizedCategory.replace(
+        /[.*+?^${}()|[\]\\]/g,
+        '\\$&',
+      );
+      const existing = await this.DiCategoryModel.findOne({
+        category: { $regex: `^${escapedCategory}$`, $options: 'i' },
+        isDeleted: false,
+      });
+
+      if (existing) {
+        return { doc: existing, created: false };
+      }
+
+      let dataCategory = {} as CreateDiCategoryInput;
+      dataCategory._id = uuidv4();
+      dataCategory.category = normalizedCategory;
+
+      const result = await new this.DiCategoryModel(dataCategory).save();
+      return { doc: result, created: true };
+    } catch (error) {
+      throw withErrorContext(error, 'DiCategoryService.createDiCategory');
     }
-    const escapedCategory = normalizedCategory.replace(
-      /[.*+?^${}()|[\]\\]/g,
-      '\\$&',
-    );
-    const existing = await this.DiCategoryModel.findOne({
-      category: { $regex: `^${escapedCategory}$`, $options: 'i' },
-      isDeleted: false,
-    });
-
-    if (existing) {
-      return { doc: existing, created: false };
-    }
-
-    let dataCategory = {} as CreateDiCategoryInput;
-    dataCategory._id = uuidv4();
-    dataCategory.category = normalizedCategory;
-
-    const result = await new this.DiCategoryModel(dataCategory).save();
-    return { doc: result, created: true };
   }
 
   // remove
   async removeDiCategory(_id: string): Promise<DiCategory> {
-    return await this.DiCategoryModel.findOneAndUpdate(
-      { _id },
-      { $set: { isDeleted: true } },
-      { new: true },
-    );
+    try {
+      return await this.DiCategoryModel.findOneAndUpdate(
+        { _id },
+        { $set: { isDeleted: true } },
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiCategoryService.removeDiCategory');
+    }
   }
 
   async findAllDiCategorys(): Promise<DiCategory[]> {

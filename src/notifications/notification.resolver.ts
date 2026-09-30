@@ -6,6 +6,7 @@ import { Profile } from 'src/profile/entities/profile.entity';
 import { NotificationService } from './notification.service';
 import { Notification } from './entities/notification.entity';
 import { SystemEvent } from './entities/system-event.entity';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * Toutes les opérations sont AUTHENTIFIÉES (`@CurrentUser`) : le serveur lit
@@ -22,7 +23,14 @@ export class NotificationResolver {
   async unreadNotificationCount(
     @CurrentUser() profile: Profile,
   ): Promise<number> {
-    return this.service.unreadCount(profile._id);
+    try {
+      return await this.service.unreadCount(profile._id);
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'NotificationResolver.unreadNotificationCount',
+      );
+    }
   }
 
   @Query(() => [Notification])
@@ -31,7 +39,11 @@ export class NotificationResolver {
     @CurrentUser() profile: Profile,
     @Args('limit', { type: () => Int, nullable: true }) limit?: number,
   ): Promise<Notification[]> {
-    return this.service.listForUser(profile._id, { limit }) as any;
+    try {
+      return await (this.service.listForUser(profile._id, { limit }) as any);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationResolver.myNotifications');
+    }
   }
 
   @Query(() => Boolean)
@@ -39,7 +51,14 @@ export class NotificationResolver {
   async notificationSoundEnabled(
     @CurrentUser() profile: Profile,
   ): Promise<boolean> {
-    return this.service.getSoundPref(profile._id);
+    try {
+      return await this.service.getSoundPref(profile._id);
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'NotificationResolver.notificationSoundEnabled',
+      );
+    }
   }
 
   @Query(() => [SystemEvent])
@@ -52,29 +71,33 @@ export class NotificationResolver {
     @Args('limit', { type: () => Int, nullable: true }) limit?: number,
     @Args('skip', { type: () => Int, nullable: true }) skip?: number,
   ): Promise<SystemEvent[]> {
-    const rows = await this.service.listHistory({
-      diId,
-      type,
-      actorId,
-      limit,
-      skip,
-    });
-    // Acteurs résolus en NOMS en UNE requête (le journal d'une DI répète
-    // largement les mêmes auteurs).
-    const names = await this.service.resolveActorNames(
-      (rows as any[]).map((e) => e?.actorId),
-    );
-    return rows.map((e: any) => ({
-      _id: String(e._id),
-      type: e.type,
-      diId: e.diId ?? undefined,
-      actorId: e.actorId ?? undefined,
-      actorRole: e.actorRole ?? undefined,
-      actorName: (e.actorId && names.get(e.actorId)) || undefined,
-      message: e.message,
-      payloadJson: e.payload ? JSON.stringify(e.payload) : undefined,
-      createdAt: e.createdAt,
-    }));
+    try {
+      const rows = await this.service.listHistory({
+        diId,
+        type,
+        actorId,
+        limit,
+        skip,
+      });
+      // Acteurs résolus en NOMS en UNE requête (le journal d'une DI répète
+      // largement les mêmes auteurs).
+      const names = await this.service.resolveActorNames(
+        (rows as any[]).map((e) => e?.actorId),
+      );
+      return rows.map((e: any) => ({
+        _id: String(e._id),
+        type: e.type,
+        diId: e.diId ?? undefined,
+        actorId: e.actorId ?? undefined,
+        actorRole: e.actorRole ?? undefined,
+        actorName: (e.actorId && names.get(e.actorId)) || undefined,
+        message: e.message,
+        payloadJson: e.payload ? JSON.stringify(e.payload) : undefined,
+        createdAt: e.createdAt,
+      }));
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationResolver.notificationHistory');
+    }
   }
 
   @Mutation(() => Boolean)
@@ -83,7 +106,14 @@ export class NotificationResolver {
     @CurrentUser() profile: Profile,
     @Args('notifId') notifId: string,
   ): Promise<boolean> {
-    return this.service.markRead(profile._id, notifId);
+    try {
+      return await this.service.markRead(profile._id, notifId);
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'NotificationResolver.markNotificationRead',
+      );
+    }
   }
 
   @Mutation(() => Int)
@@ -91,7 +121,14 @@ export class NotificationResolver {
   async markAllNotificationsRead(
     @CurrentUser() profile: Profile,
   ): Promise<number> {
-    return this.service.markAllRead(profile._id);
+    try {
+      return await this.service.markAllRead(profile._id);
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'NotificationResolver.markAllNotificationsRead',
+      );
+    }
   }
 
   @Mutation(() => Boolean)
@@ -100,6 +137,13 @@ export class NotificationResolver {
     @CurrentUser() profile: Profile,
     @Args('enabled') enabled: boolean,
   ): Promise<boolean> {
-    return this.service.setSoundPref(profile._id, enabled);
+    try {
+      return await this.service.setSoundPref(profile._id, enabled);
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'NotificationResolver.setNotificationSound',
+      );
+    }
   }
 }

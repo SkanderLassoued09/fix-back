@@ -7,6 +7,7 @@ import {
   UpdateCompanyInput,
 } from './dto/create-company.input';
 import { SearchInput } from 'src/stat/dto/create-stat.input';
+import { withErrorContext } from '../common/error-context';
 
 // Validation hardening: inputs are validated via class-validator on the
 // company InputTypes once the global ValidationPipe is active (see main.ts).
@@ -18,50 +19,85 @@ export class CompanysResolver {
   async createCompany(
     @Args('createCompanyInput') createCompanyInput: CreateCompanyInput,
   ) {
-    return await this.companysService.createcompany(createCompanyInput);
+    try {
+      return await this.companysService.createcompany(createCompanyInput);
+    } catch (error) {
+      throw withErrorContext(error, 'CompanysResolver.createCompany');
+    }
   }
 
   @Mutation(() => Company)
-  removeCompany(@Args('_id') _id: string): Promise<Company> {
-    // Let the service's NotFoundException propagate (NestJS maps it to a clean
-    // GraphQL error). The old try/catch never caught the async rejection AND
-    // would have masked a 404 as a generic 500.
-    return this.companysService.removeCompany(_id);
+  async removeCompany(@Args('_id') _id: string): Promise<Company> {
+    try {
+      // Let the service's NotFoundException propagate (NestJS maps it to a clean
+      // GraphQL error). The old try/catch never caught the async rejection AND
+      // would have masked a 404 as a generic 500.
+      return await this.companysService.removeCompany(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'CompanysResolver.removeCompany');
+    }
   }
 
   @Query(() => Company)
   async findOneCompany(@Args('_id') _id: string): Promise<Company> {
-    return await this.companysService.findOneCompany(_id);
+    try {
+      return await this.companysService.findOneCompany(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'CompanysResolver.findOneCompany');
+    }
   }
 
   @Query(() => [Company])
   async getAllComapnyforDropDown(): Promise<any> {
-    return await this.companysService.getAllComapnyforDropDown();
+    try {
+      return await this.companysService.getAllComapnyforDropDown();
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'CompanysResolver.getAllComapnyforDropDown',
+      );
+    }
   }
   @Query(() => CompanyTableData)
   async searchCompany(
     @Args('paginationConfig') paginationConfig: PaginationConfig,
     @Args('search') search: SearchInput,
   ): Promise<CompanyTableData> {
-    return await this.companysService.searchCompany(paginationConfig, search);
+    try {
+      return await this.companysService.searchCompany(paginationConfig, search);
+    } catch (error) {
+      throw withErrorContext(error, 'CompanysResolver.searchCompany');
+    }
   }
 
   @Query(() => CompanyTableData)
   async findAllCompany(
     @Args('PaginationConfig') paginationConfig: PaginationConfig,
   ): Promise<CompanyTableData> {
-    return await this.companysService.findAllCompanys(paginationConfig);
+    try {
+      return await this.companysService.findAllCompanys(paginationConfig);
+    } catch (error) {
+      throw withErrorContext(error, 'CompanysResolver.findAllCompany');
+    }
   }
 
   @Mutation(() => Company)
-  updateCompany(
+  async updateCompany(
     @Args('updateCompanyInput') updateCompanyInput: UpdateCompanyInput,
   ) {
-    return this.companysService.updateCompany(updateCompanyInput);
+    try {
+      return await this.companysService.updateCompany(updateCompanyInput);
+    } catch (error) {
+      throw withErrorContext(error, 'CompanysResolver.updateCompany');
+    }
   }
   @Query(() => [Company])
   async searchCompanies(@Args('name') name: string): Promise<Company[]> {
-    return this.companysService.searchCompanies(name);
+    try {
+      return await this.companysService.searchCompanies(name);
+    } catch (error) {
+      throw withErrorContext(error, 'CompanysResolver.searchCompanies');
+    }
   }
 
   /**
@@ -69,16 +105,26 @@ export class CompanysResolver {
    * Idempotent — returns the company unchanged if `driveFolderId` is already set.
    */
   @Mutation(() => Company)
-  ensureClientFolder(@Args('companyId') companyId: string): Promise<Company> {
-    return this.companysService.ensureClientFolder(companyId);
+  async ensureClientFolder(
+    @Args('companyId') companyId: string,
+  ): Promise<Company> {
+    try {
+      return await this.companysService.ensureClientFolder(companyId);
+    } catch (error) {
+      throw withErrorContext(error, 'CompanysResolver.ensureClientFolder');
+    }
   }
 
   /** Force-recreate a company's Drive folder (clears the stale id then recreates
    *  under the current OAuth account). For the SA→OAuth migration. */
   @Mutation(() => Company)
-  resetCompanyDriveFolder(
+  async resetCompanyDriveFolder(
     @Args('companyId') companyId: string,
   ): Promise<Company> {
-    return this.companysService.resetDriveFolder(companyId);
+    try {
+      return await this.companysService.resetDriveFolder(companyId);
+    } catch (error) {
+      throw withErrorContext(error, 'CompanysResolver.resetCompanyDriveFolder');
+    }
   }
 }

@@ -8,6 +8,7 @@ import {
   safeCell,
 } from '../utils/format.util';
 import { IGoogleSheetMapper } from './google-sheet-mapper.interface';
+import { withErrorContext } from '../../common/error-context';
 
 /**
  * DI → 21-column sheet row.
@@ -68,20 +69,24 @@ export class DiSheetMapper implements IGoogleSheetMapper<DiDocument> {
   constructor(@InjectModel('Di') private readonly diModel: Model<DiDocument>) {}
 
   async fetch(): Promise<DiDocument[]> {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    return this.diModel
-      .find({
-        isDeleted: { $ne: true },
-        $or: [{ updatedAt: { $gte: since } }, { createdAt: { $gte: since } }],
-      })
-      .populate('client_id', 'first_name last_name')
-      .populate('company_id', 'name')
-      .populate('createdBy', 'firstName lastName')
-      .populate('location_id', 'location_name')
-      .populate('di_category_id', 'category')
-      .sort({ createdAt: -1 })
-      .lean()
-      .exec();
+    try {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      return await this.diModel
+        .find({
+          isDeleted: { $ne: true },
+          $or: [{ updatedAt: { $gte: since } }, { createdAt: { $gte: since } }],
+        })
+        .populate('client_id', 'first_name last_name')
+        .populate('company_id', 'name')
+        .populate('createdBy', 'firstName lastName')
+        .populate('location_id', 'location_name')
+        .populate('di_category_id', 'category')
+        .sort({ createdAt: -1 })
+        .lean()
+        .exec();
+    } catch (error) {
+      throw withErrorContext(error, 'DiSheetMapper.fetch');
+    }
   }
 
   mapToSheetRow(di: DiDocument): string[] {
@@ -140,7 +145,11 @@ export class DiSheetMapper implements IGoogleSheetMapper<DiDocument> {
   }
 
   uniqueKey(di: DiDocument): string | null {
-    return di?._idnum ?? di?._id ?? null;
+    try {
+      return di?._idnum ?? di?._id ?? null;
+    } catch (error) {
+      throw withErrorContext(error, 'DiSheetMapper.uniqueKey');
+    }
   }
 
   // ─── private ─────────────────────────────────────────────────────────
@@ -153,17 +162,21 @@ export class DiSheetMapper implements IGoogleSheetMapper<DiDocument> {
    *   4. ""
    */
   private buildClientName(di: DiDocument): string {
-    const c: any = di.client_id;
-    if (c && typeof c === 'object') {
-      const full = [c.first_name, c.last_name].filter(Boolean).join(' ').trim();
-      if (full) return full;
+    try {
+      const c: any = di.client_id;
+      if (c && typeof c === 'object') {
+        const full = [c.first_name, c.last_name].filter(Boolean).join(' ').trim();
+        if (full) return full;
+      }
+      const co: any = di.company_id;
+      if (co && typeof co === 'object' && co.name) return String(co.name);
+      return firstNonEmpty(
+        typeof c === 'string' ? c : '',
+        typeof co === 'string' ? co : '',
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiSheetMapper.buildClientName');
     }
-    const co: any = di.company_id;
-    if (co && typeof co === 'object' && co.name) return String(co.name);
-    return firstNonEmpty(
-      typeof c === 'string' ? c : '',
-      typeof co === 'string' ? co : '',
-    );
   }
 
   /**
@@ -172,8 +185,12 @@ export class DiSheetMapper implements IGoogleSheetMapper<DiDocument> {
    * stagnation pivot). Returns "" when not paused.
    */
   private buildBlocageLabel(status: string): string {
-    if (status === 'DIAGNOSTIC_Pause') return 'Diagnostic en pause';
-    if (status === 'REPARATION_Pause') return 'Réparation en pause';
-    return '';
+    try {
+      if (status === 'DIAGNOSTIC_Pause') return 'Diagnostic en pause';
+      if (status === 'REPARATION_Pause') return 'Réparation en pause';
+      return '';
+    } catch (error) {
+      throw withErrorContext(error, 'DiSheetMapper.buildBlocageLabel');
+    }
   }
 }

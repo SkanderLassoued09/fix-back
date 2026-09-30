@@ -1,3 +1,4 @@
+import { withErrorContext } from '../common/error-context';
 /**
  * « ACTIONS EN COURS » — construction PURE d'une ligne (aucune I/O), pour
  * être testée seule. Reproduit le fichier Excel tenu à la main jusqu'ici :
@@ -113,15 +114,19 @@ const TZ = () => process.env.APP_TIMEZONE || 'Africa/Tunis';
 
 /** Jour civil à Tunis, en `dd/MM/yyyy`. */
 export function formatDayTunis(d: Date | null | undefined): string {
-  if (!d) return '';
-  const date = new Date(d);
-  if (isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat('fr-FR', {
-    timeZone: TZ(),
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  }).format(date);
+  try {
+    if (!d) return '';
+    const date = new Date(d);
+    if (isNaN(date.getTime())) return '';
+    return new Intl.DateTimeFormat('fr-FR', {
+      timeZone: TZ(),
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    }).format(date);
+  } catch (error) {
+    throw withErrorContext(error, 'formatDayTunis');
+  }
 }
 
 /**
@@ -130,26 +135,38 @@ export function formatDayTunis(d: Date | null | undefined): string {
  * s'afficherait la veille dans Excel.
  */
 export function toExcelDay(d: Date | null | undefined): Date | null {
-  const s = formatDayTunis(d);
-  if (!s) return null;
-  const [dd, mm, yyyy] = s.split('/').map(Number);
-  return new Date(Date.UTC(yyyy, mm - 1, dd));
+  try {
+    const s = formatDayTunis(d);
+    if (!s) return null;
+    const [dd, mm, yyyy] = s.split('/').map(Number);
+    return new Date(Date.UTC(yyyy, mm - 1, dd));
+  } catch (error) {
+    throw withErrorContext(error, 'toExcelDay');
+  }
 }
 
 /** Tri numérique des refs « T963 » < « T1000 » ; refs non T en fin. */
 export function compareIdnum(a: string, b: string): number {
-  const na = /^T(\d+)$/i.exec(a ?? '');
-  const nb = /^T(\d+)$/i.exec(b ?? '');
-  if (na && nb) return Number(na[1]) - Number(nb[1]);
-  if (na) return -1;
-  if (nb) return 1;
-  return String(a ?? '').localeCompare(String(b ?? ''), 'fr', {
-    numeric: true,
-  });
+  try {
+    const na = /^T(\d+)$/i.exec(a ?? '');
+    const nb = /^T(\d+)$/i.exec(b ?? '');
+    if (na && nb) return Number(na[1]) - Number(nb[1]);
+    if (na) return -1;
+    if (nb) return 1;
+    return String(a ?? '').localeCompare(String(b ?? ''), 'fr', {
+      numeric: true,
+    });
+  } catch (error) {
+    throw withErrorContext(error, 'compareIdnum');
+  }
 }
 
 function hasDriveRef(doc: any): boolean {
-  return !!doc && typeof doc === 'object' && !!doc.driveFileId;
+  try {
+    return !!doc && typeof doc === 'object' && !!doc.driveFileId;
+  } catch (error) {
+    throw withErrorContext(error, 'hasDriveRef');
+  }
 }
 
 const SCALAR: Record<DocType, keyof CycleInput> = {
@@ -164,9 +181,13 @@ const SCALAR: Record<DocType, keyof CycleInput> = {
  * → `AKWEL_Devis_09-10-2026`. Un nom hors standard est rendu tel quel.
  */
 export function shortDocName(name: string): string {
-  const n = (name ?? '').trim();
-  const m = /^(.+_\d{2}-\d{2}-\d{4})_\d{2}-\d{2}-\d{2}(\.\w+)?$/.exec(n);
-  return m ? m[1] : n;
+  try {
+    const n = (name ?? '').trim();
+    const m = /^(.+_\d{2}-\d{2}-\d{4})_\d{2}-\d{2}-\d{2}(\.\w+)?$/.exec(n);
+    return m ? m[1] : n;
+  } catch (error) {
+    throw withErrorContext(error, 'shortDocName');
+  }
 }
 
 /**
@@ -179,133 +200,173 @@ export function docEntries(
   input: ActionsRowInput,
   type: DocType,
 ): Array<{ text: string; url: string | null }> {
-  const current = input.ignoreCount ?? 0;
-  const byCycle = new Map<number, CycleInput>();
-  for (const c of input.cycles ?? []) byCycle.set(c.idIgnore, c);
-  const out: Array<{ text: string; url: string | null }> = [];
-  for (let i = 0; i <= current; i++) {
-    const cyc = byCycle.get(i);
-    const isCurrent = i === current;
-    let ref = cyc?.driveDocs?.[type];
-    if (!hasDriveRef(ref) && isCurrent) ref = input.driveDocs?.[type];
-    const scalar =
-      (cyc?.[SCALAR[type]] as string) ||
-      (isCurrent ? (input[SCALAR[type]] as string) : '') ||
-      '';
-    const url = (hasDriveRef(ref) ? ref.webViewLink : '') || scalar || null;
-    const numero =
-      cyc?.docNumeros?.[type] || (isCurrent ? input.docNumeros?.[type] : '');
+  try {
+    const current = input.ignoreCount ?? 0;
+    const byCycle = new Map<number, CycleInput>();
+    for (const c of input.cycles ?? []) byCycle.set(c.idIgnore, c);
+    const out: Array<{ text: string; url: string | null }> = [];
+    for (let i = 0; i <= current; i++) {
+      const cyc = byCycle.get(i);
+      const isCurrent = i === current;
+      let ref = cyc?.driveDocs?.[type];
+      if (!hasDriveRef(ref) && isCurrent) ref = input.driveDocs?.[type];
+      const scalar =
+        (cyc?.[SCALAR[type]] as string) ||
+        (isCurrent ? (input[SCALAR[type]] as string) : '') ||
+        '';
+      const url = (hasDriveRef(ref) ? ref.webViewLink : '') || scalar || null;
+      const numero =
+        cyc?.docNumeros?.[type] || (isCurrent ? input.docNumeros?.[type] : '');
 
-    let text = '';
-    if (hasDriveRef(ref) && ref.name) text = shortDocName(ref.name);
-    else if (numero) text = String(numero).trim();
-    else if (url) text = 'REÇU';
-    if (!text) continue;
-    if (!out.some((e) => e.text === text && e.url === url)) {
-      out.push({ text, url });
+      let text = '';
+      if (hasDriveRef(ref) && ref.name) text = shortDocName(ref.name);
+      else if (numero) text = String(numero).trim();
+      else if (url) text = 'REÇU';
+      if (!text) continue;
+      if (!out.some((e) => e.text === text && e.url === url)) {
+        out.push({ text, url });
+      }
     }
+    return out;
+  } catch (error) {
+    throw withErrorContext(error, 'docEntries');
   }
-  return out;
 }
 
 function docCell(input: ActionsRowInput, type: DocType): ActionsCell {
-  const entries = docEntries(input, type);
-  if (entries.length) {
-    const links = entries
-      .filter((e) => !!e.url)
-      .map((e) => ({ text: e.text, url: e.url as string }));
-    return {
-      value: entries.map((e) => e.text).join('\n'),
-      fill: 'green',
-      ...(links.length ? { links } : {}),
-    };
+  try {
+    const entries = docEntries(input, type);
+    if (entries.length) {
+      const links = entries
+        .filter((e) => !!e.url)
+        .map((e) => ({ text: e.text, url: e.url as string }));
+      return {
+        value: entries.map((e) => e.text).join('\n'),
+        fill: 'green',
+        ...(links.length ? { links } : {}),
+      };
+    }
+    if (input.status === 'IRREPARABLE' || input.status === 'ANNULER') {
+      return { value: input.status, fill: 'green' };
+    }
+    if (input.status === 'FINISHED') return { value: 'SANS', fill: null };
+    return { value: null, fill: 'orange' };
+  } catch (error) {
+    throw withErrorContext(error, 'docCell');
   }
-  if (input.status === 'IRREPARABLE' || input.status === 'ANNULER') {
-    return { value: input.status, fill: 'green' };
-  }
-  if (input.status === 'FINISHED') return { value: 'SANS', fill: null };
-  return { value: null, fill: 'orange' };
 }
 
 function lastEnteredAt(
   input: ActionsRowInput,
   statuses: string[],
 ): Date | null {
-  const hist = input.statusHistory ?? [];
-  for (let i = hist.length - 1; i >= 0; i--) {
-    if (statuses.includes(hist[i]?.status)) return hist[i].at ?? null;
+  try {
+    const hist = input.statusHistory ?? [];
+    for (let i = hist.length - 1; i >= 0; i--) {
+      if (statuses.includes(hist[i]?.status)) return hist[i].at ?? null;
+    }
+    return input.statusUpdatedAt ?? null;
+  } catch (error) {
+    throw withErrorContext(error, 'lastEnteredAt');
   }
-  return input.statusUpdatedAt ?? null;
 }
 
 function techTag(name: string | null | undefined): string {
-  return (name ?? '').trim().toUpperCase() || 'NC';
+  try {
+    return (name ?? '').trim().toUpperCase() || 'NC';
+  } catch (error) {
+    throw withErrorContext(error, 'techTag');
+  }
 }
 
 export function deriveNote(input: ActionsRowInput): string {
-  const s = input.status;
-  if (DIAG_STATUSES.includes(s)) {
-    const at = formatDayTunis(lastEnteredAt(input, ['DIAGNOSTIC']));
-    return ['DIAG', techTag(input.techDiag), at].filter(Boolean).join('_');
+  try {
+    const s = input.status;
+    if (DIAG_STATUSES.includes(s)) {
+      const at = formatDayTunis(lastEnteredAt(input, ['DIAGNOSTIC']));
+      return ['DIAG', techTag(input.techDiag), at].filter(Boolean).join('_');
+    }
+    if (REP_STATUSES.includes(s)) {
+      const at = formatDayTunis(lastEnteredAt(input, ['REPARATION']));
+      return ['REP', techTag(input.techRep), at].filter(Boolean).join('_');
+    }
+    if (/^RETOUR\d*$/.test(s)) {
+      return ['RETOUR', formatDayTunis(input.retourDate)].filter(Boolean).join(' ');
+    }
+    return NOTE_BY_STATUS[s] ?? s ?? '';
+  } catch (error) {
+    throw withErrorContext(error, 'deriveNote');
   }
-  if (REP_STATUSES.includes(s)) {
-    const at = formatDayTunis(lastEnteredAt(input, ['REPARATION']));
-    return ['REP', techTag(input.techRep), at].filter(Boolean).join('_');
-  }
-  if (/^RETOUR\d*$/.test(s)) {
-    return ['RETOUR', formatDayTunis(input.retourDate)].filter(Boolean).join(' ');
-  }
-  return NOTE_BY_STATUS[s] ?? s ?? '';
 }
 
 function hasBC(input: ActionsRowInput): boolean {
-  return docEntries(input, 'BC').length > 0;
+  try {
+    return docEntries(input, 'BC').length > 0;
+  } catch (error) {
+    throw withErrorContext(error, 'hasBC');
+  }
 }
 
 export function deriveValidation(input: ActionsRowInput): ActionsCell {
-  const s = input.status;
-  if (s === 'ANNULER' || input.annulationParClient) {
-    return { value: 'ANNULER', fill: 'green' };
+  try {
+    const s = input.status;
+    if (s === 'ANNULER' || input.annulationParClient) {
+      return { value: 'ANNULER', fill: 'green' };
+    }
+    if (s === 'IRREPARABLE') return { value: 'IRREPARABLE', fill: 'green' };
+    const retours = input.ignoreCount ?? 0;
+    if (retours >= 1) {
+      return { value: retours === 1 ? 'RETOUR' : `RETOUR ${retours}`, fill: 'red' };
+    }
+    if (hasBC(input) || s === 'FINISHED') return { value: 'OK', fill: 'green' };
+    return { value: null, fill: 'orange' };
+  } catch (error) {
+    throw withErrorContext(error, 'deriveValidation');
   }
-  if (s === 'IRREPARABLE') return { value: 'IRREPARABLE', fill: 'green' };
-  const retours = input.ignoreCount ?? 0;
-  if (retours >= 1) {
-    return { value: retours === 1 ? 'RETOUR' : `RETOUR ${retours}`, fill: 'red' };
-  }
-  if (hasBC(input) || s === 'FINISHED') return { value: 'OK', fill: 'green' };
-  return { value: null, fill: 'orange' };
 }
 
 function noteCell(input: ActionsRowInput): ActionsCell {
-  const value = deriveNote(input);
-  const fill: CellFill = CLOSED.has(input.status) ? 'green' : 'orange';
-  return { value: value || null, fill };
+  try {
+    const value = deriveNote(input);
+    const fill: CellFill = CLOSED.has(input.status) ? 'green' : 'orange';
+    return { value: value || null, fill };
+  } catch (error) {
+    throw withErrorContext(error, 'noteCell');
+  }
 }
 
 function text(v: unknown): string | null {
-  if (v === null || v === undefined) return null;
-  const s = String(v).trim();
-  return s ? s : null;
+  try {
+    if (v === null || v === undefined) return null;
+    const s = String(v).trim();
+    return s ? s : null;
+  } catch (error) {
+    throw withErrorContext(error, 'text');
+  }
 }
 
 /** Une ligne complète, dans l'ordre de `ACTIONS_HEADERS`. */
 export function buildActionsRow(input: ActionsRowInput): ActionsCell[] {
-  const location = text(input.locationName);
-  return [
-    { value: text(input._idnum), fill: 'green' },
-    { value: text(input.title), fill: 'green' },
-    { value: text(input.nSerie), fill: 'green' },
-    { value: text(input.clientName), fill: 'green' },
-    {
-      value: toExcelDay(input.dateReception ?? input.createdAt ?? null),
-      fill: 'green',
-    },
-    { value: location, fill: location ? 'green' : 'orange' },
-    docCell(input, 'Devis'),
-    docCell(input, 'BC'),
-    docCell(input, 'BL'),
-    deriveValidation(input),
-    docCell(input, 'Facture'),
-    noteCell(input),
-  ];
+  try {
+    const location = text(input.locationName);
+    return [
+      { value: text(input._idnum), fill: 'green' },
+      { value: text(input.title), fill: 'green' },
+      { value: text(input.nSerie), fill: 'green' },
+      { value: text(input.clientName), fill: 'green' },
+      {
+        value: toExcelDay(input.dateReception ?? input.createdAt ?? null),
+        fill: 'green',
+      },
+      { value: location, fill: location ? 'green' : 'orange' },
+      docCell(input, 'Devis'),
+      docCell(input, 'BC'),
+      docCell(input, 'BL'),
+      deriveValidation(input),
+      docCell(input, 'Facture'),
+      noteCell(input),
+    ];
+  } catch (error) {
+    throw withErrorContext(error, 'buildActionsRow');
+  }
 }

@@ -1,5 +1,6 @@
 import * as dotenv from 'dotenv';
 import { DEFAULT_NODE_ENV, resolveEnvFilePath } from './environments';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * Loads the SINGLE targeted env file `.env.${NODE_ENV}` BEFORE anything reads
@@ -15,19 +16,23 @@ import { DEFAULT_NODE_ENV, resolveEnvFilePath } from './environments';
  *   `import './config/load-env';`
  */
 function loadEnvironment(): { nodeEnv: string; envFilePath: string } {
-  const nodeEnv = process.env.NODE_ENV?.trim() || DEFAULT_NODE_ENV;
-  process.env.NODE_ENV = nodeEnv; // normalize downstream reads
-
   try {
-    const envFilePath = resolveEnvFilePath(nodeEnv);
-    dotenv.config({ path: envFilePath });
-    return { nodeEnv, envFilePath };
-  } catch (err) {
-    // Clean fatal error — the operator just needs the reason, not a stack.
-    process.stderr.write(
-      `\x1b[31m[FIXTRONIX] ${(err as Error).message}\x1b[0m\n`,
-    );
-    process.exit(1);
+    const nodeEnv = process.env.NODE_ENV?.trim() || DEFAULT_NODE_ENV;
+    process.env.NODE_ENV = nodeEnv; // normalize downstream reads
+
+    try {
+      const envFilePath = resolveEnvFilePath(nodeEnv);
+      dotenv.config({ path: envFilePath });
+      return { nodeEnv, envFilePath };
+    } catch (err) {
+      // Clean fatal error — the operator just needs the reason, not a stack.
+      process.stderr.write(
+        `\x1b[31m[FIXTRONIX] ${(err as Error).message}\x1b[0m\n`,
+      );
+      process.exit(1);
+    }
+  } catch (error) {
+    throw withErrorContext(error, 'loadEnvironment');
   }
 }
 

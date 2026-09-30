@@ -2,6 +2,7 @@ import { Resolver, Query, Mutation, Args } from '@nestjs/graphql';
 import { Composant_Category } from './entities/composant_category.entity';
 import { CreateComposant_CategoryInput } from './dto/create-composant_category.input';
 import { Composant_CategoryService } from './composant_category.service';
+import { withErrorContext } from '../common/error-context';
 
 @Resolver(() => Composant_Category)
 export class Composant_CategoryResolver {
@@ -14,11 +15,19 @@ export class Composant_CategoryResolver {
     @Args('createComposant_CategoryInput')
     createComposant_CategoryInput: CreateComposant_CategoryInput,
   ) {
-    const data = await this.composant_CategoryService.createComposant_Category(
-      createComposant_CategoryInput,
-    );
+    try {
+      const data =
+        await this.composant_CategoryService.createComposant_Category(
+          createComposant_CategoryInput,
+        );
 
-    return data;
+      return data;
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'Composant_CategoryResolver.createComposant_Category',
+      );
+    }
   }
 
   @Mutation(() => Composant_Category)
@@ -37,11 +46,27 @@ export class Composant_CategoryResolver {
   async findOneComposant_Category(
     @Args('_id') _id: string,
   ): Promise<Composant_Category> {
-    return await this.composant_CategoryService.findOneComposant_Category(_id);
+    try {
+      return await this.composant_CategoryService.findOneComposant_Category(
+        _id,
+      );
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'Composant_CategoryResolver.findOneComposant_Category',
+      );
+    }
   }
 
   @Query(() => [Composant_Category])
   async findAllComposant_Category(): Promise<Composant_Category[]> {
-    return await this.composant_CategoryService.findAllComposant_Categorys();
+    try {
+      return await this.composant_CategoryService.findAllComposant_Categorys();
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'Composant_CategoryResolver.findAllComposant_Category',
+      );
+    }
   }
 }

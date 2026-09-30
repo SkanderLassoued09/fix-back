@@ -5,6 +5,7 @@ import { AlertSeverity, AlertType } from 'src/alerts/alert.enums';
 import { DiAlertService } from 'src/alerts/alerts.service';
 import { DiDocument } from 'src/di/entities/di.entity';
 import { STATUS_DI } from 'src/di/di.status';
+import { withErrorContext } from '../common/error-context';
 
 /** One bucket of the daily stagnation digest (grouped Discord reminder). */
 export interface StagnationDigestBucket {
@@ -90,126 +91,130 @@ export class StagnationService {
     elapsedMs: number;
     buckets: StagnationDigestBucket[];
   }> {
-    this.logger.log('START detectStagnantDi');
-    const startedAt = Date.now();
+    try {
+      this.logger.log('START detectStagnantDi');
+      const startedAt = Date.now();
 
-    const now = new Date();
-    const created: Record<string, number> = {
-      DI_STAGNANT_48H: 0,
-    };
-    // Per-bucket snapshot for the daily grouped Discord digest — the CURRENT
-    // count of stagnant DIs in each band (not just newly-created alerts).
-    const digestByType: Record<string, StagnationDigestBucket> = {};
-    let scanned = 0;
-    let resolvedFromEscalation = 0;
-
-    for (const bucket of StagnationService.THRESHOLDS) {
-      const upperBound = new Date(now.getTime() - bucket.lowerMs);
-      const lowerBound =
-        bucket.upperMs === Infinity
-          ? null
-          : new Date(now.getTime() - bucket.upperMs);
-
-      // Build the query: DI is open, last status change is OLD enough for
-      // this bucket but not so old it belongs in a higher bucket.
-      // Use $ifNull-style fallback to `updatedAt` for legacy DIs that
-      // existed before `statusUpdatedAt` was introduced.
-      const baseMatch: any = {
-        isDeleted: { $ne: true },
-        status: { $nin: StagnationService.TERMINAL_STATUSES },
+      const now = new Date();
+      const created: Record<string, number> = {
+        DI_STAGNANT_48H: 0,
       };
+      // Per-bucket snapshot for the daily grouped Discord digest — the CURRENT
+      // count of stagnant DIs in each band (not just newly-created alerts).
+      const digestByType: Record<string, StagnationDigestBucket> = {};
+      let scanned = 0;
+      let resolvedFromEscalation = 0;
 
-      const ageCondition: any = { $lte: upperBound };
-      if (lowerBound) {
-        ageCondition.$gt = lowerBound;
-      }
+      for (const bucket of StagnationService.THRESHOLDS) {
+        const upperBound = new Date(now.getTime() - bucket.lowerMs);
+        const lowerBound =
+          bucket.upperMs === Infinity
+            ? null
+            : new Date(now.getTime() - bucket.upperMs);
 
-      const stagnant = await this.diModel
-        .find({
-          ...baseMatch,
-          $or: [
-            { statusUpdatedAt: ageCondition },
-            // Backfill path: no statusUpdatedAt → use updatedAt as a proxy.
-            {
-              statusUpdatedAt: null,
-              updatedAt: ageCondition,
-            },
-          ],
-        })
-        .select('_id _idnum status statusUpdatedAt updatedAt')
-        .lean();
+        // Build the query: DI is open, last status change is OLD enough for
+        // this bucket but not so old it belongs in a higher bucket.
+        // Use $ifNull-style fallback to `updatedAt` for legacy DIs that
+        // existed before `statusUpdatedAt` was introduced.
+        const baseMatch: any = {
+          isDeleted: { $ne: true },
+          status: { $nin: StagnationService.TERMINAL_STATUSES },
+        };
 
-      this.logger.log(
-        `[${bucket.label}] matched ${stagnant.length} DI(s) in ${bucket.type} band`,
-      );
-      scanned += stagnant.length;
+        const ageCondition: any = { $lte: upperBound };
+        if (lowerBound) {
+          ageCondition.$gt = lowerBound;
+        }
 
-      // Snapshot this band for the grouped daily digest (count + a few refs).
-      digestByType[bucket.type] = {
-        type: bucket.type,
-        label: bucket.digestLabel,
-        severity: bucket.severity,
-        count: stagnant.length,
-        examples: stagnant
-          .slice(0, DIGEST_EXAMPLE_COUNT)
-          .map((di: any) => di._idnum ?? di._id),
-      };
+        const stagnant = await this.diModel
+          .find({
+            ...baseMatch,
+            $or: [
+              { statusUpdatedAt: ageCondition },
+              // Backfill path: no statusUpdatedAt → use updatedAt as a proxy.
+              {
+                statusUpdatedAt: null,
+                updatedAt: ageCondition,
+              },
+            ],
+          })
+          .select('_id _idnum status statusUpdatedAt updatedAt')
+          .lean();
 
-      for (const di of stagnant) {
-        const stagnationStarted = di.statusUpdatedAt ?? di.updatedAt;
-        const ageMs = now.getTime() - new Date(stagnationStarted).getTime();
-        const ageHours = Math.round(ageMs / (60 * 60 * 1000));
-
-        const result = await this.alertService.createAlertIfMissing(
-          {
-            diId: di._id,
-            type: bucket.type,
-            severity: bucket.severity,
-            message: `DI ${di._idnum ?? di._id} stagnant in ${di.status} for ${ageHours}h (threshold: ${bucket.label}).`,
-            assignedRoles: ['Manager', 'Admin_Manager', 'Coordinator'],
-            metadataJson: JSON.stringify({
-              diIdnum: di._idnum ?? null,
-              status: di.status,
-              stagnationStartedAt: stagnationStarted,
-              ageMs,
-              threshold: bucket.type,
-            }),
-          },
-          // Digest-only: no per-DI Discord ping. The daily 08:00 cron sends ONE
-          // grouped embed instead. Alerts are still persisted + escalated.
-          { silent: true },
+        this.logger.log(
+          `[${bucket.label}] matched ${stagnant.length} DI(s) in ${bucket.type} band`,
         );
+        scanned += stagnant.length;
 
-        if (result.created) {
-          created[bucket.type]++;
-        }
+        // Snapshot this band for the grouped daily digest (count + a few refs).
+        digestByType[bucket.type] = {
+          type: bucket.type,
+          label: bucket.digestLabel,
+          severity: bucket.severity,
+          count: stagnant.length,
+          examples: stagnant
+            .slice(0, DIGEST_EXAMPLE_COUNT)
+            .map((di: any) => di._idnum ?? di._id),
+        };
 
-        // Escalation: close any lower-tier open alerts for this DI now that
-        // we've raised a higher one. Keeps the alert inbox clean.
-        if (bucket.resolveOnEscalation.length) {
-          const closedCount = await this.alertService.resolveOpenAlertsForDi(
-            di._id,
-            bucket.resolveOnEscalation,
-            null,
+        for (const di of stagnant) {
+          const stagnationStarted = di.statusUpdatedAt ?? di.updatedAt;
+          const ageMs = now.getTime() - new Date(stagnationStarted).getTime();
+          const ageHours = Math.round(ageMs / (60 * 60 * 1000));
+
+          const result = await this.alertService.createAlertIfMissing(
+            {
+              diId: di._id,
+              type: bucket.type,
+              severity: bucket.severity,
+              message: `DI ${di._idnum ?? di._id} stagnant in ${di.status} for ${ageHours}h (threshold: ${bucket.label}).`,
+              assignedRoles: ['Manager', 'Admin_Manager', 'Coordinator'],
+              metadataJson: JSON.stringify({
+                diIdnum: di._idnum ?? null,
+                status: di.status,
+                stagnationStartedAt: stagnationStarted,
+                ageMs,
+                threshold: bucket.type,
+              }),
+            },
+            // Digest-only: no per-DI Discord ping. The daily 08:00 cron sends ONE
+            // grouped embed instead. Alerts are still persisted + escalated.
+            { silent: true },
           );
-          resolvedFromEscalation += closedCount;
+
+          if (result.created) {
+            created[bucket.type]++;
+          }
+
+          // Escalation: close any lower-tier open alerts for this DI now that
+          // we've raised a higher one. Keeps the alert inbox clean.
+          if (bucket.resolveOnEscalation.length) {
+            const closedCount = await this.alertService.resolveOpenAlertsForDi(
+              di._id,
+              bucket.resolveOnEscalation,
+              null,
+            );
+            resolvedFromEscalation += closedCount;
+          }
         }
       }
+
+      const elapsedMs = Date.now() - startedAt;
+      this.logger.log(
+        `END detectStagnantDi · scanned=${scanned} ` +
+          `created={48h:${created.DI_STAGNANT_48H}} ` +
+          `escalated=${resolvedFromEscalation} elapsedMs=${elapsedMs}`,
+      );
+
+      // Seuil unique → un seul bucket dans le digest (48 h).
+      const buckets = [AlertType.DI_STAGNANT_48H]
+        .map((type) => digestByType[type])
+        .filter(Boolean);
+
+      return { scanned, created, resolvedFromEscalation, elapsedMs, buckets };
+    } catch (error) {
+      throw withErrorContext(error, 'StagnationService.detectStagnantDi');
     }
-
-    const elapsedMs = Date.now() - startedAt;
-    this.logger.log(
-      `END detectStagnantDi · scanned=${scanned} ` +
-        `created={48h:${created.DI_STAGNANT_48H}} ` +
-        `escalated=${resolvedFromEscalation} elapsedMs=${elapsedMs}`,
-    );
-
-    // Seuil unique → un seul bucket dans le digest (48 h).
-    const buckets = [AlertType.DI_STAGNANT_48H]
-      .map((type) => digestByType[type])
-      .filter(Boolean);
-
-    return { scanned, created, resolvedFromEscalation, elapsedMs, buckets };
   }
 
   /**
@@ -230,33 +235,37 @@ export class StagnationService {
       ageHours: number;
     }>
   > {
-    const nowMs = Date.now();
-    const cutoff = new Date(nowMs - thresholdHours * 60 * 60 * 1000);
-    const rows = await this.diModel
-      .find({
-        isDeleted: { $ne: true },
-        status: { $nin: StagnationService.TERMINAL_STATUSES },
-        $or: [
-          { statusUpdatedAt: { $lte: cutoff } },
-          { statusUpdatedAt: null, updatedAt: { $lte: cutoff } },
-        ],
-      })
-      .select('_id _idnum status statusUpdatedAt updatedAt')
-      .sort({ statusUpdatedAt: 1, updatedAt: 1 })
-      .lean();
+    try {
+      const nowMs = Date.now();
+      const cutoff = new Date(nowMs - thresholdHours * 60 * 60 * 1000);
+      const rows = await this.diModel
+        .find({
+          isDeleted: { $ne: true },
+          status: { $nin: StagnationService.TERMINAL_STATUSES },
+          $or: [
+            { statusUpdatedAt: { $lte: cutoff } },
+            { statusUpdatedAt: null, updatedAt: { $lte: cutoff } },
+          ],
+        })
+        .select('_id _idnum status statusUpdatedAt updatedAt')
+        .sort({ statusUpdatedAt: 1, updatedAt: 1 })
+        .lean();
 
-    return rows.map((d: any) => {
-      const changedAt = d.statusUpdatedAt ?? d.updatedAt;
-      return {
-        _id: String(d._id),
-        idNum: d._idnum ?? String(d._id),
-        status: d.status,
-        statusChangedAt: changedAt,
-        ageHours: Math.round(
-          (nowMs - new Date(changedAt).getTime()) / (60 * 60 * 1000),
-        ),
-      };
-    });
+      return rows.map((d: any) => {
+        const changedAt = d.statusUpdatedAt ?? d.updatedAt;
+        return {
+          _id: String(d._id),
+          idNum: d._idnum ?? String(d._id),
+          status: d.status,
+          statusChangedAt: changedAt,
+          ageHours: Math.round(
+            (nowMs - new Date(changedAt).getTime()) / (60 * 60 * 1000),
+          ),
+        };
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'StagnationService.getStagnantForDailyReport');
+    }
   }
 
   /**
@@ -264,19 +273,23 @@ export class StagnationService {
    * dashboards and the future "stuck DI" admin view.
    */
   async listStagnantDi(limit = 200) {
-    const now = new Date();
-    const t24 = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    return this.diModel
-      .find({
-        isDeleted: { $ne: true },
-        status: { $nin: StagnationService.TERMINAL_STATUSES },
-        $or: [
-          { statusUpdatedAt: { $lte: t24 } },
-          { statusUpdatedAt: null, updatedAt: { $lte: t24 } },
-        ],
-      })
-      .sort({ statusUpdatedAt: 1, updatedAt: 1 })
-      .limit(Math.min(limit, 500))
-      .lean();
+    try {
+      const now = new Date();
+      const t24 = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      return await this.diModel
+        .find({
+          isDeleted: { $ne: true },
+          status: { $nin: StagnationService.TERMINAL_STATUSES },
+          $or: [
+            { statusUpdatedAt: { $lte: t24 } },
+            { statusUpdatedAt: null, updatedAt: { $lte: t24 } },
+          ],
+        })
+        .sort({ statusUpdatedAt: 1, updatedAt: 1 })
+        .limit(Math.min(limit, 500))
+        .lean();
+    } catch (error) {
+      throw withErrorContext(error, 'StagnationService.listStagnantDi');
+    }
   }
 }

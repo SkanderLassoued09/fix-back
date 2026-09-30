@@ -18,6 +18,7 @@ import { BadRequestException, UseGuards } from '@nestjs/common';
 import { User as CurrentUser } from 'src/auth/profile.decorator';
 import { SearchInput } from 'src/stat/dto/create-stat.input';
 import { GraphQLError } from 'graphql';
+import { withErrorContext } from '../common/error-context';
 
 @Resolver()
 export class ProfileResolver {
@@ -27,9 +28,13 @@ export class ProfileResolver {
   async createProfile(
     @Args('createProfileInput') createProfileInput: CreateProfileInput,
   ) {
-    let data = await this.profileService.create(createProfileInput);
+    try {
+      let data = await this.profileService.create(createProfileInput);
 
-    return data;
+      return data;
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.createProfile');
+    }
   }
 
   /**
@@ -53,25 +58,33 @@ export class ProfileResolver {
     @Args('input') input: ChangePasswordInput,
     @CurrentUser() profile: TokenData,
   ): Promise<boolean> {
-    const username = (profile as any)?.username;
-    if (!username) {
-      throw new GraphQLError('Authentification requise.', {
-        extensions: { code: 'UNAUTHENTICATED' },
-      });
+    try {
+      const username = (profile as any)?.username;
+      if (!username) {
+        throw new GraphQLError('Authentification requise.', {
+          extensions: { code: 'UNAUTHENTICATED' },
+        });
+      }
+      return await this.profileService.changeOwnPassword(
+        username,
+        input.currentPassword,
+        input.newPassword,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.changeMyPassword');
     }
-    return this.profileService.changeOwnPassword(
-      username,
-      input.currentPassword,
-      input.newPassword,
-    );
   }
 
   @Query(() => TokenData)
   @UseGuards(JwtAuthGuard)
   getTokenData(@CurrentUser() profile: TokenData) {
-    //
-    if (profile !== null) {
-      return profile;
+    try {
+      //
+      if (profile !== null) {
+        return profile;
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.getTokenData');
     }
   }
 
@@ -85,14 +98,22 @@ export class ProfileResolver {
   @UseGuards(JwtAuthGuard)
   @Query(() => [TechTickets])
   async getAllAdmins() {
-    return await this.profileService.getAllAdmins();
+    try {
+      return await this.profileService.getAllAdmins();
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.getAllAdmins');
+    }
   }
   @Query(() => ProfileTableData)
   async searchProfile(
     @Args('paginationConfig') paginationConfig: PaginationConfigProfile,
     @Args('search') search: SearchInput,
   ) {
-    return await this.profileService.searchProfile(paginationConfig, search);
+    try {
+      return await this.profileService.searchProfile(paginationConfig, search);
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.searchProfile');
+    }
   }
 
   // @Roles(Role.ADMIN_MANAGER, Role.ADMIN_TECH)
@@ -101,126 +122,166 @@ export class ProfileResolver {
   async getAllProfiles(
     @Args('paginationConfig') paginationConfig: PaginationConfigProfile,
   ) {
-    return await this.profileService.getAllProfile(paginationConfig);
+    try {
+      return await this.profileService.getAllProfile(paginationConfig);
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.getAllProfiles');
+    }
   }
 
   @Query(() => Profile)
   async findOne(@Args('username') username: string) {
-    return await this.profileService.findOneForAuth(username);
+    try {
+      return await this.profileService.findOneForAuth(username);
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.findOne');
+    }
   }
 
   sumTimes(times: string[]): string {
-    if (!Array.isArray(times)) {
-      //
-      return '00:00:00';
-    }
-    if (times.length === 0) {
-      return '00:00:00';
-    }
-    if (Array.isArray(times) && times.length > 0) {
-      const totalMilliseconds = times.reduce((acc, time) => {
-        const [hours, minutes, seconds] = time.split(':').map(Number);
-        return acc + hours * 3600000 + minutes * 60000 + seconds * 1000;
-      }, 0);
+    try {
+      if (!Array.isArray(times)) {
+        //
+        return '00:00:00';
+      }
+      if (times.length === 0) {
+        return '00:00:00';
+      }
+      if (Array.isArray(times) && times.length > 0) {
+        const totalMilliseconds = times.reduce((acc, time) => {
+          const [hours, minutes, seconds] = time.split(':').map(Number);
+          return acc + hours * 3600000 + minutes * 60000 + seconds * 1000;
+        }, 0);
 
-      const sumDate = new Date(totalMilliseconds);
-      const sumTimeString = `${String(sumDate.getUTCHours()).padStart(
-        2,
-        '0',
-      )}:${String(sumDate.getUTCMinutes()).padStart(2, '0')}:${String(
-        sumDate.getUTCSeconds(),
-      ).padStart(2, '0')}`;
+        const sumDate = new Date(totalMilliseconds);
+        const sumTimeString = `${String(sumDate.getUTCHours()).padStart(
+          2,
+          '0',
+        )}:${String(sumDate.getUTCMinutes()).padStart(2, '0')}:${String(
+          sumDate.getUTCSeconds(),
+        ).padStart(2, '0')}`;
 
-      return sumTimeString;
+        return sumTimeString;
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.sumTimes');
     }
   }
 
   avgTime(times: string[]): string {
-    if (!Array.isArray(times)) {
-      //
-      return '00:00:00';
-    }
-    if (times.length === 0) {
-      return '00:00:00';
-    }
+    try {
+      if (!Array.isArray(times)) {
+        //
+        return '00:00:00';
+      }
+      if (times.length === 0) {
+        return '00:00:00';
+      }
 
-    if (Array.isArray(times) && times.length > 0) {
-      const totalMilliseconds = times.reduce((acc, time) => {
-        const [hours, minutes, seconds] = time.split(':').map(Number);
-        return acc + hours * 3600000 + minutes * 60000 + seconds * 1000;
-      }, 0);
+      if (Array.isArray(times) && times.length > 0) {
+        const totalMilliseconds = times.reduce((acc, time) => {
+          const [hours, minutes, seconds] = time.split(':').map(Number);
+          return acc + hours * 3600000 + minutes * 60000 + seconds * 1000;
+        }, 0);
 
-      const avgDate = new Date(totalMilliseconds / times.length);
-      const sumTimeString = `${String(avgDate.getUTCHours()).padStart(
-        2,
-        '0',
-      )}:${String(avgDate.getUTCMinutes()).padStart(2, '0')}:${String(
-        avgDate.getUTCSeconds(),
-      ).padStart(2, '0')}`;
+        const avgDate = new Date(totalMilliseconds / times.length);
+        const sumTimeString = `${String(avgDate.getUTCHours()).padStart(
+          2,
+          '0',
+        )}:${String(avgDate.getUTCMinutes()).padStart(2, '0')}:${String(
+          avgDate.getUTCSeconds(),
+        ).padStart(2, '0')}`;
 
-      return sumTimeString;
+        return sumTimeString;
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.avgTime');
     }
   }
 
   calculateTechCoast(time: string, givenPrice: number) {
-    const [hh, mm, ss] = time.split(':').map(Number);
-    const totalMilliseconds = hh * 3600000 + mm * 60000 + ss * 1000;
-    const totalHours = totalMilliseconds / 3600000;
-    const totalCost = totalHours * givenPrice; // price per hour nezih
-    return totalCost.toFixed(3);
+    try {
+      const [hh, mm, ss] = time.split(':').map(Number);
+      const totalMilliseconds = hh * 3600000 + mm * 60000 + ss * 1000;
+      const totalHours = totalMilliseconds / 3600000;
+      const totalCost = totalHours * givenPrice; // price per hour nezih
+      return totalCost.toFixed(3);
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.calculateTechCoast');
+    }
   }
 
   @Query(() => [GetTicketByProfile])
   async getTicketByProfile(@Args('givenPrice') givenPrice: number) {
-    let dataDiag = await this.profileService.getTicketByProfileDiag();
-    let dataRep = await this.profileService.getTicketByProfileRep();
+    try {
+      let dataDiag = await this.profileService.getTicketByProfileDiag();
+      let dataRep = await this.profileService.getTicketByProfileRep();
 
-    const combinedData = dataDiag.map((diag) => {
-      const rep = dataRep.find((rep) => rep.techName === diag.techName);
+      const combinedData = dataDiag.map((diag) => {
+        const rep = dataRep.find((rep) => rep.techName === diag.techName);
 
-      if (diag.totalDiag !== undefined && rep !== undefined) {
-        let diagCost = this.sumTimes(diag.totalDiag || null);
-        let repCost = this.sumTimes(rep.totalRep || null);
+        if (diag.totalDiag !== undefined && rep !== undefined) {
+          let diagCost = this.sumTimes(diag.totalDiag || null);
+          let repCost = this.sumTimes(rep.totalRep || null);
 
-        if (diagCost !== null && repCost !== null) {
-          return {
-            techName: diag.techName,
-            totalDiag: this.sumTimes(diag.totalDiag) || '0',
-            totalRep: this.sumTimes(rep.totalRep) || '0',
-            techCostDiag: this.calculateTechCoast(diagCost, givenPrice),
-            techCostRep: this.calculateTechCoast(repCost, givenPrice),
-            moyRep: this.avgTime(rep.totalRep),
-            moyDiag: this.avgTime(diag.totalDiag),
-          };
+          if (diagCost !== null && repCost !== null) {
+            return {
+              techName: diag.techName,
+              totalDiag: this.sumTimes(diag.totalDiag) || '0',
+              totalRep: this.sumTimes(rep.totalRep) || '0',
+              techCostDiag: this.calculateTechCoast(diagCost, givenPrice),
+              techCostRep: this.calculateTechCoast(repCost, givenPrice),
+              moyRep: this.avgTime(rep.totalRep),
+              moyDiag: this.avgTime(diag.totalDiag),
+            };
+          } else {
+            throw new BadRequestException();
+          }
         } else {
           throw new BadRequestException();
         }
-      } else {
-        throw new BadRequestException();
-      }
-    });
+      });
 
-    return combinedData;
+      return combinedData;
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.getTicketByProfile');
+    }
   }
 
   @Mutation(() => Profile)
-  updateProfile(
+  async updateProfile(
     @Args('_id') _id: string,
     @Args('updateProfileInput') updateProfileInput: UpdateProfileInput,
   ) {
-    return this.profileService.updateProfile(_id, updateProfileInput);
+    try {
+      return await this.profileService.updateProfile(_id, updateProfileInput);
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.updateProfile');
+    }
   }
   @Mutation(() => Profile)
   deleteProfile(@Args('_id') _id: string) {
-    return this.profileService.deleteUser(_id);
+    try {
+      return this.profileService.deleteUser(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.deleteProfile');
+    }
   }
 
   @Mutation(() => Profile)
   removeProfile(@Args('id', { type: () => Int }) id: number) {
-    return this.profileService.remove(id);
+    try {
+      return this.profileService.remove(id);
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.removeProfile');
+    }
   }
   @Query(() => [Profile])
-  getAllTech() {
-    return this.profileService.getAllTech();
+  async getAllTech() {
+    try {
+      return await this.profileService.getAllTech();
+    } catch (error) {
+      throw withErrorContext(error, 'ProfileResolver.getAllTech');
+    }
   }
 }

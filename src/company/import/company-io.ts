@@ -1,3 +1,4 @@
+import { withErrorContext } from '../../common/error-context';
 /**
  * SCHÉMA CANONIQUE des colonnes société — SOURCE DE VÉRITÉ UNIQUE partagée par
  * l'export ET l'import. L'ordre du tableau = l'ordre des colonnes du .xlsx, et
@@ -49,31 +50,47 @@ export const EXPORT_HEADERS: string[] = COMPANY_COLUMNS.map((c) => c.header);
 
 /** Normalise un en-tête pour un match tolérant (accents, casse, ponctuation). */
 export function normHeader(s: unknown): string {
-  return String(s ?? '')
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .replace(/\s+/g, ' ');
+  try {
+    return String(s ?? '')
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+      .replace(/\s+/g, ' ');
+  } catch (error) {
+    throw withErrorContext(error, 'normHeader');
+  }
 }
 
 /** Valeur d'affichage propre : null/undefined et les chaînes legacy
  *  "undefined"/"null" deviennent '' (jamais écrites dans l'export). */
 export function cleanCell(v: unknown): string {
-  if (v == null) return '';
-  const s = v instanceof Date ? (isNaN(v.getTime()) ? '' : v.toISOString()) : String(v);
-  const t = s.trim().toLowerCase();
-  return t === '' || t === 'undefined' || t === 'null' ? '' : s.trim();
+  try {
+    if (v == null) return '';
+    const s = v instanceof Date ? (isNaN(v.getTime()) ? '' : v.toISOString()) : String(v);
+    const t = s.trim().toLowerCase();
+    return t === '' || t === 'undefined' || t === 'null' ? '' : s.trim();
+  } catch (error) {
+    throw withErrorContext(error, 'cleanCell');
+  }
 }
 
 function getPath(obj: any, path: string[]): any {
-  return path.reduce((o, k) => (o == null ? o : o[k]), obj);
+  try {
+    return path.reduce((o, k) => (o == null ? o : o[k]), obj);
+  } catch (error) {
+    throw withErrorContext(error, 'getPath');
+  }
 }
 
 /** Company (doc) → ligne de cellules, dans l'ordre canonique. */
 export function companyToRow(company: any): string[] {
-  return COMPANY_COLUMNS.map((c) => cleanCell(getPath(company, c.path)));
+  try {
+    return COMPANY_COLUMNS.map((c) => cleanCell(getPath(company, c.path)));
+  } catch (error) {
+    throw withErrorContext(error, 'companyToRow');
+  }
 }
 
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;

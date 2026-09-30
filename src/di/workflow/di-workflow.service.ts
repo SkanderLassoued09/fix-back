@@ -10,6 +10,7 @@ import {
   DiTransitionResult,
 } from './di-workflow.types';
 import { GraphQLError } from 'graphql';
+import { withErrorContext } from '../../common/error-context';
 
 type WorkflowLogPayload = {
   event: string;
@@ -35,63 +36,71 @@ export class DiWorkflowService {
   ) {}
 
   async transition(input: DiTransitionInput): Promise<DiTransitionResult<Di>> {
-    const config = this.getTransitionConfig(input.transitionKey);
-    const di = await this.diModel.findOne({ _id: input.diId });
+    try {
+      const config = this.getTransitionConfig(input.transitionKey);
+      const di = await this.diModel.findOne({ _id: input.diId });
 
-    if (!di) {
-      throw new NotFoundException(`DI ${input.diId} not found`);
-    }
-
-    this.softValidateFromStatus(di.status, config, input);
-    this.softValidateActorRole(config, input);
-
-    const update: Record<string, unknown> = {
-      status: config.to,
-    };
-
-    if (config.currentRoles) {
-      update.current_roles = config.currentRoles;
-    }
-
-    const updatedDi = await this.diModel.findOneAndUpdate(
-      { _id: input.diId },
-      { $set: update },
-      { new: true },
-    );
-
-    if (!updatedDi) {
-      throw new NotFoundException(`DI ${input.diId} not found after transition`);
-    }
-
-    if (config.updateStatStatus) {
-      try {
-        await this.updateStatStatus(updatedDi, config.to);
-      } catch (error) {
-        this.logStatSyncFailure(config, input, di.status, error);
-        throw error;
+      if (!di) {
+        throw new NotFoundException(`DI ${input.diId} not found`);
       }
+
+      this.softValidateFromStatus(di.status, config, input);
+      this.softValidateActorRole(config, input);
+
+      const update: Record<string, unknown> = {
+        status: config.to,
+      };
+
+      if (config.currentRoles) {
+        update.current_roles = config.currentRoles;
+      }
+
+      const updatedDi = await this.diModel.findOneAndUpdate(
+        { _id: input.diId },
+        { $set: update },
+        { new: true },
+      );
+
+      if (!updatedDi) {
+        throw new NotFoundException(`DI ${input.diId} not found after transition`);
+      }
+
+      if (config.updateStatStatus) {
+        try {
+          await this.updateStatStatus(updatedDi, config.to);
+        } catch (error) {
+          this.logStatSyncFailure(config, input, di.status, error);
+          throw error;
+        }
+      }
+
+      this.logTransitionSuccess(config, input, di.status);
+
+      return {
+        di: updatedDi as unknown as Di,
+        previousStatus: di.status,
+        nextStatus: config.to,
+        transitionKey: config.key,
+      };
+    } catch (error) {
+      throw withErrorContext(error, 'DiWorkflowService.transition');
     }
-
-    this.logTransitionSuccess(config, input, di.status);
-
-    return {
-      di: updatedDi as unknown as Di,
-      previousStatus: di.status,
-      nextStatus: config.to,
-      transitionKey: config.key,
-    };
   }
 
   private getTransitionConfig(transitionKey: string): DiTransitionConfig {
-    const config = DI_TRANSITIONS[transitionKey];
+    try {
+      const config = DI_TRANSITIONS[transitionKey];
 
-    if (!config) {
-      // Unknown transition keys are implementation errors, not legacy behavior.
-      this.logMissingTransitionConfig(transitionKey);
-      throw new Error(`Unknown DI transition '${transitionKey}'`);
+      if (!config) {
+        // Unknown transition keys are implementation errors, not legacy behavior.
+        this.logMissingTransitionConfig(transitionKey);
+        throw new Error(`Unknown DI transition '${transitionKey}'`);
+      }
+
+      return config;
+    } catch (error) {
+      throw withErrorContext(error, 'DiWorkflowService.getTransitionConfig');
     }
-
-    return config;
   }
 
   private softValidateFromStatus(
@@ -99,43 +108,47 @@ export class DiWorkflowService {
     config: DiTransitionConfig,
     input: DiTransitionInput,
   ) {
-    if (!config.from?.length || input.skipFromValidation) {
-      return;
-    }
+    try {
+      if (!config.from?.length || input.skipFromValidation) {
+        return;
+      }
 
-    const isAllowed = config.from.includes(currentStatus);
+      const isAllowed = config.from.includes(currentStatus);
 
-    if (!isAllowed) {
-      const message = `DI transition '${config.key}' expected one of [${config.from.join(
+      if (!isAllowed) {
+        const message = `DI transition '${config.key}' expected one of [${config.from.join(
         ', ',
       )}] but got '${currentStatus}' for DI ${input.diId}`;
 
-      if (config.strictFrom) {
-        // Un refus `strictFrom` est une transition INTERDITE, pas une panne :
-        // en `Error` nu il remontait au client en INTERNAL_SERVER_ERROR (500).
-        throw new GraphQLError(message, {
-          extensions: { code: 'BAD_REQUEST' },
-        });
-      }
+        if (config.strictFrom) {
+          // Un refus `strictFrom` est une transition INTERDITE, pas une panne :
+          // en `Error` nu il remontait au client en INTERNAL_SERVER_ERROR (500).
+          throw new GraphQLError(message, {
+            extensions: { code: 'BAD_REQUEST' },
+          });
+        }
 
-      this.logger.warn(
-        this.formatLog({
-          event: 'di.workflow.validation.warning',
-          category: 'workflow.invalid_source_status',
-          transitionKey: config.key,
-          diId: input.diId,
-          previousStatus: currentStatus,
-          nextStatus: config.to,
-          actorRole: input.actorRole,
-          actorId: input.actorId,
-          validationMode: this.getValidationMode(config),
-          timestamp: this.getTimestamp(),
-          details: {
-            expectedStatuses: config.from,
-            message,
-          },
-        }),
-      );
+        this.logger.warn(
+          this.formatLog({
+            event: 'di.workflow.validation.warning',
+            category: 'workflow.invalid_source_status',
+            transitionKey: config.key,
+            diId: input.diId,
+            previousStatus: currentStatus,
+            nextStatus: config.to,
+            actorRole: input.actorRole,
+            actorId: input.actorId,
+            validationMode: this.getValidationMode(config),
+            timestamp: this.getTimestamp(),
+            details: {
+              expectedStatuses: config.from,
+              message,
+            },
+          }),
+        );
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'DiWorkflowService.softValidateFromStatus');
     }
   }
 
@@ -143,53 +156,61 @@ export class DiWorkflowService {
     config: DiTransitionConfig,
     input: DiTransitionInput,
   ) {
-    if (
-      !config.allowedActorRoles?.length ||
-      !input.actorRole ||
-      input.skipRoleValidation
-    ) {
-      return;
-    }
+    try {
+      if (
+        !config.allowedActorRoles?.length ||
+        !input.actorRole ||
+        input.skipRoleValidation
+      ) {
+        return;
+      }
 
-    const isAllowed = config.allowedActorRoles.includes(input.actorRole);
+      const isAllowed = config.allowedActorRoles.includes(input.actorRole);
 
-    if (!isAllowed) {
-      const message = `DI transition '${config.key}' expected actor role one of [${config.allowedActorRoles.join(
+      if (!isAllowed) {
+        const message = `DI transition '${config.key}' expected actor role one of [${config.allowedActorRoles.join(
         ', ',
       )}] but got '${input.actorRole}' for DI ${input.diId}`;
 
-      if (config.strictRole) {
-        // TODO: replace with ForbiddenException after resolvers consistently pass actor role.
-        throw new Error(message);
-      }
+        if (config.strictRole) {
+          // TODO: replace with ForbiddenException after resolvers consistently pass actor role.
+          throw new Error(message);
+        }
 
-      this.logger.warn(
-        this.formatLog({
-          event: 'di.workflow.validation.warning',
-          category: 'workflow.invalid_actor_role',
-          transitionKey: config.key,
-          diId: input.diId,
-          nextStatus: config.to,
-          actorRole: input.actorRole,
-          actorId: input.actorId,
-          validationMode: this.getValidationMode(config),
-          timestamp: this.getTimestamp(),
-          details: {
-            allowedActorRoles: config.allowedActorRoles,
-            message,
-          },
-        }),
-      );
+        this.logger.warn(
+          this.formatLog({
+            event: 'di.workflow.validation.warning',
+            category: 'workflow.invalid_actor_role',
+            transitionKey: config.key,
+            diId: input.diId,
+            nextStatus: config.to,
+            actorRole: input.actorRole,
+            actorId: input.actorId,
+            validationMode: this.getValidationMode(config),
+            timestamp: this.getTimestamp(),
+            details: {
+              allowedActorRoles: config.allowedActorRoles,
+              message,
+            },
+          }),
+        );
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'DiWorkflowService.softValidateActorRole');
     }
   }
 
   private async updateStatStatus(di: DiDocument, status: string) {
-    if (di.ignoreCount && di.ignoreCount > 0) {
-      await this.statsService.updateStatus(di._id, status, di.ignoreCount);
-      return;
-    }
+    try {
+      if (di.ignoreCount && di.ignoreCount > 0) {
+        await this.statsService.updateStatus(di._id, status, di.ignoreCount);
+        return;
+      }
 
-    await this.statsService.updateStatus(di._id, status);
+      await this.statsService.updateStatus(di._id, status);
+    } catch (error) {
+      throw withErrorContext(error, 'DiWorkflowService.updateStatStatus');
+    }
   }
 
   private logTransitionSuccess(
@@ -197,32 +218,40 @@ export class DiWorkflowService {
     input: DiTransitionInput,
     previousStatus: string,
   ) {
-    this.logger.log(
-      this.formatLog({
-        event: 'di.workflow.transition.success',
-        category: 'workflow.transition_success',
-        transitionKey: config.key,
-        diId: input.diId,
-        previousStatus,
-        nextStatus: config.to,
-        actorRole: input.actorRole,
-        actorId: input.actorId,
-        validationMode: this.getValidationMode(config),
-        timestamp: this.getTimestamp(),
-      }),
-    );
+    try {
+      this.logger.log(
+        this.formatLog({
+          event: 'di.workflow.transition.success',
+          category: 'workflow.transition_success',
+          transitionKey: config.key,
+          diId: input.diId,
+          previousStatus,
+          nextStatus: config.to,
+          actorRole: input.actorRole,
+          actorId: input.actorId,
+          validationMode: this.getValidationMode(config),
+          timestamp: this.getTimestamp(),
+        }),
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiWorkflowService.logTransitionSuccess');
+    }
   }
 
   private logMissingTransitionConfig(transitionKey: string) {
-    this.logger.error(
-      this.formatLog({
-        event: 'di.workflow.config.error',
-        category: 'workflow.missing_transition_config',
-        transitionKey,
-        validationMode: 'soft',
-        timestamp: this.getTimestamp(),
-      }),
-    );
+    try {
+      this.logger.error(
+        this.formatLog({
+          event: 'di.workflow.config.error',
+          category: 'workflow.missing_transition_config',
+          transitionKey,
+          validationMode: 'soft',
+          timestamp: this.getTimestamp(),
+        }),
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiWorkflowService.logMissingTransitionConfig');
+    }
   }
 
   private logStatSyncFailure(
@@ -231,34 +260,50 @@ export class DiWorkflowService {
     previousStatus: string,
     error: unknown,
   ) {
-    this.logger.error(
-      this.formatLog({
-        event: 'di.workflow.side_effect.error',
-        category: 'workflow.stat_sync_failed',
-        transitionKey: config.key,
-        diId: input.diId,
-        previousStatus,
-        nextStatus: config.to,
-        actorRole: input.actorRole,
-        actorId: input.actorId,
-        validationMode: this.getValidationMode(config),
-        timestamp: this.getTimestamp(),
-        details: {
-          errorMessage: error instanceof Error ? error.message : String(error),
-        },
-      }),
-    );
+    try {
+      this.logger.error(
+        this.formatLog({
+          event: 'di.workflow.side_effect.error',
+          category: 'workflow.stat_sync_failed',
+          transitionKey: config.key,
+          diId: input.diId,
+          previousStatus,
+          nextStatus: config.to,
+          actorRole: input.actorRole,
+          actorId: input.actorId,
+          validationMode: this.getValidationMode(config),
+          timestamp: this.getTimestamp(),
+          details: {
+            errorMessage: error instanceof Error ? error.message : String(error),
+          },
+        }),
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiWorkflowService.logStatSyncFailure');
+    }
   }
 
   private getValidationMode(config: DiTransitionConfig): 'soft' | 'strict' {
-    return config.strictFrom || config.strictRole ? 'strict' : 'soft';
+    try {
+      return config.strictFrom || config.strictRole ? 'strict' : 'soft';
+    } catch (error) {
+      throw withErrorContext(error, 'DiWorkflowService.getValidationMode');
+    }
   }
 
   private getTimestamp(): string {
-    return new Date().toISOString();
+    try {
+      return new Date().toISOString();
+    } catch (error) {
+      throw withErrorContext(error, 'DiWorkflowService.getTimestamp');
+    }
   }
 
   private formatLog(payload: WorkflowLogPayload): string {
-    return JSON.stringify(payload);
+    try {
+      return JSON.stringify(payload);
+    } catch (error) {
+      throw withErrorContext(error, 'DiWorkflowService.formatLog');
+    }
   }
 }

@@ -13,6 +13,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import { RestJwtAuthGuard } from 'src/auth/rest-jwt-auth-guard';
 import { DiArchiveImportService } from './di-archive-import.service';
+import { withErrorContext } from '../../common/error-context';
 
 /**
  * REST surface for the SEPARATE archive import (multipart — outside GraphQL).
@@ -34,28 +35,36 @@ export class DiArchiveImportController {
     @UploadedFile() file: { originalname?: string; buffer?: Buffer } | undefined,
     @Query('dryRun') dryRun: string,
   ) {
-    if (!file || !file.buffer) {
-      throw new BadRequestException('Fichier manquant (champ « file »).');
+    try {
+      if (!file || !file.buffer) {
+        throw new BadRequestException('Fichier manquant (champ « file »).');
+      }
+      if (!/\.xlsx$/i.test(file.originalname ?? '')) {
+        throw new BadRequestException('Format invalide : un fichier .xlsx est attendu.');
+      }
+      const isDryRun = String(dryRun) !== 'false'; // default = SAFE dry-run
+      return await this.importService.run(file.buffer, { dryRun: isDryRun });
+    } catch (error) {
+      throw withErrorContext(error, 'DiArchiveImportController.import');
     }
-    if (!/\.xlsx$/i.test(file.originalname ?? '')) {
-      throw new BadRequestException('Format invalide : un fichier .xlsx est attendu.');
-    }
-    const isDryRun = String(dryRun) !== 'false'; // default = SAFE dry-run
-    return this.importService.run(file.buffer, { dryRun: isDryRun });
   }
 
   @Get('import/template')
   @UseGuards(RestJwtAuthGuard)
   template(@Res() res: Response) {
-    const buffer = this.importService.buildTemplate();
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    );
-    res.setHeader(
-      'Content-Disposition',
-      'attachment; filename="modele_import_di_archive.xlsx"',
-    );
-    res.send(buffer);
+    try {
+      const buffer = this.importService.buildTemplate();
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      res.setHeader(
+        'Content-Disposition',
+        'attachment; filename="modele_import_di_archive.xlsx"',
+      );
+      res.send(buffer);
+    } catch (error) {
+      throw withErrorContext(error, 'DiArchiveImportController.template');
+    }
   }
 }

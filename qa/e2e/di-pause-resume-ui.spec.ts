@@ -217,10 +217,11 @@ test('diag — double-clic rapide sur pause = idempotent (reste pausé, pas de c
 
     await expect(pauseButton(page)).toContainText('Mettre en pause');
 
-    // Deux clics quasi simultanés : le back est idempotent (pause = update
-    // sans garde ; le 2e est absorbé). L'UI reste cohérente : PAUSÉ.
-    await pauseButton(page).click();
-    await pauseButton(page).click({ force: true }).catch(() => {});
+    // DOUBLE-clic natif (click detail 1 puis 2) : le 2ᵉ clic est ignoré par le
+    // bouton, et le bouton reste inactif tant que le serveur n'a pas confirmé.
+    // (Deux `click()` séparés sont DEUX actions voulues → pause puis reprise :
+    // ce n'est pas un double-clic, cf. di-pause-resume-latency.)
+    await pauseButton(page).dblclick();
 
     await expect
         .poll(() => dbStatus(s.diId), { timeout: 12000 })

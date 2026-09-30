@@ -1,5 +1,6 @@
 import { GraphQLError } from 'graphql';
 import { STATUS_DI } from '../di.status';
+import { withErrorContext } from '../../common/error-context';
 
 /**
  * M1 — centralized DI status-transition guard.
@@ -271,20 +272,24 @@ export function assertDiTransition(
   currentStatus: string | null | undefined,
   targetStatus: string,
 ): void {
-  const allowed = ALLOWED_TRANSITIONS[targetStatus];
-  if (!allowed) return; // target not part of the guarded pipeline
-  if (currentStatus === targetStatus) return; // idempotent re-apply
-  if (currentStatus && REENTRY_SOURCES.includes(currentStatus)) return;
-  if (!currentStatus || !allowed.includes(currentStatus)) {
-    throw new GraphQLError(
-      `Transition non autorisée: ${currentStatus ?? 'INCONNU'} → ${targetStatus}.`,
-      {
-        extensions: {
-          code: 'BAD_REQUEST',
-          currentStatus: currentStatus ?? null,
-          targetStatus,
+  try {
+    const allowed = ALLOWED_TRANSITIONS[targetStatus];
+    if (!allowed) return; // target not part of the guarded pipeline
+    if (currentStatus === targetStatus) return; // idempotent re-apply
+    if (currentStatus && REENTRY_SOURCES.includes(currentStatus)) return;
+    if (!currentStatus || !allowed.includes(currentStatus)) {
+      throw new GraphQLError(
+        `Transition non autorisée: ${currentStatus ?? 'INCONNU'} → ${targetStatus}.`,
+        {
+          extensions: {
+            code: 'BAD_REQUEST',
+            currentStatus: currentStatus ?? null,
+            targetStatus,
+          },
         },
-      },
-    );
+      );
+    }
+  } catch (error) {
+    throw withErrorContext(error, 'assertDiTransition');
   }
 }

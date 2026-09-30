@@ -151,13 +151,18 @@ describe('StatService — repair work legs (server-side accumulation)', () => {
       expect(statModel.updateOne).not.toHaveBeenCalled();
     });
 
-    it('ACCEPTE un format canonique, y compris HH > 99', async () => {
-      statModel.findOne.mockResolvedValue({ _id: 'STAT-1', ignoreCount: 0 });
-      await service.lapTimeForReaparation('STAT-1', '100:00:30');
-      expect(statModel.updateOne).toHaveBeenCalledWith(
-        { _id: 'STAT-1' },
-        { $set: { rep_time: '100:00:30' } },
-      );
+    it('ACCEPTE un format canonique (HH > 99) mais N’ÉCRIT PLUS rep_time', async () => {
+      // Serveur autoritaire : seul closeRepLeg cumule. L'écriture cliente
+      // doublait le segment en cours (rep_time = 2 × segments en base).
+      statModel.findOne.mockResolvedValue({
+        _id: 'STAT-1',
+        ignoreCount: 0,
+        rep_time: '00:10:00',
+      });
+      await expect(
+        service.lapTimeForReaparation('STAT-1', '100:00:30'),
+      ).resolves.toBeTruthy();
+      expect(statModel.updateOne).not.toHaveBeenCalled();
     });
   });
 

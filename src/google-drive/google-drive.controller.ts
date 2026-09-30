@@ -12,6 +12,7 @@ import { RestJwtAuthGuard } from '../auth/rest-jwt-auth-guard';
 import { GoogleDriveService } from './google-drive.service';
 import { GoogleOAuthService } from '../google-auth/google-auth.service';
 import { maskSecret } from '../google-auth/google-oauth.errors';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * OAuth 2.0 consent flow for the shared Google (Drive + Sheets) integration.
@@ -51,29 +52,33 @@ export class GoogleDriveController {
    */
   @Get('oauth/health')
   async oauthHealth(@Res() res: Response) {
-    const missing = this.oauth.missingConfigKeys();
-    if (missing.length) {
-      res.status(503).json({
-        configured: false,
-        missing,
-        hint: 'Renseignez les variables manquantes (client id/secret) dans .env puis redémarrez.',
+    try {
+      const missing = this.oauth.missingConfigKeys();
+      if (missing.length) {
+        res.status(503).json({
+          configured: false,
+          missing,
+          hint: 'Renseignez les variables manquantes (client id/secret) dans .env puis redémarrez.',
+        });
+        return;
+      }
+      const health = await this.oauth.getConnectionHealth();
+      // CONNECTED → 200; NOT_CONNECTED / REAUTH_REQUIRED → 503 (action needed).
+      const httpStatus = health.status === 'CONNECTED' ? 200 : 503;
+      res.status(httpStatus).json({
+        configured: true,
+        status: health.status,
+        refreshTokenValid: health.refreshTokenValid,
+        clientId: maskSecret(process.env.GOOGLE_OAUTH_CLIENT_ID?.trim()),
+        message: health.message,
+        hint:
+          health.status === 'CONNECTED'
+            ? 'OAuth OK — le refresh token stocké est accepté par Google.'
+            : "Reconnectez-vous : GET /auth/google (compte propriétaire) ou POST /admin/google/reauthorize (admin). Détail dans les logs serveur.",
       });
-      return;
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveController.oauthHealth');
     }
-    const health = await this.oauth.getConnectionHealth();
-    // CONNECTED → 200; NOT_CONNECTED / REAUTH_REQUIRED → 503 (action needed).
-    const httpStatus = health.status === 'CONNECTED' ? 200 : 503;
-    res.status(httpStatus).json({
-      configured: true,
-      status: health.status,
-      refreshTokenValid: health.refreshTokenValid,
-      clientId: maskSecret(process.env.GOOGLE_OAUTH_CLIENT_ID?.trim()),
-      message: health.message,
-      hint:
-        health.status === 'CONNECTED'
-          ? 'OAuth OK — le refresh token stocké est accepté par Google.'
-          : "Reconnectez-vous : GET /auth/google (compte propriétaire) ou POST /admin/google/reauthorize (admin). Détail dans les logs serveur.",
-    });
   }
 
   @Get('auth/google')
@@ -94,64 +99,68 @@ export class GoogleDriveController {
     @Query('state') state: string,
     @Res() res: Response,
   ) {
-    if (!code) {
-      res.status(400).send('Missing ?code — start the flow at /auth/google');
-      return;
-    }
-    // CSRF defence: the callback MUST carry back the exact `state` we minted for
-    // the consent redirect. Missing/unknown/expired → reject.
-    if (!state || !this.oauth.consumeState(state)) {
-      this.logger.warn(
-        'OAuth callback rejected — invalid or missing state (possible CSRF).',
-      );
-      res
-        .status(400)
-        .send(
-          'Invalid or missing state — possible CSRF. Restart at /auth/google.',
-        );
-      return;
-    }
     try {
-      const tokens = await this.driveService.exchangeCodeForTokens(code);
-      const result = await this.oauth.handleCallbackTokens(tokens);
-      if (result === 'SAVED') {
-        this.logger.log(
-          'OAuth refresh token obtained and persisted to MongoDB (oauth_tokens). No restart needed.',
-        );
-        res
-          .status(200)
-          .type('html')
-          .send(
-            `<h3>✅ Google Drive connecté</h3>` +
-              `<p>Le refresh token a été enregistré en base (MongoDB, collection ` +
-              `<code>oauth_tokens</code>). <strong>Aucun redémarrage nécessaire.</strong></p>` +
-              `<p>Vérifiez l'état sur <code>GET /oauth/health</code>.</p>`,
-          );
-      } else {
-        // Google only returns a refresh token on the FIRST consent unless
-        // prompt=consent forces it. We do force it, but if the account already
-        // granted access without revoking, Google may omit it.
-        this.logger.warn(
-          'OAuth callback returned NO refresh token (already granted?). Revoke app access at https://myaccount.google.com/permissions then retry /auth/google.',
-        );
-        res
-          .status(200)
-          .type('html')
-          .send(
-            `<h3>⚠️ Aucun refresh token renvoyé</h3>` +
-              `<p>Le compte a déjà autorisé l'app, donc Google n'a pas renvoyé de ` +
-              `refresh token. Révoquez l'accès sur ` +
-              `<a href="https://myaccount.google.com/permissions" target="_blank">myaccount.google.com/permissions</a> ` +
-              `puis relancez <code>/auth/google</code>.</p>`,
-          );
+      if (!code) {
+        res.status(400).send('Missing ?code — start the flow at /auth/google');
+        return;
       }
-    } catch (err) {
-      this.logger.error(
-        `OAuth code exchange failed: ${(err as Error)?.message ?? err}`,
-      );
-      res
-        .status(500)
-        .send(`OAuth exchange failed: ${(err as Error)?.message ?? err}`);
+      // CSRF defence: the callback MUST carry back the exact `state` we minted for
+      // the consent redirect. Missing/unknown/expired → reject.
+      if (!state || !this.oauth.consumeState(state)) {
+        this.logger.warn(
+          'OAuth callback rejected — invalid or missing state (possible CSRF).',
+        );
+        res
+          .status(400)
+          .send(
+            'Invalid or missing state — possible CSRF. Restart at /auth/google.',
+          );
+        return;
+      }
+      try {
+        const tokens = await this.driveService.exchangeCodeForTokens(code);
+        const result = await this.oauth.handleCallbackTokens(tokens);
+        if (result === 'SAVED') {
+          this.logger.log(
+            'OAuth refresh token obtained and persisted to MongoDB (oauth_tokens). No restart needed.',
+          );
+          res
+            .status(200)
+            .type('html')
+            .send(
+              `<h3>✅ Google Drive connecté</h3>` +
+                `<p>Le refresh token a été enregistré en base (MongoDB, collection ` +
+                `<code>oauth_tokens</code>). <strong>Aucun redémarrage nécessaire.</strong></p>` +
+                `<p>Vérifiez l'état sur <code>GET /oauth/health</code>.</p>`,
+            );
+        } else {
+          // Google only returns a refresh token on the FIRST consent unless
+          // prompt=consent forces it. We do force it, but if the account already
+          // granted access without revoking, Google may omit it.
+          this.logger.warn(
+            'OAuth callback returned NO refresh token (already granted?). Revoke app access at https://myaccount.google.com/permissions then retry /auth/google.',
+          );
+          res
+            .status(200)
+            .type('html')
+            .send(
+              `<h3>⚠️ Aucun refresh token renvoyé</h3>` +
+                `<p>Le compte a déjà autorisé l'app, donc Google n'a pas renvoyé de ` +
+                `refresh token. Révoquez l'accès sur ` +
+                `<a href="https://myaccount.google.com/permissions" target="_blank">myaccount.google.com/permissions</a> ` +
+                `puis relancez <code>/auth/google</code>.</p>`,
+            );
+        }
+      } catch (err) {
+        this.logger.error(
+          `OAuth code exchange failed: ${(err as Error)?.message ?? err}`,
+        );
+        res
+          .status(500)
+          .send(`OAuth exchange failed: ${(err as Error)?.message ?? err}`);
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveController.oauthCallback');
     }
   }
 
@@ -165,9 +174,13 @@ export class GoogleDriveController {
   @Post('admin/google/reauthorize')
   @UseGuards(RestJwtAuthGuard)
   reauthorize() {
-    return {
-      status: 'REAUTH_REQUIRED',
-      authorizeUrl: this.driveService.generateAuthUrl(),
-    };
+    try {
+      return {
+        status: 'REAUTH_REQUIRED',
+        authorizeUrl: this.driveService.generateAuthUrl(),
+      };
+    } catch (error) {
+      throw withErrorContext(error, 'GoogleDriveController.reauthorize');
+    }
   }
 }

@@ -8,6 +8,7 @@ import { Location } from 'src/location/entities/location.entity';
 import { LogsDi } from 'src/logs-di/entities/logs-di.entity';
 import { DriveDoc } from 'src/common/graphql/drive-doc.type';
 import { Profile } from 'src/profile/entities/profile.entity';
+import { withErrorContext } from '../../common/error-context';
 
 @Schema({ timestamps: true })
 export class DiDocument extends Document {
@@ -299,35 +300,39 @@ DiSchema.pre('save', function (next) {
 // `statusUpdatedAt` set on the same update so a single round-trip persists
 // both fields atomically.
 function stampStatusUpdatedAtOnQueryUpdate(this: any, next: () => void) {
-  const update = this.getUpdate?.();
-  if (!update) return next();
-  const set = update.$set ?? update;
-  if (set && Object.prototype.hasOwnProperty.call(set, 'status')) {
-    const at = new Date();
-    if (update.$set) {
-      update.$set.statusUpdatedAt = at;
-      // `$push` and `$set` are both operators → safe to combine. Every app
-      // transition uses the `$set` form, so the history captures them all.
-      update.$push = {
-        ...(update.$push ?? {}),
-        statusHistory: { status: set.status, at },
-      };
-    } else {
-      // Forme directe (sans opérateur) : elle stampait `statusUpdatedAt` mais
-      // PERDAIT l'entrée d'historique — d'où des DI au `statusUpdatedAt` à jour
-      // et au `statusHistory` vide. On la convertit en `$set` + `$push` pour
-      // qu'aucune transition ne puisse plus échapper au journal.
-      const { status, ...others } = set as Record<string, any>;
-      const converted: Record<string, any> = {
-        $set: { ...others, status, statusUpdatedAt: at },
-        $push: { statusHistory: { status, at } },
-      };
-      this.setUpdate(converted);
-      return next();
+  try {
+    const update = this.getUpdate?.();
+    if (!update) return next();
+    const set = update.$set ?? update;
+    if (set && Object.prototype.hasOwnProperty.call(set, 'status')) {
+      const at = new Date();
+      if (update.$set) {
+        update.$set.statusUpdatedAt = at;
+        // `$push` and `$set` are both operators → safe to combine. Every app
+        // transition uses the `$set` form, so the history captures them all.
+        update.$push = {
+          ...(update.$push ?? {}),
+          statusHistory: { status: set.status, at },
+        };
+      } else {
+        // Forme directe (sans opérateur) : elle stampait `statusUpdatedAt` mais
+        // PERDAIT l'entrée d'historique — d'où des DI au `statusUpdatedAt` à jour
+        // et au `statusHistory` vide. On la convertit en `$set` + `$push` pour
+        // qu'aucune transition ne puisse plus échapper au journal.
+        const { status, ...others } = set as Record<string, any>;
+        const converted: Record<string, any> = {
+          $set: { ...others, status, statusUpdatedAt: at },
+          $push: { statusHistory: { status, at } },
+        };
+        this.setUpdate(converted);
+        return next();
+      }
+      this.setUpdate(update);
     }
-    this.setUpdate(update);
+    next();
+  } catch (error) {
+    throw withErrorContext(error, 'stampStatusUpdatedAtOnQueryUpdate');
   }
-  next();
 }
 DiSchema.pre('findOneAndUpdate', stampStatusUpdatedAtOnQueryUpdate);
 DiSchema.pre('updateOne', stampStatusUpdatedAtOnQueryUpdate);

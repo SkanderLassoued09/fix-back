@@ -11,6 +11,7 @@ import { ProfileService } from 'src/profile/profile.service';
 import { ProfileDocument } from 'src/profile/entities/profile.entity';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
+import { withErrorContext } from '../common/error-context';
 
 // Dedicated error code surfaced to the frontend so it can render the
 // "déjà connecté sur un autre appareil" banner instead of a generic auth
@@ -31,78 +32,86 @@ export class AuthService {
    * for unknown user / wrong password (consumed by GqlAuthGuard).
    */
   async validateUser(username: string, password: string): Promise<any> {
-    const user = await this.profileService.findOneForAuth(username);
-    if (!user) {
-      throw new HttpException(
-        `Nom d'utilisateur inexistant`,
-        HttpStatus.UNAUTHORIZED,
-      );
+    try {
+      const user = await this.profileService.findOneForAuth(username);
+      if (!user) {
+        throw new HttpException(
+          `Nom d'utilisateur inexistant`,
+          HttpStatus.UNAUTHORIZED,
+        );
+      }
+      // Un compte SUPPRIMÉ (soft-delete `isDeleted: true`) ne peut PAS se
+      // connecter, même avec le bon mot de passe. Refus AVANT la vérification du
+      // mot de passe (aucun signal utile pour un compte désactivé).
+      if ((user as any).isDeleted === true) {
+        throw new HttpException(
+          'Ce compte a été désactivé — connexion refusée.',
+          HttpStatus.UNAUTHORIZED,
+        );
+      }
+      const matchPassword = await bcrypt.compare(password, user.password);
+      if (!matchPassword) {
+        throw new HttpException(
+          'Mot de passe est incorrect',
+          HttpStatus.UNAUTHORIZED,
+        );
+      }
+      const { password: _pw, ...result } = user as any;
+      return await result;
+    } catch (error) {
+      throw withErrorContext(error, 'AuthService.validateUser');
     }
-    // Un compte SUPPRIMÉ (soft-delete `isDeleted: true`) ne peut PAS se
-    // connecter, même avec le bon mot de passe. Refus AVANT la vérification du
-    // mot de passe (aucun signal utile pour un compte désactivé).
-    if ((user as any).isDeleted === true) {
-      throw new HttpException(
-        'Ce compte a été désactivé — connexion refusée.',
-        HttpStatus.UNAUTHORIZED,
-      );
-    }
-    const matchPassword = await bcrypt.compare(password, user.password);
-    if (!matchPassword) {
-      throw new HttpException(
-        'Mot de passe est incorrect',
-        HttpStatus.UNAUTHORIZED,
-      );
-    }
-    const { password: _pw, ...result } = user as any;
-    return result;
   }
 
   async login(loginAuthInput: LoginAuthInput) {
-    const user = await this.profileService.findOneForAuth(
-      loginAuthInput.username,
-    );
-
-    if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
-
-    // Défense en profondeur : un compte SUPPRIMÉ (soft-delete) ne peut pas se
-    // connecter. `validateUser` (garde locale) le bloque déjà en amont ; cette
-    // garde couvre tout appel direct à `login`.
-    if ((user as any).isDeleted === true) {
-      throw new UnauthorizedException(
-        'Ce compte a été désactivé — connexion refusée.',
+    try {
+      const user = await this.profileService.findOneForAuth(
+        loginAuthInput.username,
       );
+
+      if (!user) {
+        throw new UnauthorizedException('Invalid credentials');
+      }
+
+      // Défense en profondeur : un compte SUPPRIMÉ (soft-delete) ne peut pas se
+      // connecter. `validateUser` (garde locale) le bloque déjà en amont ; cette
+      // garde couvre tout appel direct à `login`.
+      if ((user as any).isDeleted === true) {
+        throw new UnauthorizedException(
+          'Ce compte a été désactivé — connexion refusée.',
+        );
+      }
+
+      // ── Single-session enforcement, minimal version ────────────────────
+      // One boolean drives everything: `isConnected: true` → an active
+      // session exists → block. `false` → free → allow + flip true. No
+      // heartbeat, no loginId, no stale window. Closed tabs without an
+      // explicit logout will leave the flag true; the frontend's
+      // `pagehide` hook fires a best-effort logout to mitigate that.
+      if (user.isConnected) {
+        throw new HttpException(ACCOUNT_ALREADY_CONNECTED, HttpStatus.CONFLICT);
+      }
+
+      await this.profileModel.updateOne(
+        { _id: user._id },
+        { $set: { isConnected: true } },
+      );
+
+      const refreshed = (await this.profileService.findOneForAuth(
+        loginAuthInput.username,
+      )) as any;
+      return {
+        access_token: this.jwtService.sign({
+          email: refreshed.email,
+          username: refreshed.username,
+          role: refreshed.role,
+          _id: refreshed._id,
+        }),
+        user: refreshed,
+      };
+    } catch (error) {
+      throw withErrorContext(error, 'AuthService.login');
     }
-
-    // ── Single-session enforcement, minimal version ────────────────────
-    // One boolean drives everything: `isConnected: true` → an active
-    // session exists → block. `false` → free → allow + flip true. No
-    // heartbeat, no loginId, no stale window. Closed tabs without an
-    // explicit logout will leave the flag true; the frontend's
-    // `pagehide` hook fires a best-effort logout to mitigate that.
-    if (user.isConnected) {
-      throw new HttpException(ACCOUNT_ALREADY_CONNECTED, HttpStatus.CONFLICT);
-    }
-
-    await this.profileModel.updateOne(
-      { _id: user._id },
-      { $set: { isConnected: true } },
-    );
-
-    const refreshed = (await this.profileService.findOneForAuth(
-      loginAuthInput.username,
-    )) as any;
-    return {
-      access_token: this.jwtService.sign({
-        email: refreshed.email,
-        username: refreshed.username,
-        role: refreshed.role,
-        _id: refreshed._id,
-      }),
-      user: refreshed,
-    };
   }
 
   /**
@@ -115,23 +124,27 @@ export class AuthService {
    * a no-op so a stale logout call can never throw a 500 at the user.
    */
   async logout(payload: { token: string }): Promise<boolean> {
-    if (!payload?.token) {
-      return false;
-    }
-    let _id: string | undefined;
     try {
-      const decoded: any = this.jwtService.verify(payload.token);
-      _id = decoded?._id;
-    } catch {
-      return false;
+      if (!payload?.token) {
+        return false;
+      }
+      let _id: string | undefined;
+      try {
+        const decoded: any = this.jwtService.verify(payload.token);
+        _id = decoded?._id;
+      } catch {
+        return false;
+      }
+      if (!_id) {
+        return false;
+      }
+      await this.profileModel.updateOne(
+        { _id },
+        { $set: { isConnected: false } },
+      );
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'AuthService.logout');
     }
-    if (!_id) {
-      return false;
-    }
-    await this.profileModel.updateOne(
-      { _id },
-      { $set: { isConnected: false } },
-    );
-    return true;
   }
 }

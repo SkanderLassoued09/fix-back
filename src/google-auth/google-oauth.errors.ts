@@ -1,3 +1,4 @@
+import { withErrorContext } from '../common/error-context';
 /**
  * Custom exceptions + diagnostics for the shared Google OAuth 2.0 grant.
  *
@@ -68,9 +69,13 @@ export class GoogleDriveUploadError extends GoogleOAuthBaseError {
  * → `<absent>`.
  */
 export function maskSecret(value: string | undefined | null): string {
-  if (!value) return '<absent>';
-  const visible = value.slice(0, 6);
-  return `${visible}…****`;
+  try {
+    if (!value) return '<absent>';
+    const visible = value.slice(0, 6);
+    return `${visible}…****`;
+  } catch (error) {
+    throw withErrorContext(error, 'maskSecret');
+  }
 }
 
 /**
@@ -83,56 +88,68 @@ export function extractGoogleError(err: unknown): {
   httpStatus?: number;
   message: string;
 } {
-  const anyErr = err as any;
-  // googleapis GaxiosError: err.response.data = { error, error_description }
-  // for the token endpoint; for Drive API it's { error: { code, message } }.
-  const data = anyErr?.response?.data;
-  const oauthError =
-    typeof data?.error === 'string' ? data.error : anyErr?.error;
-  const oauthErrorDescription =
-    data?.error_description ?? anyErr?.error_description;
-  const httpStatus =
-    anyErr?.response?.status ??
-    (typeof anyErr?.code === 'number' ? anyErr.code : undefined);
-  const message =
-    data?.error?.message ??
-    (typeof data?.error === 'string' ? data.error : undefined) ??
-    anyErr?.errors?.[0]?.message ??
-    anyErr?.message ??
-    String(err);
-  return {
-    error: typeof oauthError === 'string' ? oauthError : undefined,
-    errorDescription:
-      typeof oauthErrorDescription === 'string'
-        ? oauthErrorDescription
-        : undefined,
-    httpStatus: typeof httpStatus === 'number' ? httpStatus : undefined,
-    message: String(message),
-  };
+  try {
+    const anyErr = err as any;
+    // googleapis GaxiosError: err.response.data = { error, error_description }
+    // for the token endpoint; for Drive API it's { error: { code, message } }.
+    const data = anyErr?.response?.data;
+    const oauthError =
+      typeof data?.error === 'string' ? data.error : anyErr?.error;
+    const oauthErrorDescription =
+      data?.error_description ?? anyErr?.error_description;
+    const httpStatus =
+      anyErr?.response?.status ??
+      (typeof anyErr?.code === 'number' ? anyErr.code : undefined);
+    const message =
+      data?.error?.message ??
+      (typeof data?.error === 'string' ? data.error : undefined) ??
+      anyErr?.errors?.[0]?.message ??
+      anyErr?.message ??
+      String(err);
+    return {
+      error: typeof oauthError === 'string' ? oauthError : undefined,
+      errorDescription:
+        typeof oauthErrorDescription === 'string'
+          ? oauthErrorDescription
+          : undefined,
+      httpStatus: typeof httpStatus === 'number' ? httpStatus : undefined,
+      message: String(message),
+    };
+  } catch (error) {
+    throw withErrorContext(error, 'extractGoogleError');
+  }
 }
 
 /** True when Google returned `invalid_grant` (refresh token no longer usable). */
 export function isInvalidGrant(err: unknown): boolean {
-  const { error, message } = extractGoogleError(err);
-  return error === 'invalid_grant' || /invalid_grant/i.test(message);
+  try {
+    const { error, message } = extractGoogleError(err);
+    return error === 'invalid_grant' || /invalid_grant/i.test(message);
+  } catch (error) {
+    throw withErrorContext(error, 'isInvalidGrant');
+  }
 }
 
 /** True for TRANSIENT failures worth retrying (rate limit / 5xx / network). */
 export function isTransientError(err: unknown): boolean {
-  const anyErr = err as any;
-  const code = anyErr?.response?.status ?? anyErr?.code;
-  if (code === 429) return true;
-  if (typeof code === 'number' && code >= 500 && code < 600) return true;
-  // Node network errors have string codes, never a numeric HTTP status.
-  const netCodes = [
-    'ETIMEDOUT',
-    'ECONNRESET',
-    'ECONNREFUSED',
-    'ENOTFOUND',
-    'EAI_AGAIN',
-    'ESOCKETTIMEDOUT',
-  ];
-  return typeof code === 'string' && netCodes.includes(code);
+  try {
+    const anyErr = err as any;
+    const code = anyErr?.response?.status ?? anyErr?.code;
+    if (code === 429) return true;
+    if (typeof code === 'number' && code >= 500 && code < 600) return true;
+    // Node network errors have string codes, never a numeric HTTP status.
+    const netCodes = [
+      'ETIMEDOUT',
+      'ECONNRESET',
+      'ECONNREFUSED',
+      'ENOTFOUND',
+      'EAI_AGAIN',
+      'ESOCKETTIMEDOUT',
+    ];
+    return typeof code === 'string' && netCodes.includes(code);
+  } catch (error) {
+    throw withErrorContext(error, 'isTransientError');
+  }
 }
 
 /**
@@ -142,29 +159,33 @@ export function isTransientError(err: unknown): boolean {
  * it instead of staring at "invalid_grant".
  */
 export function buildInvalidGrantDiagnostic(err: unknown): GoogleOAuthGrantError {
-  const { error, errorDescription, httpStatus } = extractGoogleError(err);
-  const msg =
-    `Google a rejeté le refresh token (invalid_grant) — le token n'est plus ` +
-    `valide et AUCUN retry ne le récupérera. Causes possibles :\n` +
-    `  1. Écran de consentement OAuth en mode "Testing" → les refresh tokens ` +
-    `EXPIRENT au bout de 7 jours (cause la plus fréquente d'un token qui ` +
-    `"marchait puis casse"). Publiez l'app en "In production" dans Google ` +
-    `Cloud Console (OAuth consent screen).\n` +
-    `  2. Token révoqué manuellement (myaccount.google.com/permissions) ou par ` +
-    `un changement de mot de passe du compte Google.\n` +
-    `  3. Client OAuth (CLIENT_ID/SECRET) différent de celui qui a émis le ` +
-    `token — vérifiez que .env pointe le même projet OAuth.\n` +
-    `  4. Plus de 50 refresh tokens émis pour ce couple (compte, client) : ` +
-    `Google révoque silencieusement les plus anciens. Rejouer /auth/google en ` +
-    `boucle (prompt=consent) déclenche ce cas.\n` +
-    `  5. Token inutilisé pendant 6 mois.\n` +
-    `ACTION MANUELLE REQUISE : relancez GET /auth/google avec le compte ` +
-    `propriétaire du quota, copiez le nouveau refresh token dans ` +
-    `GOOGLE_OAUTH_REFRESH_TOKEN (.env.<env>) et redémarrez le backend.`;
-  return new GoogleOAuthGrantError(
-    msg,
-    error ?? 'invalid_grant',
-    errorDescription,
-    httpStatus,
-  );
+  try {
+    const { error, errorDescription, httpStatus } = extractGoogleError(err);
+    const msg =
+      `Google a rejeté le refresh token (invalid_grant) — le token n'est plus ` +
+      `valide et AUCUN retry ne le récupérera. Causes possibles :\n` +
+      `  1. Écran de consentement OAuth en mode "Testing" → les refresh tokens ` +
+      `EXPIRENT au bout de 7 jours (cause la plus fréquente d'un token qui ` +
+      `"marchait puis casse"). Publiez l'app en "In production" dans Google ` +
+      `Cloud Console (OAuth consent screen).\n` +
+      `  2. Token révoqué manuellement (myaccount.google.com/permissions) ou par ` +
+      `un changement de mot de passe du compte Google.\n` +
+      `  3. Client OAuth (CLIENT_ID/SECRET) différent de celui qui a émis le ` +
+      `token — vérifiez que .env pointe le même projet OAuth.\n` +
+      `  4. Plus de 50 refresh tokens émis pour ce couple (compte, client) : ` +
+      `Google révoque silencieusement les plus anciens. Rejouer /auth/google en ` +
+      `boucle (prompt=consent) déclenche ce cas.\n` +
+      `  5. Token inutilisé pendant 6 mois.\n` +
+      `ACTION MANUELLE REQUISE : relancez GET /auth/google avec le compte ` +
+      `propriétaire du quota, copiez le nouveau refresh token dans ` +
+      `GOOGLE_OAUTH_REFRESH_TOKEN (.env.<env>) et redémarrez le backend.`;
+    return new GoogleOAuthGrantError(
+      msg,
+      error ?? 'invalid_grant',
+      errorDescription,
+      httpStatus,
+    );
+  } catch (error) {
+    throw withErrorContext(error, 'buildInvalidGrantDiagnostic');
+  }
 }

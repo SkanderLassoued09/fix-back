@@ -17,6 +17,7 @@ import { DbBackupService } from 'src/db-backup/db-backup.service';
 import { SessionCleanupService } from '../session-cleanup/session-cleanup.service';
 import { NotificationPurgeService } from '../notification-purge/notification-purge.service';
 import { ActionsEnCoursExportService } from 'src/actions-en-cours/actions-en-cours-export.service';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * The 5 Discord channels of an environment, mapped to the EXACT env vars read
@@ -58,55 +59,59 @@ export class AppCronService {
    * method on this service. No bootstrap file gets touched.
    */
   async runAction(action: string): Promise<void> {
-    // Defensive trim: the switch strict-matches, so a stray trailing space/CR
-    // in the ACTION env value must not fall through to "Unknown ACTION".
-    switch ((action ?? '').trim()) {
-      case 'DETECT_STAGNANT_DI':
-        await this.triggerStagnationDetection();
-        break;
-      case 'SYNC_GOOGLE_SHEETS':
-        await this.triggerGoogleSheetsSync();
-        break;
-      case 'SYNC_ACTIONS_EN_COURS':
-        await this.triggerActionsEnCoursSync();
-        break;
-      case 'EXPORT_ACTIONS_EN_COURS':
-        await this.triggerActionsEnCoursExport();
-        break;
-      case 'SYNC_JIRA_DUE_SOON':
-        await this.triggerJiraDueSoonSync();
-        break;
-      case 'SYNC_JIRA_TASKS':
-        await this.triggerJiraTasksSync();
-        break;
-      case 'TEST_DISCORD_CHANNELS':
-        await this.triggerTestDiscordChannels();
-        break;
-      case 'DIGEST_DI_ARCHIVE_INCOMPLETES':
-        await this.triggerDiArchiveIncompletesDigest();
-        break;
-      case 'REUNION_REMINDER':
-        await this.triggerReunionReminder();
-        break;
-      case 'BACKUP_DB_TO_DRIVE':
-        await this.triggerBackupDbToDrive();
-        break;
-      case 'MAGASIN_STOCK_REMINDER':
-        await this.triggerMagasinStockReminder();
-        break;
-      case 'PENDING_BL_REMINDER':
-        await this.triggerPendingBlReminder();
-        break;
-      case 'PURGE_NOTIFICATIONS':
-        await this.triggerNotificationPurge();
-        break;
-      // Simulation : compte sans rien supprimer. À lancer AVANT la première
-      // purge réelle pour vérifier les volumes.
-      case 'PURGE_NOTIFICATIONS_DRY_RUN':
-        await this.triggerNotificationPurge(true);
-        break;
-      default:
-        this.logger.error(`Unknown ACTION: ${action}`);
+    try {
+      // Defensive trim: the switch strict-matches, so a stray trailing space/CR
+      // in the ACTION env value must not fall through to "Unknown ACTION".
+      switch ((action ?? '').trim()) {
+        case 'DETECT_STAGNANT_DI':
+          await this.triggerStagnationDetection();
+          break;
+        case 'SYNC_GOOGLE_SHEETS':
+          await this.triggerGoogleSheetsSync();
+          break;
+        case 'SYNC_ACTIONS_EN_COURS':
+          await this.triggerActionsEnCoursSync();
+          break;
+        case 'EXPORT_ACTIONS_EN_COURS':
+          await this.triggerActionsEnCoursExport();
+          break;
+        case 'SYNC_JIRA_DUE_SOON':
+          await this.triggerJiraDueSoonSync();
+          break;
+        case 'SYNC_JIRA_TASKS':
+          await this.triggerJiraTasksSync();
+          break;
+        case 'TEST_DISCORD_CHANNELS':
+          await this.triggerTestDiscordChannels();
+          break;
+        case 'DIGEST_DI_ARCHIVE_INCOMPLETES':
+          await this.triggerDiArchiveIncompletesDigest();
+          break;
+        case 'REUNION_REMINDER':
+          await this.triggerReunionReminder();
+          break;
+        case 'BACKUP_DB_TO_DRIVE':
+          await this.triggerBackupDbToDrive();
+          break;
+        case 'MAGASIN_STOCK_REMINDER':
+          await this.triggerMagasinStockReminder();
+          break;
+        case 'PENDING_BL_REMINDER':
+          await this.triggerPendingBlReminder();
+          break;
+        case 'PURGE_NOTIFICATIONS':
+          await this.triggerNotificationPurge();
+          break;
+        // Simulation : compte sans rien supprimer. À lancer AVANT la première
+        // purge réelle pour vérifier les volumes.
+        case 'PURGE_NOTIFICATIONS_DRY_RUN':
+          await this.triggerNotificationPurge(true);
+          break;
+        default:
+          this.logger.error(`Unknown ACTION: ${action}`);
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'AppCronService.runAction');
     }
   }
 
@@ -126,12 +131,16 @@ export class AppCronService {
    * instead of a silent no-op. A backup failing quietly is worse than no backup.
    */
   async triggerBackupDbToDrive() {
-    const res = await this.dbBackupService.run();
-    this.logger.log(
-      `DB backup: db=${res.dbName} file=${res.fileName} size=${res.sizeBytes}o ` +
-        `duration=${res.durationMs}ms folder=${res.folderName} ` +
-        `retention(kept=${res.kept}, deleted=${res.deleted})`,
-    );
+    try {
+      const res = await this.dbBackupService.run();
+      this.logger.log(
+        `DB backup: db=${res.dbName} file=${res.fileName} size=${res.sizeBytes}o ` +
+          `duration=${res.durationMs}ms folder=${res.folderName} ` +
+          `retention(kept=${res.kept}, deleted=${res.deleted})`,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'AppCronService.triggerBackupDbToDrive');
+    }
   }
 
   /**
@@ -147,10 +156,14 @@ export class AppCronService {
    * is preferable to a zombie 08:00 cron.
    */
   async triggerDiArchiveIncompletesDigest() {
-    const res = await this.diArchiveDigestService.buildAndSend();
-    this.logger.log(
-      `DiArchive digest: total=${res.total} facture=${res.missing.facture} bc=${res.missing.bc} bl=${res.missing.bl} devis=${res.missing.devis} posted=${res.posted}`,
-    );
+    try {
+      const res = await this.diArchiveDigestService.buildAndSend();
+      this.logger.log(
+        `DiArchive digest: total=${res.total} facture=${res.missing.facture} bc=${res.missing.bc} bl=${res.missing.bl} devis=${res.missing.devis} posted=${res.posted}`,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'AppCronService.triggerDiArchiveIncompletesDigest');
+    }
   }
 
   /**
@@ -162,11 +175,15 @@ export class AppCronService {
    * ever double-notifying. Business logic lives in ReunionPVService.
    */
   async triggerReunionReminder() {
-    const res = await this.reunionPVService.sendDueReminders();
-    this.logger.log(
-      `Reunion reminder: candidates=${res.candidates} sent=${res.sent} failed=${res.failed}`,
-    );
-    if (res.failed > 0) process.exitCode = 1;
+    try {
+      const res = await this.reunionPVService.sendDueReminders();
+      this.logger.log(
+        `Reunion reminder: candidates=${res.candidates} sent=${res.sent} failed=${res.failed}`,
+      );
+      if (res.failed > 0) process.exitCode = 1;
+    } catch (error) {
+      throw withErrorContext(error, 'AppCronService.triggerReunionReminder');
+    }
   }
 
   /**
@@ -188,39 +205,43 @@ export class AppCronService {
     ok: number;
     failed: number;
   }> {
-    const nodeEnv = (process.env.NODE_ENV || 'development').trim();
+    try {
+      const nodeEnv = (process.env.NODE_ENV || 'development').trim();
 
-    if (nodeEnv === 'production') {
-      this.logger.warn(
-        'TEST_DISCORD_CHANNELS désactivé en production — aucun message de test envoyé.',
-      );
-      return { skipped: true, total: 0, ok: 0, failed: 0 };
-    }
-
-    let ok = 0;
-    let failed = 0;
-    for (const ch of DISCORD_TEST_CHANNELS) {
-      const url = (process.env[ch.envVar] || '').trim();
-      try {
-        if (!url) {
-          throw new Error(`webhook non configuré (${ch.envVar})`);
-        }
-        await this.discordHookService.sendTestEmbed(url, ch.name, nodeEnv);
-        ok++;
-        this.logger.log(`✅ [${nodeEnv}] canal « ${ch.name} » : envoi OK`);
-      } catch (err) {
-        failed++;
-        this.logger.error(
-          `❌ [${nodeEnv}] canal « ${ch.name} » : échec — ${(err as Error)?.message ?? err}`,
+      if (nodeEnv === 'production') {
+        this.logger.warn(
+          'TEST_DISCORD_CHANNELS désactivé en production — aucun message de test envoyé.',
         );
+        return { skipped: true, total: 0, ok: 0, failed: 0 };
       }
-    }
 
-    this.logger.log(
-      `TEST_DISCORD_CHANNELS [${nodeEnv}] : ${ok}/${DISCORD_TEST_CHANNELS.length} OK, ${failed} échec(s).`,
-    );
-    if (failed > 0) process.exitCode = 1;
-    return { skipped: false, total: DISCORD_TEST_CHANNELS.length, ok, failed };
+      let ok = 0;
+      let failed = 0;
+      for (const ch of DISCORD_TEST_CHANNELS) {
+        const url = (process.env[ch.envVar] || '').trim();
+        try {
+          if (!url) {
+            throw new Error(`webhook non configuré (${ch.envVar})`);
+          }
+          await this.discordHookService.sendTestEmbed(url, ch.name, nodeEnv);
+          ok++;
+          this.logger.log(`✅ [${nodeEnv}] canal « ${ch.name} » : envoi OK`);
+        } catch (err) {
+          failed++;
+          this.logger.error(
+            `❌ [${nodeEnv}] canal « ${ch.name} » : échec — ${(err as Error)?.message ?? err}`,
+          );
+        }
+      }
+
+      this.logger.log(
+        `TEST_DISCORD_CHANNELS [${nodeEnv}] : ${ok}/${DISCORD_TEST_CHANNELS.length} OK, ${failed} échec(s).`,
+      );
+      if (failed > 0) process.exitCode = 1;
+      return { skipped: false, total: DISCORD_TEST_CHANNELS.length, ok, failed };
+    } catch (error) {
+      throw withErrorContext(error, 'AppCronService.triggerTestDiscordChannels');
+    }
   }
 
   /**
@@ -233,16 +254,20 @@ export class AppCronService {
    * lost). An unconfigured "skipped" run is NOT an error (exit 0).
    */
   async triggerJiraDueSoonSync() {
-    const res = await this.jiraCronNotificationService.envoyerNotifications();
-    this.logger.log(
-      `Jira notif: claimed=${res.claimed} processed=${res.processed} failed=${res.failed}` +
-        (res.skipped ? ' (skipped: not configured)' : '') +
-        (res.error ? ` (error: ${res.error})` : ''),
-    );
-    if (res.error || res.failed > 0) {
-      throw new Error(
-        `Jira notif failed: ${res.error ?? `${res.failed} doc(s) en échec`}`,
+    try {
+      const res = await this.jiraCronNotificationService.envoyerNotifications();
+      this.logger.log(
+        `Jira notif: claimed=${res.claimed} processed=${res.processed} failed=${res.failed}` +
+          (res.skipped ? ' (skipped: not configured)' : '') +
+          (res.error ? ` (error: ${res.error})` : ''),
       );
+      if (res.error || res.failed > 0) {
+        throw new Error(
+          `Jira notif failed: ${res.error ?? `${res.failed} doc(s) en échec`}`,
+        );
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'AppCronService.triggerJiraDueSoonSync');
     }
   }
 
@@ -258,14 +283,18 @@ export class AppCronService {
    * NOT an error (exit 0).
    */
   async triggerJiraTasksSync() {
-    const res = await this.jiraCronNotificationService.syncTaches();
-    this.logger.log(
-      `Jira tasks sync: fetched=${res.fetched} inserted=${res.inserted}` +
-        (res.skipped ? ' (skipped: not configured)' : '') +
-        (res.error ? ` (error: ${res.error})` : ''),
-    );
-    if (res.error) {
-      throw new Error(`Jira tasks sync failed: ${res.error}`);
+    try {
+      const res = await this.jiraCronNotificationService.syncTaches();
+      this.logger.log(
+        `Jira tasks sync: fetched=${res.fetched} inserted=${res.inserted}` +
+          (res.skipped ? ' (skipped: not configured)' : '') +
+          (res.error ? ` (error: ${res.error})` : ''),
+      );
+      if (res.error) {
+        throw new Error(`Jira tasks sync failed: ${res.error}`);
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'AppCronService.triggerJiraTasksSync');
     }
   }
 
@@ -322,27 +351,39 @@ export class AppCronService {
    * L'échec est RELANCÉ : le bootstrap ACTION sort en code 1.
    */
   async triggerActionsEnCoursExport() {
-    const res = await this.actionsEnCoursExportService.publish();
-    if (res) {
-      this.logger.log(
-        `ACTIONS EN COURS : « ${res.tabName} » réécrit · ${res.rows} DI · ${res.url}`,
-      );
+    try {
+      const res = await this.actionsEnCoursExportService.publish();
+      if (res) {
+        this.logger.log(
+          `ACTIONS EN COURS : « ${res.tabName} » réécrit · ${res.rows} DI · ${res.url}`,
+        );
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'AppCronService.triggerActionsEnCoursExport');
     }
   }
 
   @Cron(CronExpression.EVERY_10_HOURS)
   async emptyAudit() {
-    this.auditService.emptyAudit();
+    try {
+      this.auditService.emptyAudit();
+    } catch (error) {
+      throw withErrorContext(error, 'AppCronService.emptyAudit');
+    }
   }
 
   @Cron(CronExpression.EVERY_10_HOURS)
   async handleNotOpenedDi() {
-    const result = await this.diService.getAllNotOpeneddi();
-    if (result.length === 0) {
-      this.logger.debug('All DI are opned');
+    try {
+      const result = await this.diService.getAllNotOpeneddi();
+      if (result.length === 0) {
+        this.logger.debug('All DI are opned');
+      }
+      this.logger.debug('cron start');
+      // this.sendReminder(result); REMINDER
+    } catch (error) {
+      throw withErrorContext(error, 'AppCronService.handleNotOpenedDi');
     }
-    this.logger.debug('cron start');
-    // this.sendReminder(result); REMINDER
   }
 
   /**
@@ -355,31 +396,35 @@ export class AppCronService {
    */
   @Cron('0 8 * * *', { timeZone: 'Africa/Tunis' })
   async triggerStagnationDetection() {
-    // (A) Inbox d'alertes 48h : PERSISTANCE uniquement. Le digest Discord
-    //     « 📊 Rappel quotidien — DI stagnantes » (regroupé par ancienneté,
-    //     🟠 > 48 h) a été RETIRÉ à la demande produit — doublon du rapport
-    //     quotidien (B). On garde `detectStagnantDi()` qui alimente l'inbox
-    //     d'alertes IN-APP (aucun post Discord ici).
     try {
-      await this.stagnationService.detectStagnantDi();
-    } catch (err) {
-      this.logger.error(
-        `Stagnation cron failed: ${(err as Error).stack ?? err}`,
-      );
-    }
+      // (A) Inbox d'alertes 48h : PERSISTANCE uniquement. Le digest Discord
+      //     « 📊 Rappel quotidien — DI stagnantes » (regroupé par ancienneté,
+      //     🟠 > 48 h) a été RETIRÉ à la demande produit — doublon du rapport
+      //     quotidien (B). On garde `detectStagnantDi()` qui alimente l'inbox
+      //     d'alertes IN-APP (aucun post Discord ici).
+      try {
+        await this.stagnationService.detectStagnantDi();
+      } catch (err) {
+        this.logger.error(
+          `Stagnation cron failed: ${(err as Error).stack ?? err}`,
+        );
+      }
 
-    // (B) Rapport quotidien 24h — feuille Google du jour + rappel ERP
-    //     (DAILY_REMINDER) + Discord APP_ALERT. Idempotent (dispatch record).
-    //     Isolé dans son propre try/catch pour ne jamais casser (A) ni le cron.
-    try {
-      const report = await this.stagnationDailyReportService.run();
-      this.logger.log(
-        `Daily stagnation report · date=${report.date} · detected=${report.detected} · dispatched=${report.dispatched} · skipped=${report.skipped}`,
-      );
-    } catch (err) {
-      this.logger.error(
-        `Daily stagnation report failed: ${(err as Error).stack ?? err}`,
-      );
+      // (B) Rapport quotidien 24h — feuille Google du jour + rappel ERP
+      //     (DAILY_REMINDER) + Discord APP_ALERT. Idempotent (dispatch record).
+      //     Isolé dans son propre try/catch pour ne jamais casser (A) ni le cron.
+      try {
+        const report = await this.stagnationDailyReportService.run();
+        this.logger.log(
+          `Daily stagnation report · date=${report.date} · detected=${report.detected} · dispatched=${report.dispatched} · skipped=${report.skipped}`,
+        );
+      } catch (err) {
+        this.logger.error(
+          `Daily stagnation report failed: ${(err as Error).stack ?? err}`,
+        );
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'AppCronService.triggerStagnationDetection');
     }
   }
 
@@ -489,39 +534,43 @@ export class AppCronService {
 
   // dont create audit for ticket al ready exists
   async sendReminder(di: any) {
-    // await this.auditService.deleteDocumentsWithReminderField();
-    // Map the input data to match the ReminderDataInput type
-    const dataToSend = di.map((el) => {
-      return {
-        _id: el._id, // Assuming 'title' should map to 'name'
-        title: el.title, // Assuming '_id' should be converted to 'value'
+    try {
+      // await this.auditService.deleteDocumentsWithReminderField();
+      // Map the input data to match the ReminderDataInput type
+      const dataToSend = di.map((el) => {
+        return {
+          _id: el._id, // Assuming 'title' should map to 'name'
+          title: el.title, // Assuming '_id' should be converted to 'value'
+        };
+      });
+
+      // Log the transformed data
+      // Prepare the input data for the service call
+      const createAuditInput = {
+        reminder: {
+          data: dataToSend,
+          flag: false, // Set flag as needed, for example, false
+        },
       };
-    });
 
-    // Log the transformed data
-    // Prepare the input data for the service call
-    const createAuditInput = {
-      reminder: {
-        data: dataToSend,
-        flag: false, // Set flag as needed, for example, false
-      },
-    };
+      const ids = dataToSend.flatMap((el) => {
+        return [el._id];
+      });
 
-    const ids = dataToSend.flatMap((el) => {
-      return [el._id];
-    });
+      const isExist = await this.auditService.findExistingReminders(ids);
+      // if (isExist.length === 0) {
+      //   // Call the create method in the audit service
+      //   // const reminder = await this.auditService.create(createAuditInput);
 
-    const isExist = await this.auditService.findExistingReminders(ids);
-    // if (isExist.length === 0) {
-    //   // Call the create method in the audit service
-    //   // const reminder = await this.auditService.create(createAuditInput);
-
-    //   if (reminder) {
-    //     this.notificationsGateway.sendReminder({
-    //       message: 'You got reminder',
-    //       payload: reminder,
-    //     });
-    //   }
-    // }
+      //   if (reminder) {
+      //     this.notificationsGateway.sendReminder({
+      //       message: 'You got reminder',
+      //       payload: reminder,
+      //     });
+      //   }
+      // }
+    } catch (error) {
+      throw withErrorContext(error, 'AppCronService.sendReminder');
+    }
   }
 }

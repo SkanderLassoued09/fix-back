@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { maskSecret } from '../google-auth/google-oauth.errors';
 import { OAuthTokenDocument } from './entities/oauth-token.entity';
+import { withErrorContext } from '../common/error-context';
 
 /** The single provider we authenticate today. Kept as a default so every method
  *  reads naturally while leaving room for a second provider later. */
@@ -29,15 +30,23 @@ export class OAuthTokenService {
 
   /** The stored refresh token for `provider`, or null when not yet authorized. */
   async getRefreshToken(provider = DEFAULT_PROVIDER): Promise<string | null> {
-    const doc = await this.model.findOne({ provider }).lean().exec();
-    return doc?.refreshToken?.trim() || null;
+    try {
+      const doc = await this.model.findOne({ provider }).lean().exec();
+      return doc?.refreshToken?.trim() || null;
+    } catch (error) {
+      throw withErrorContext(error, 'OAuthTokenService.getRefreshToken');
+    }
   }
 
   /** The full persisted record (status/scopes/lastError…), or null. */
   async getRecord(
     provider = DEFAULT_PROVIDER,
   ): Promise<OAuthTokenDocument | null> {
-    return this.model.findOne({ provider }).exec();
+    try {
+      return await this.model.findOne({ provider }).exec();
+    } catch (error) {
+      throw withErrorContext(error, 'OAuthTokenService.getRecord');
+    }
   }
 
   /**
@@ -49,30 +58,34 @@ export class OAuthTokenService {
     refreshToken: string,
     opts?: { provider?: string; scopes?: string[] },
   ): Promise<void> {
-    if (!refreshToken?.trim()) {
-      throw new Error(
-        'OAuthTokenService.saveRefreshToken: refus de stocker un refresh token vide/undefined.',
+    try {
+      if (!refreshToken?.trim()) {
+        throw new Error(
+          'OAuthTokenService.saveRefreshToken: refus de stocker un refresh token vide/undefined.',
+        );
+      }
+      const provider = opts?.provider ?? DEFAULT_PROVIDER;
+      const scopes = opts?.scopes;
+      await this.model
+        .findOneAndUpdate(
+          { provider },
+          {
+            refreshToken: refreshToken.trim(),
+            status: 'CONNECTED',
+            lastError: null,
+            ...(scopes ? { scopes } : {}),
+          },
+          { upsert: true, new: true, setDefaultsOnInsert: true },
+        )
+        .exec();
+      this.logger.log(
+        `Refresh token enregistré en base (provider=${provider}) · ` +
+          `token=${maskSecret(refreshToken)} · status=CONNECTED` +
+          (scopes ? ` · scopes=${scopes.length}` : ''),
       );
+    } catch (error) {
+      throw withErrorContext(error, 'OAuthTokenService.saveRefreshToken');
     }
-    const provider = opts?.provider ?? DEFAULT_PROVIDER;
-    const scopes = opts?.scopes;
-    await this.model
-      .findOneAndUpdate(
-        { provider },
-        {
-          refreshToken: refreshToken.trim(),
-          status: 'CONNECTED',
-          lastError: null,
-          ...(scopes ? { scopes } : {}),
-        },
-        { upsert: true, new: true, setDefaultsOnInsert: true },
-      )
-      .exec();
-    this.logger.log(
-      `Refresh token enregistré en base (provider=${provider}) · ` +
-        `token=${maskSecret(refreshToken)} · status=CONNECTED` +
-        (scopes ? ` · scopes=${scopes.length}` : ''),
-    );
   }
 
   /** Flip the connection to REAUTH_REQUIRED with a diagnostic reason. Only
@@ -82,17 +95,21 @@ export class OAuthTokenService {
     provider = DEFAULT_PROVIDER,
     reason: string,
   ): Promise<void> {
-    const res = await this.model
-      .updateOne(
-        { provider },
-        { status: 'REAUTH_REQUIRED', lastError: reason },
-      )
-      .exec();
-    if (res.matchedCount) {
-      this.logger.warn(
-        `OAuth ${provider} marqué REAUTH_REQUIRED — reconnexion nécessaire ` +
-          `(GET /auth/google ou POST /admin/google/reauthorize). Raison: ${reason}`,
-      );
+    try {
+      const res = await this.model
+        .updateOne(
+          { provider },
+          { status: 'REAUTH_REQUIRED', lastError: reason },
+        )
+        .exec();
+      if (res.matchedCount) {
+        this.logger.warn(
+          `OAuth ${provider} marqué REAUTH_REQUIRED — reconnexion nécessaire ` +
+            `(GET /auth/google ou POST /admin/google/reauthorize). Raison: ${reason}`,
+        );
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'OAuthTokenService.markReauthRequired');
     }
   }
 

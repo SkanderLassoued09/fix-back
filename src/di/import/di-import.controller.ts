@@ -16,6 +16,7 @@ import { Request, Response } from 'express';
 import { RestJwtAuthGuard } from 'src/auth/rest-jwt-auth-guard';
 import { DiImportService } from './di-import.service';
 import { DiImportJobService } from './di-import-job.service';
+import { withErrorContext } from '../../common/error-context';
 
 /**
  * REST surface for the bulk DI import (multipart — outside GraphQL).
@@ -47,16 +48,20 @@ export class DiImportController {
     @Query('dryRun') dryRun: string,
     @Req() req: Request,
   ) {
-    if (!file || !file.buffer) {
-      throw new BadRequestException('Fichier manquant (champ « file »).');
+    try {
+      if (!file || !file.buffer) {
+        throw new BadRequestException('Fichier manquant (champ « file »).');
+      }
+      if (!/\.xlsx$/i.test(file.originalname ?? '')) {
+        throw new BadRequestException('Format invalide : un fichier .xlsx est attendu.');
+      }
+      // Default to the SAFE dry-run; only an explicit `dryRun=false` persists.
+      const isDryRun = String(dryRun) !== 'false';
+      const createdBy = (req as any)?.user?._id;
+      return await this.importService.run(file.buffer, { dryRun: isDryRun, createdBy });
+    } catch (error) {
+      throw withErrorContext(error, 'DiImportController.import');
     }
-    if (!/\.xlsx$/i.test(file.originalname ?? '')) {
-      throw new BadRequestException('Format invalide : un fichier .xlsx est attendu.');
-    }
-    // Default to the SAFE dry-run; only an explicit `dryRun=false` persists.
-    const isDryRun = String(dryRun) !== 'false';
-    const createdBy = (req as any)?.user?._id;
-    return this.importService.run(file.buffer, { dryRun: isDryRun, createdBy });
   }
 
   /**
@@ -77,26 +82,30 @@ export class DiImportController {
     @UploadedFile() file: { originalname?: string; buffer?: Buffer } | undefined,
     @Req() req: Request,
   ) {
-    if (!file || !file.buffer) {
-      throw new BadRequestException('Fichier manquant (champ « file »).');
-    }
-    if (!/\.xlsx$/i.test(file.originalname ?? '')) {
-      throw new BadRequestException('Format invalide : un fichier .xlsx est attendu.');
-    }
-    const createdBy = (req as any)?.user?._id;
-    // Décisions d'ambiguité (résolutions « both ») transmises en champ `decisions`
-    // du multipart (JSON). Tolérant : format invalide → ignoré (aucune décision).
-    let decisions: Array<{ ligne: number; kind: 'client' | 'company' }> = [];
-    const rawDecisions = (req as any)?.body?.decisions;
-    if (rawDecisions) {
-      try {
-        const parsed = JSON.parse(rawDecisions);
-        if (Array.isArray(parsed)) decisions = parsed;
-      } catch {
-        /* champ malformé → aucune décision appliquée */
+    try {
+      if (!file || !file.buffer) {
+        throw new BadRequestException('Fichier manquant (champ « file »).');
       }
+      if (!/\.xlsx$/i.test(file.originalname ?? '')) {
+        throw new BadRequestException('Format invalide : un fichier .xlsx est attendu.');
+      }
+      const createdBy = (req as any)?.user?._id;
+      // Décisions d'ambiguité (résolutions « both ») transmises en champ `decisions`
+      // du multipart (JSON). Tolérant : format invalide → ignoré (aucune décision).
+      let decisions: Array<{ ligne: number; kind: 'client' | 'company' }> = [];
+      const rawDecisions = (req as any)?.body?.decisions;
+      if (rawDecisions) {
+        try {
+          const parsed = JSON.parse(rawDecisions);
+          if (Array.isArray(parsed)) decisions = parsed;
+        } catch {
+          /* champ malformé → aucune décision appliquée */
+        }
+      }
+      return await this.importService.executeAsJob(file.buffer, { createdBy, decisions });
+    } catch (error) {
+      throw withErrorContext(error, 'DiImportController.execute');
     }
-    return this.importService.executeAsJob(file.buffer, { createdBy, decisions });
   }
 
   /**
@@ -106,22 +115,30 @@ export class DiImportController {
   @Get('import/jobs/:jobId')
   @UseGuards(RestJwtAuthGuard)
   async job(@Param('jobId') jobId: string, @Req() req: Request) {
-    const userId = (req as any)?.user?._id;
-    return this.jobService.getForUser(jobId, userId);
+    try {
+      const userId = (req as any)?.user?._id;
+      return await this.jobService.getForUser(jobId, userId);
+    } catch (error) {
+      throw withErrorContext(error, 'DiImportController.job');
+    }
   }
 
   @Get('import/template')
   @UseGuards(RestJwtAuthGuard)
   template(@Res() res: Response) {
-    const buffer = this.importService.buildTemplate();
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    );
-    res.setHeader(
-      'Content-Disposition',
-      'attachment; filename="modele_import_di.xlsx"',
-    );
-    res.send(buffer);
+    try {
+      const buffer = this.importService.buildTemplate();
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      res.setHeader(
+        'Content-Disposition',
+        'attachment; filename="modele_import_di.xlsx"',
+      );
+      res.send(buffer);
+    } catch (error) {
+      throw withErrorContext(error, 'DiImportController.template');
+    }
   }
 }

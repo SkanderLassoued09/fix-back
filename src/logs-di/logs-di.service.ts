@@ -11,6 +11,7 @@ import {
 } from 'src/composant/entities/composant.entity';
 import { v4 as uuidv4 } from 'uuid';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
+import { withErrorContext } from '../common/error-context';
 @Injectable()
 export class LogsDiService {
   constructor(
@@ -22,18 +23,22 @@ export class LogsDiService {
   ) {}
 
   async generateDiId(): Promise<number> {
-    let indexDIL = 0;
-    const lastDIL = await this.logsDiModel.findOne(
-      {},
-      {},
-      { sort: { createdAt: -1 } },
-    );
+    try {
+      let indexDIL = 0;
+      const lastDIL = await this.logsDiModel.findOne(
+        {},
+        {},
+        { sort: { createdAt: -1 } },
+      );
 
-    if (lastDIL) {
-      indexDIL = +lastDIL._id.substring(3);
-      return indexDIL + 1;
+      if (lastDIL) {
+        indexDIL = +lastDIL._id.substring(3);
+        return indexDIL + 1;
+      }
+      return indexDIL;
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.generateDiId');
     }
-    return indexDIL;
   }
 
   /**
@@ -50,11 +55,15 @@ export class LogsDiService {
    * JAMAIS écraser le verdict déjà saisi sur ce cycle.
    */
   async create(_idDi: string, idIgnore: number) {
-    return await this.logsDiModel.findOneAndUpdate(
-      { _idDi, idIgnore },
-      { $setOnInsert: { _id: uuidv4(), _idDi, idIgnore } },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
-    );
+    try {
+      return await this.logsDiModel.findOneAndUpdate(
+        { _idDi, idIgnore },
+        { $setOnInsert: { _id: uuidv4(), _idDi, idIgnore } },
+        { upsert: true, new: true, setDefaultsOnInsert: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.create');
+    }
   }
 
   /**
@@ -75,24 +84,28 @@ export class LogsDiService {
     idIgnore: number,
     patch: Record<string, any>,
   ) {
-    if (!patch || Object.keys(patch).length === 0) return null;
     try {
-      return await this.logsDiModel.findOneAndUpdate(
-        { _idDi, idIgnore },
-        { $set: patch, $setOnInsert: { _id: uuidv4(), _idDi, idIgnore } },
-        { upsert: true, new: true, setDefaultsOnInsert: true },
-      );
+      if (!patch || Object.keys(patch).length === 0) return null;
+      try {
+        return await this.logsDiModel.findOneAndUpdate(
+          { _idDi, idIgnore },
+          { $set: patch, $setOnInsert: { _id: uuidv4(), _idDi, idIgnore } },
+          { upsert: true, new: true, setDefaultsOnInsert: true },
+        );
+      } catch (error) {
+        await this.operationalErrorService.capture({
+          module: 'logs-di',
+          submodule: 'logsDiService',
+          method: 'UPSERT_CYCLE',
+          severity: 'HIGH',
+          error: 'Failed to persist cycle row',
+          message: (error as Error)?.message ?? String(error),
+          payload: { _idDi, idIgnore, fields: Object.keys(patch) },
+        });
+        throw error;
+      }
     } catch (error) {
-      await this.operationalErrorService.capture({
-        module: 'logs-di',
-        submodule: 'logsDiService',
-        method: 'UPSERT_CYCLE',
-        severity: 'HIGH',
-        error: 'Failed to persist cycle row',
-        message: (error as Error)?.message ?? String(error),
-        payload: { _idDi, idIgnore, fields: Object.keys(patch) },
-      });
-      throw error;
+      throw withErrorContext(error, 'LogsDiService.upsertCycle');
     }
   }
 
@@ -112,27 +125,35 @@ export class LogsDiService {
     type: 'Devis' | 'BC' | 'BL' | 'Facture',
     ref: { driveFileId: string; webViewLink: string; name: string },
   ) {
-    const SCALAR: Record<string, string> = {
-      Devis: 'devis',
-      BC: 'bon_de_commande',
-      BL: 'bon_de_livraison',
-      Facture: 'facture',
-    };
-    return this.upsertCycle(_idDi, idIgnore, {
-      [SCALAR[type]]: ref.webViewLink,
-      [`driveDocs.${type}`]: ref,
-    });
+    try {
+      const SCALAR: Record<string, string> = {
+        Devis: 'devis',
+        BC: 'bon_de_commande',
+        BL: 'bon_de_livraison',
+        Facture: 'facture',
+      };
+      return await this.upsertCycle(_idDi, idIgnore, {
+        [SCALAR[type]]: ref.webViewLink,
+        [`driveDocs.${type}`]: ref,
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.setCycleDoc');
+    }
   }
 
   /** Fige la ligne d'un cycle a l'ouverture du suivant. Idempotent : un cycle
    *  deja clos garde sa premiere date de cloture. */
   async closeCycle(_idDi: string, idIgnore: number, at: Date = new Date()) {
-    if (idIgnore < 0) return null;
-    return await this.logsDiModel.findOneAndUpdate(
-      { _idDi, idIgnore, closedAt: null },
-      { $set: { closedAt: at } },
-      { new: true },
-    );
+    try {
+      if (idIgnore < 0) return null;
+      return await this.logsDiModel.findOneAndUpdate(
+        { _idDi, idIgnore, closedAt: null },
+        { $set: { closedAt: at } },
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.closeCycle');
+    }
   }
 
   async getLogsById(idIgnore: number, _idDi: string) {
@@ -247,92 +268,116 @@ export class LogsDiService {
   }
 
   async calculateComposantTicketPrice(_idDi: string, idIgnore: number) {
-    const diLog = await this.logsDiModel.findOne({ _idDi, idIgnore });
-    if (!diLog || !Array.isArray(diLog.array_composants)) {
-      // Previously crashed with `Cannot read properties of null` if the
-      // log row was missing. Capture + return 0 so pricing flows degrade
-      // gracefully (caller sees "no priced components" rather than 500).
-      await this.operationalErrorService.capture({
-        module: 'logs-di',
-        submodule: 'logsDiService',
-        method: 'CALCULATE_COMPOSANT_TICKET_PRICE',
-        severity: 'MEDIUM',
-        error: 'DI log row missing or has no array_composants',
-        message: `No diLog for _idDi=${_idDi} idIgnore=${idIgnore}`,
-        payload: { _idDi, idIgnore, diLogExists: !!diLog },
-      });
-      return 0;
-    }
-    const totalPrice = await Promise.all(
-      diLog.array_composants.map(async (item) => {
-        const composant = await this.composantModel.findOne({
-          name: item.nameComposant,
+    try {
+      const diLog = await this.logsDiModel.findOne({ _idDi, idIgnore });
+      if (!diLog || !Array.isArray(diLog.array_composants)) {
+        // Previously crashed with `Cannot read properties of null` if the
+        // log row was missing. Capture + return 0 so pricing flows degrade
+        // gracefully (caller sees "no priced components" rather than 500).
+        await this.operationalErrorService.capture({
+          module: 'logs-di',
+          submodule: 'logsDiService',
+          method: 'CALCULATE_COMPOSANT_TICKET_PRICE',
+          severity: 'MEDIUM',
+          error: 'DI log row missing or has no array_composants',
+          message: `No diLog for _idDi=${_idDi} idIgnore=${idIgnore}`,
+          payload: { _idDi, idIgnore, diLogExists: !!diLog },
         });
+        return 0;
+      }
+      const totalPrice = await Promise.all(
+        diLog.array_composants.map(async (item) => {
+          const composant = await this.composantModel.findOne({
+            name: item.nameComposant,
+          });
 
-        return composant ? composant.prix_vente * item.quantity : 0;
-      }),
-    );
-    // TODO substruct the quantity needed from compsant in stock.
-    return totalPrice.reduce((acc, curr) => acc + curr, 0);
+          return composant ? composant.prix_vente * item.quantity : 0;
+        }),
+      );
+      // TODO substruct the quantity needed from compsant in stock.
+      return totalPrice.reduce((acc, curr) => acc + curr, 0);
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.calculateComposantTicketPrice');
+    }
   }
 
   async addDevisPDFLogs(_idDi: string, idIgnore: number, pdf: string) {
-    return await this.logsDiModel.findOneAndUpdate(
-      { _idDi, idIgnore },
-      { $set: { devis: pdf } },
-      { new: true },
-    );
+    try {
+      return await this.logsDiModel.findOneAndUpdate(
+        { _idDi, idIgnore },
+        { $set: { devis: pdf } },
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.addDevisPDFLogs');
+    }
   }
   async addBCPDFLogs(_idDi: string, idIgnore: number, pdf: string) {
-    return await this.logsDiModel.findOneAndUpdate(
-      { _idDi, idIgnore },
-      { $set: { bon_de_commande: pdf } },
-      { new: true },
-    );
+    try {
+      return await this.logsDiModel.findOneAndUpdate(
+        { _idDi, idIgnore },
+        { $set: { bon_de_commande: pdf } },
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.addBCPDFLogs');
+    }
   }
   //Bon de livraison
   async addBLPDFLogs(_idDi: string, idIgnore: number, pdf: string) {
-    const bl = await this.logsDiModel.findOneAndUpdate(
-      { _idDi, idIgnore },
-      { $set: { bon_de_livraison: pdf } },
-      { new: true },
-    );
-    return bl;
+    try {
+      const bl = await this.logsDiModel.findOneAndUpdate(
+        { _idDi, idIgnore },
+        { $set: { bon_de_livraison: pdf } },
+        { new: true },
+      );
+      return bl;
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.addBLPDFLogs');
+    }
   }
   async addFacturePDFLogs(_idDi: string, idIgnore: number, pdf: string) {
-    return await this.logsDiModel.findOneAndUpdate(
-      { _idDi, idIgnore },
-      { $set: { facture: pdf } },
-      { new: true },
-    );
+    try {
+      return await this.logsDiModel.findOneAndUpdate(
+        { _idDi, idIgnore },
+        { $set: { facture: pdf } },
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.addFacturePDFLogs');
+    }
   }
 
   async calculateticketComposantPriceLogs(_id: string, idIgnore: number) {
-    const ticket = await this.logsDiModel.findOne({ _id, idIgnore });
-    if (!ticket || !Array.isArray(ticket.array_composants)) {
-      await this.operationalErrorService.capture({
-        module: 'logs-di',
-        submodule: 'logsDiService',
-        method: 'CALCULATE_TICKET_COMPOSANT_PRICE_LOGS',
-        severity: 'MEDIUM',
-        error: 'Ticket log row missing or has no array_composants',
-        message: `No ticket for _id=${_id} idIgnore=${idIgnore}`,
-        payload: { _id, idIgnore, ticketExists: !!ticket },
-      });
-      return 0;
-    }
-
-    const totalPrice = await Promise.all(
-      ticket.array_composants.map(async (item) => {
-        const composant = await this.composantModel.findOne({
-          name: item.nameComposant,
+    try {
+      const ticket = await this.logsDiModel.findOne({ _id, idIgnore });
+      if (!ticket || !Array.isArray(ticket.array_composants)) {
+        await this.operationalErrorService.capture({
+          module: 'logs-di',
+          submodule: 'logsDiService',
+          method: 'CALCULATE_TICKET_COMPOSANT_PRICE_LOGS',
+          severity: 'MEDIUM',
+          error: 'Ticket log row missing or has no array_composants',
+          message: `No ticket for _id=${_id} idIgnore=${idIgnore}`,
+          payload: { _id, idIgnore, ticketExists: !!ticket },
         });
-        return composant ? composant.prix_vente * item.quantity : 0;
-      }),
-    );
-    // TODO substruct the quantity needed from compsant in stock
+        return 0;
+      }
 
-    return totalPrice.reduce((acc, curr) => acc + curr, 0);
+      const totalPrice = await Promise.all(
+        ticket.array_composants.map(async (item) => {
+          const composant = await this.composantModel.findOne({
+            name: item.nameComposant,
+          });
+          return composant ? composant.prix_vente * item.quantity : 0;
+        }),
+      );
+      // TODO substruct the quantity needed from compsant in stock
+
+      return totalPrice.reduce((acc, curr) => acc + curr, 0);
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.calculateticketComposantPriceLogs');
+    }
   }
 
 
@@ -341,15 +386,19 @@ export class LogsDiService {
     idIgnore: number,
     remarque: string,
   ) {
-    return await this.logsDiModel.findOneAndUpdate(
-      { _idDi, idIgnore },
-      {
-        $set: {
-          remarque_tech_repair: remarque,
+    try {
+      return await this.logsDiModel.findOneAndUpdate(
+        { _idDi, idIgnore },
+        {
+          $set: {
+            remarque_tech_repair: remarque,
+          },
         },
-      },
-      { new: true },
-    );
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.tech_finishReperationLogs');
+    }
   }
 
   async setSelectedComponentAsDoneLogs(
@@ -406,13 +455,17 @@ export class LogsDiService {
     price: number,
     onlyMissing: boolean,
   ): Promise<void> {
-    const filter: Record<string, unknown> = { 'e.nameComposant': nameComposant };
-    if (onlyMissing) filter[`e.${key}`] = null;
-    await this.logsDiModel.updateOne(
-      { _idDi, idIgnore },
-      { $set: { [`array_composants.$[e].${key}`]: price } },
-      { arrayFilters: [filter] },
-    );
+    try {
+      const filter: Record<string, unknown> = { 'e.nameComposant': nameComposant };
+      if (onlyMissing) filter[`e.${key}`] = null;
+      await this.logsDiModel.updateOne(
+        { _idDi, idIgnore },
+        { $set: { [`array_composants.$[e].${key}`]: price } },
+        { arrayFilters: [filter] },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.setPartPriceSnapshot');
+    }
   }
 
   async getAllLogsByDi(_idDi: string) {
@@ -448,18 +501,34 @@ export class LogsDiService {
   }
 
   findAll() {
-    return `This action returns all logsDi`;
+    try {
+      return `This action returns all logsDi`;
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.findAll');
+    }
   }
 
   findOne(id: number) {
-    return `This action returns a #${id} logsDi`;
+    try {
+      return `This action returns a #${id} logsDi`;
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.findOne');
+    }
   }
 
   update(id: number, updateLogsDiInput: UpdateLogsDiInput) {
-    return `This action updates a #${id} logsDi`;
+    try {
+      return `This action updates a #${id} logsDi`;
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.update');
+    }
   }
 
   remove(id: number) {
-    return `This action removes a #${id} logsDi`;
+    try {
+      return `This action removes a #${id} logsDi`;
+    } catch (error) {
+      throw withErrorContext(error, 'LogsDiService.remove');
+    }
   }
 }

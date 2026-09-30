@@ -1,3 +1,4 @@
+import { withErrorContext } from '../common/error-context';
 /**
  * Technician ownership rule — the single source of truth for "does this DI
  * belong to the acting technician?", shared by the backend guard and mirrored
@@ -27,19 +28,23 @@ export type TechAssignmentKind = 'diag' | 'rep';
 
 /** Coerce an id/name/object identity value to a comparable trimmed string. */
 export function normalizeIdentity(value: unknown): string {
-  if (value === null || value === undefined) {
-    return '';
-  }
-  if (typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const nested = obj._id ?? obj.username ?? obj.id;
-    if (nested !== null && nested !== undefined) {
-      return normalizeIdentity(nested);
+  try {
+    if (value === null || value === undefined) {
+      return '';
     }
-    // Raw ObjectId / Buffer / etc. → its own string form (hex).
+    if (typeof value === 'object') {
+      const obj = value as Record<string, unknown>;
+      const nested = obj._id ?? obj.username ?? obj.id;
+      if (nested !== null && nested !== undefined) {
+        return normalizeIdentity(nested);
+      }
+      // Raw ObjectId / Buffer / etc. → its own string form (hex).
+      return String(value).trim();
+    }
     return String(value).trim();
+  } catch (error) {
+    throw withErrorContext(error, 'normalizeIdentity');
   }
-  return String(value).trim();
 }
 
 /**
@@ -52,14 +57,18 @@ export function techIdentityMatches(
   assigned: unknown,
   user: TechIdentity | undefined | null,
 ): boolean {
-  if (!user) {
-    return false;
+  try {
+    if (!user) {
+      return false;
+    }
+    const target = normalizeIdentity(assigned);
+    if (target === '') {
+      return false;
+    }
+    const id = normalizeIdentity(user._id);
+    const username = normalizeIdentity(user.username);
+    return (id !== '' && target === id) || (username !== '' && target === username);
+  } catch (error) {
+    throw withErrorContext(error, 'techIdentityMatches');
   }
-  const target = normalizeIdentity(assigned);
-  if (target === '') {
-    return false;
-  }
-  const id = normalizeIdentity(user._id);
-  const username = normalizeIdentity(user.username);
-  return (id !== '' && target === id) || (username !== '' && target === username);
 }

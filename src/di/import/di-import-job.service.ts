@@ -7,6 +7,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { nanoid } from 'nanoid';
 import { DiImportJobStatus } from './entities/di-import-job.entity';
+import { withErrorContext } from '../../common/error-context';
 
 /**
  * Cycle de vie d'un job d'import DI en bloc, persisté dans `di_import_jobs`.
@@ -28,19 +29,27 @@ export class DiImportJobService {
   /** Crée un job PENDING avec un `jobId` unique (nanoid). `total` = nombre de
    *  lignes validées à traiter. `createdBy` = propriétaire (profile _id). */
   async create(input: { createdBy?: string; total: number }): Promise<any> {
-    const jobId = `IMPORT_${nanoid(12)}`;
-    return this.jobModel.create({
-      jobId,
-      createdBy: input.createdBy,
-      total: Math.max(0, input.total ?? 0),
-      done: 0,
-      status: 'PENDING' as DiImportJobStatus,
-    });
+    try {
+      const jobId = `IMPORT_${nanoid(12)}`;
+      return await this.jobModel.create({
+        jobId,
+        createdBy: input.createdBy,
+        total: Math.max(0, input.total ?? 0),
+        done: 0,
+        status: 'PENDING' as DiImportJobStatus,
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiImportJobService.create');
+    }
   }
 
   /** Lecture brute (sans contrôle d'accès) — usage interne/serveur. */
   async getById(jobId: string): Promise<any | null> {
-    return this.jobModel.findOne({ jobId }).lean();
+    try {
+      return await this.jobModel.findOne({ jobId }).lean();
+    } catch (error) {
+      throw withErrorContext(error, 'DiImportJobService.getById');
+    }
   }
 
   /**
@@ -53,33 +62,45 @@ export class DiImportJobService {
     userId?: string,
     allowAny = false,
   ): Promise<any> {
-    const job = await this.jobModel.findOne({ jobId }).lean();
-    if (!job) {
-      throw new NotFoundException(`Job d'import « ${jobId} » introuvable.`);
+    try {
+      const job = await this.jobModel.findOne({ jobId }).lean();
+      if (!job) {
+        throw new NotFoundException(`Job d'import « ${jobId} » introuvable.`);
+      }
+      const owner = (job as any).createdBy;
+      if (!allowAny && owner && owner !== userId) {
+        throw new ForbiddenException(
+          "Accès refusé : ce job d'import appartient à un autre utilisateur.",
+        );
+      }
+      return job;
+    } catch (error) {
+      throw withErrorContext(error, 'DiImportJobService.getForUser');
     }
-    const owner = (job as any).createdBy;
-    if (!allowAny && owner && owner !== userId) {
-      throw new ForbiddenException(
-        "Accès refusé : ce job d'import appartient à un autre utilisateur.",
-      );
-    }
-    return job;
   }
 
   /** Jobs d'un utilisateur (récupération après reconnexion), plus récents d'abord. */
   async listForUser(userId: string): Promise<any[]> {
-    return this.jobModel
-      .find({ createdBy: userId })
-      .sort({ createdAt: -1 })
-      .lean();
+    try {
+      return await this.jobModel
+        .find({ createdBy: userId })
+        .sort({ createdAt: -1 })
+        .lean();
+    } catch (error) {
+      throw withErrorContext(error, 'DiImportJobService.listForUser');
+    }
   }
 
   async markRunning(jobId: string): Promise<any> {
-    return this.jobModel.findOneAndUpdate(
-      { jobId },
-      { $set: { status: 'RUNNING' as DiImportJobStatus } },
-      { new: true },
-    );
+    try {
+      return await this.jobModel.findOneAndUpdate(
+        { jobId },
+        { $set: { status: 'RUNNING' as DiImportJobStatus } },
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiImportJobService.markRunning');
+    }
   }
 
   /** Avance ATOMIQUE de la progression (mono-document `$inc`) — appelée après
@@ -89,39 +110,51 @@ export class DiImportJobService {
     delta: number,
     currentRef?: string,
   ): Promise<any> {
-    const set: Record<string, any> = {};
-    if (currentRef != null) set.currentRef = currentRef;
-    return this.jobModel.findOneAndUpdate(
-      { jobId },
-      { $inc: { done: Math.max(0, delta) }, $set: set },
-      { new: true },
-    );
+    try {
+      const set: Record<string, any> = {};
+      if (currentRef != null) set.currentRef = currentRef;
+      return await this.jobModel.findOneAndUpdate(
+        { jobId },
+        { $inc: { done: Math.max(0, delta) }, $set: set },
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiImportJobService.incrementProgress');
+    }
   }
 
   async complete(jobId: string, report: any): Promise<any> {
-    return this.jobModel.findOneAndUpdate(
-      { jobId },
-      {
-        $set: {
-          status: 'COMPLETED' as DiImportJobStatus,
-          report,
-          currentRef: null,
+    try {
+      return await this.jobModel.findOneAndUpdate(
+        { jobId },
+        {
+          $set: {
+            status: 'COMPLETED' as DiImportJobStatus,
+            report,
+            currentRef: null,
+          },
         },
-      },
-      { new: true },
-    );
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiImportJobService.complete');
+    }
   }
 
   async fail(jobId: string, error: string, report?: any): Promise<any> {
-    const set: Record<string, any> = {
-      status: 'FAILED' as DiImportJobStatus,
-      error,
-    };
-    if (report !== undefined) set.report = report;
-    return this.jobModel.findOneAndUpdate(
-      { jobId },
-      { $set: set },
-      { new: true },
-    );
+    try {
+      const set: Record<string, any> = {
+        status: 'FAILED' as DiImportJobStatus,
+        error,
+      };
+      if (report !== undefined) set.report = report;
+      return await this.jobModel.findOneAndUpdate(
+        { jobId },
+        { $set: set },
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiImportJobService.fail');
+    }
   }
 }

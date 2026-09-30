@@ -5,6 +5,7 @@ import { NotificationsGateway } from '../notification.gateway';
 import { NotificationDocument } from './entities/notification.entity';
 import { SystemEventDocument } from './entities/system-event.entity';
 import { toProfileRoles } from './role-mapping';
+import { withErrorContext } from '../common/error-context';
 
 /** Cible d'une notification actionnable. Vide/absente ⇒ historique seul. */
 export interface EmitTarget {
@@ -55,26 +56,30 @@ export class NotificationService {
    *  (SOURCE UNIQUE) ; un rôle non résolu n'est JAMAIS silencieux → il est
    *  loggué (l'événement d'historique reste écrit, le badge n'est pas gonflé). */
   private async userIdsForRoles(roles: string[]): Promise<string[]> {
-    if (!roles?.length) return [];
-    const { resolved, unresolved } = toProfileRoles(roles);
-    if (unresolved.length) {
-      this.logger.warn(
-        `Rôle(s) de ciblage non résolus (notification ignorée, historique conservé) : ${unresolved.join(
+    try {
+      if (!roles?.length) return [];
+      const { resolved, unresolved } = toProfileRoles(roles);
+      if (unresolved.length) {
+        this.logger.warn(
+          `Rôle(s) de ciblage non résolus (notification ignorée, historique conservé) : ${unresolved.join(
           ', ',
         )}`,
-      );
+        );
+      }
+      if (!resolved.length) return [];
+      // `isDeleted` EST INDISPENSABLE : sans lui, le fan-out par rôle écrit une
+      // ligne pour chaque compte supprimé portant encore le rôle. Mesuré sur la
+      // base réelle avant correctif : 364 lignes sur 781 (47 %) adressées à des
+      // comptes supprimés — un compte « coordinator » désactivé accumulait 74
+      // non-lues que personne ne lirait jamais, et chaque émission payait autant
+      // d'insertions et de pushs socket inutiles.
+      const profiles = await this.profileModel
+        .find({ role: { $in: resolved }, isDeleted: { $ne: true } }, { _id: 1 })
+        .lean();
+      return (profiles as any[]).map((p) => String(p._id));
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationService.userIdsForRoles');
     }
-    if (!resolved.length) return [];
-    // `isDeleted` EST INDISPENSABLE : sans lui, le fan-out par rôle écrit une
-    // ligne pour chaque compte supprimé portant encore le rôle. Mesuré sur la
-    // base réelle avant correctif : 364 lignes sur 781 (47 %) adressées à des
-    // comptes supprimés — un compte « coordinator » désactivé accumulait 74
-    // non-lues que personne ne lirait jamais, et chaque émission payait autant
-    // d'insertions et de pushs socket inutiles.
-    const profiles = await this.profileModel
-      .find({ role: { $in: resolved }, isDeleted: { $ne: true } }, { _id: 1 })
-      .lean();
-    return (profiles as any[]).map((p) => String(p._id));
   }
 
   /**
@@ -85,97 +90,109 @@ export class NotificationService {
   async resolveActorNames(
     ids: Array<string | null | undefined>,
   ): Promise<Map<string, string>> {
-    const unique = [...new Set(ids.filter(Boolean) as string[])];
-    const out = new Map<string, string>();
-    if (!unique.length) return out;
-    const profiles = await this.profileModel
-      .find({ _id: { $in: unique } }, { firstName: 1, lastName: 1, username: 1 })
-      .lean();
-    for (const p of profiles as any[]) {
-      const name =
-        [p.firstName, p.lastName].filter(Boolean).join(' ').trim() ||
-        p.username ||
-        '';
-      if (name) out.set(String(p._id), name);
+    try {
+      const unique = [...new Set(ids.filter(Boolean) as string[])];
+      const out = new Map<string, string>();
+      if (!unique.length) return out;
+      const profiles = await this.profileModel
+        .find({ _id: { $in: unique } }, { firstName: 1, lastName: 1, username: 1 })
+        .lean();
+      for (const p of profiles as any[]) {
+        const name =
+          [p.firstName, p.lastName].filter(Boolean).join(' ').trim() ||
+          p.username ||
+          '';
+        if (name) out.set(String(p._id), name);
+      }
+      return out;
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationService.resolveActorNames');
     }
-    return out;
   }
 
   async emit(input: EmitInput): Promise<SystemEventDocument> {
-    // 1) Historique — toujours.
-    const event = await this.eventModel.create({
-      type: input.type,
-      diId: input.diId ?? null,
-      actorId: input.actorId ?? null,
-      actorRole: input.actorRole ?? null,
-      message: input.message,
-      payload: input.payload ?? {},
-    });
+    try {
+      // 1) Historique — toujours.
+      const event = await this.eventModel.create({
+        type: input.type,
+        diId: input.diId ?? null,
+        actorId: input.actorId ?? null,
+        actorRole: input.actorRole ?? null,
+        message: input.message,
+        payload: input.payload ?? {},
+      });
 
-    // 2) Cloche — seulement si actionnable (destinataires fournis).
-    const target = input.notify;
-    if (target && (target.userIds?.length || target.roles?.length)) {
-      const fromRoles = await this.userIdsForRoles(target.roles ?? []);
-      const all = new Set<string>([...(target.userIds ?? []), ...fromRoles]);
-      // On ne se notifie pas soi-même (l'acteur sait ce qu'il vient de faire).
-      if (input.actorId) all.delete(String(input.actorId));
+      // 2) Cloche — seulement si actionnable (destinataires fournis).
+      const target = input.notify;
+      if (target && (target.userIds?.length || target.roles?.length)) {
+        const fromRoles = await this.userIdsForRoles(target.roles ?? []);
+        const all = new Set<string>([...(target.userIds ?? []), ...fromRoles]);
+        // On ne se notifie pas soi-même (l'acteur sait ce qu'il vient de faire).
+        if (input.actorId) all.delete(String(input.actorId));
 
-      const recipients = [...all].filter(Boolean);
-      if (!recipients.length) {
-        // Une notification ACTIONNABLE dont l'audience se résout à personne
-        // disparaissait sans laisser de trace : ni ligne, ni socket, ni log —
-        // seul l'événement d'historique subsistait. C'est exactement la forme
-        // qu'ont les pertes (rôle sans titulaire actif, acteur unique exclu de
-        // sa propre notification, id de destinataire nul). On la rend BRUYANTE.
-        this.logger.warn(
-          `Notification « ${input.type} » sans destinataire (diId=${
+        const recipients = [...all].filter(Boolean);
+        if (!recipients.length) {
+          // Une notification ACTIONNABLE dont l'audience se résout à personne
+          // disparaissait sans laisser de trace : ni ligne, ni socket, ni log —
+          // seul l'événement d'historique subsistait. C'est exactement la forme
+          // qu'ont les pertes (rôle sans titulaire actif, acteur unique exclu de
+          // sa propre notification, id de destinataire nul). On la rend BRUYANTE.
+          this.logger.warn(
+            `Notification « ${input.type} » sans destinataire (diId=${
             input.diId ?? '-'
           }) — cible demandée : roles=[${(target.roles ?? []).join(
             ', ',
           )}] userIds=[${(target.userIds ?? []).join(', ')}]`,
-        );
-      }
-      if (recipients.length) {
-        const rows = recipients.map((userId) => ({
-          eventId: String(event._id),
-          userId,
-          readAt: null,
-          type: input.type,
-          diId: input.diId ?? null,
-          message: input.message,
-        }));
-        const created = await this.notificationModel.insertMany(rows, {
-          ordered: false,
-        });
-        // 3) Push socket CIBLÉ (room par utilisateur) — best-effort.
-        for (const doc of created as any[]) {
-          try {
-            this.gateway.emitToUser(String(doc.userId), {
-              _id: String(doc._id),
-              eventId: doc.eventId,
-              type: doc.type,
-              diId: doc.diId ?? null,
-              message: doc.message,
-              createdAt: doc.createdAt,
-              actionable: true,
-            });
-          } catch (err) {
-            this.logger.warn(
-              `emitToUser a échoué (userId=${doc.userId}): ${
+          );
+        }
+        if (recipients.length) {
+          const rows = recipients.map((userId) => ({
+            eventId: String(event._id),
+            userId,
+            readAt: null,
+            type: input.type,
+            diId: input.diId ?? null,
+            message: input.message,
+          }));
+          const created = await this.notificationModel.insertMany(rows, {
+            ordered: false,
+          });
+          // 3) Push socket CIBLÉ (room par utilisateur) — best-effort.
+          for (const doc of created as any[]) {
+            try {
+              this.gateway.emitToUser(String(doc.userId), {
+                _id: String(doc._id),
+                eventId: doc.eventId,
+                type: doc.type,
+                diId: doc.diId ?? null,
+                message: doc.message,
+                createdAt: doc.createdAt,
+                actionable: true,
+              });
+            } catch (err) {
+              this.logger.warn(
+                `emitToUser a échoué (userId=${doc.userId}): ${
                 (err as Error)?.message ?? err
               }`,
-            );
+              );
+            }
           }
         }
       }
+      return event;
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationService.emit');
     }
-    return event;
   }
 
   /** Compteur de NON-LUS — `count` INDEXÉ, jamais un chargement de liste. */
   async unreadCount(userId: string): Promise<number> {
-    if (!userId) return 0;
-    return this.notificationModel.countDocuments({ userId, readAt: null });
+    try {
+      if (!userId) return 0;
+      return await this.notificationModel.countDocuments({ userId, readAt: null });
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationService.unreadCount');
+    }
   }
 
   /** Liste paginée de la cloche (récent d'abord). */
@@ -183,32 +200,44 @@ export class NotificationService {
     userId: string,
     opts: { limit?: number; before?: Date } = {},
   ): Promise<NotificationDocument[]> {
-    const limit = Math.min(Math.max(opts.limit ?? 20, 1), 50);
-    const filter: any = { userId };
-    if (opts.before) filter.createdAt = { $lt: opts.before };
-    return this.notificationModel
-      .find(filter)
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .lean() as any;
+    try {
+      const limit = Math.min(Math.max(opts.limit ?? 20, 1), 50);
+      const filter: any = { userId };
+      if (opts.before) filter.createdAt = { $lt: opts.before };
+      return await (this.notificationModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean() as any);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationService.listForUser');
+    }
   }
 
   /** Marque UNE notification lue — SCOPÉ à l'utilisateur (isolation). */
   async markRead(userId: string, notifId: string): Promise<boolean> {
-    const res = await this.notificationModel.updateOne(
-      { _id: notifId, userId, readAt: null },
-      { $set: { readAt: new Date() } },
-    );
-    return (res as any)?.modifiedCount > 0;
+    try {
+      const res = await this.notificationModel.updateOne(
+        { _id: notifId, userId, readAt: null },
+        { $set: { readAt: new Date() } },
+      );
+      return (res as any)?.modifiedCount > 0;
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationService.markRead');
+    }
   }
 
   /** Marque TOUTES les non-lues de l'utilisateur comme lues. */
   async markAllRead(userId: string): Promise<number> {
-    const res = await this.notificationModel.updateMany(
-      { userId, readAt: null },
-      { $set: { readAt: new Date() } },
-    );
-    return (res as any)?.modifiedCount ?? 0;
+    try {
+      const res = await this.notificationModel.updateMany(
+        { userId, readAt: null },
+        { $set: { readAt: new Date() } },
+      );
+      return await ((res as any)?.modifiedCount ?? 0);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationService.markAllRead');
+    }
   }
 
   /**
@@ -218,42 +247,54 @@ export class NotificationService {
    * et on éteint la relance dès que le document attendu est fourni.
    */
   async clearByDiAndType(diId: string, type: string): Promise<number> {
-    if (!diId || !type) return 0;
-    // Capture les destinataires AVANT suppression pour les prévenir en temps
-    // réel (le front retire la ligne + coupe le son immédiatement, sans attendre
-    // un re-fetch de la cloche).
-    const rows = await this.notificationModel
-      .find({ diId, type })
-      .select('userId')
-      .lean();
-    const res = await this.notificationModel.deleteMany({ diId, type });
-    const userIds = Array.from(
-      new Set(rows.map((r: any) => String(r.userId)).filter(Boolean)),
-    );
-    for (const userId of userIds) {
-      try {
-        this.gateway.emitRemovedToUser(userId, { diId, type });
-      } catch {
-        /* best-effort */
+    try {
+      if (!diId || !type) return 0;
+      // Capture les destinataires AVANT suppression pour les prévenir en temps
+      // réel (le front retire la ligne + coupe le son immédiatement, sans attendre
+      // un re-fetch de la cloche).
+      const rows = await this.notificationModel
+        .find({ diId, type })
+        .select('userId')
+        .lean();
+      const res = await this.notificationModel.deleteMany({ diId, type });
+      const userIds = Array.from(
+        new Set(rows.map((r: any) => String(r.userId)).filter(Boolean)),
+      );
+      for (const userId of userIds) {
+        try {
+          this.gateway.emitRemovedToUser(userId, { diId, type });
+        } catch {
+          /* best-effort */
+        }
       }
+      return await ((res as any)?.deletedCount ?? 0);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationService.clearByDiAndType');
     }
-    return (res as any)?.deletedCount ?? 0;
   }
 
   /** Préférence son (défaut ON si le profil n'a pas encore le champ). */
   async getSoundPref(userId: string): Promise<boolean> {
-    const p = await this.profileModel
-      .findOne({ _id: userId }, { notificationSound: 1 })
-      .lean();
-    return (p as any)?.notificationSound !== false;
+    try {
+      const p = await this.profileModel
+        .findOne({ _id: userId }, { notificationSound: 1 })
+        .lean();
+      return (p as any)?.notificationSound !== false;
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationService.getSoundPref');
+    }
   }
 
   async setSoundPref(userId: string, enabled: boolean): Promise<boolean> {
-    await this.profileModel.updateOne(
-      { _id: userId },
-      { $set: { notificationSound: !!enabled } },
-    );
-    return !!enabled;
+    try {
+      await this.profileModel.updateOne(
+        { _id: userId },
+        { $set: { notificationSound: !!enabled } },
+      );
+      return !!enabled;
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationService.setSoundPref');
+    }
   }
 
   /** Historique paginé + filtré (jamais illimité). */
@@ -266,17 +307,21 @@ export class NotificationService {
       skip?: number;
     } = {},
   ): Promise<SystemEventDocument[]> {
-    const limit = Math.min(Math.max(filter.limit ?? 50, 1), 200);
-    const skip = Math.max(filter.skip ?? 0, 0);
-    const q: any = {};
-    if (filter.diId) q.diId = filter.diId;
-    if (filter.type) q.type = filter.type;
-    if (filter.actorId) q.actorId = filter.actorId;
-    return this.eventModel
-      .find(q)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean() as any;
+    try {
+      const limit = Math.min(Math.max(filter.limit ?? 50, 1), 200);
+      const skip = Math.max(filter.skip ?? 0, 0);
+      const q: any = {};
+      if (filter.diId) q.diId = filter.diId;
+      if (filter.type) q.type = filter.type;
+      if (filter.actorId) q.actorId = filter.actorId;
+      return await (this.eventModel
+        .find(q)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean() as any);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationService.listHistory');
+    }
   }
 }

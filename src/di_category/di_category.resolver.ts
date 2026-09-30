@@ -6,6 +6,7 @@ import { Profile } from 'src/profile/entities/profile.entity';
 import { NotificationService } from 'src/notifications/notification.service';
 import { DiCategoryService } from './di_category.service';
 import { DiCategory } from './entities/di_category.entity';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * Destinataires de la cloche quand une catégorie apparaît dans le référentiel.
@@ -46,37 +47,41 @@ export class DiCategoryResolver {
     category: string,
     @CurrentUser() profile: Profile,
   ): Promise<DiCategory> {
-    const { doc, created } = await this.diCategoryService.createDiCategory(
-      category,
-    );
+    try {
+      const { doc, created } = await this.diCategoryService.createDiCategory(
+        category,
+      );
 
-    if (created) {
-      // Best-effort : une notification qui échoue ne doit JAMAIS annuler la
-      // création — même convention que les ~14 appels d'`emit` existants.
-      try {
-        await this.notificationService.emit({
-          type: 'DI_CATEGORY_CREATED',
-          diId: null, // une catégorie n'est pas une DI
-          actorId: (profile as any)?._id ?? null,
-          actorRole: (profile as any)?.role ?? null,
-          message: `Nouvelle catégorie de diagnostic « ${doc.category} » créée`,
-          payload: { categoryId: doc._id, category: doc.category },
-          notify: { roles: CATEGORY_WATCHERS },
-        });
-      } catch (err) {
-        this.logger.warn(
-          `emit DI_CATEGORY_CREATED a échoué (${doc._id}) : ${
-            (err as Error)?.message ?? err
-          }`,
-        );
+      if (created) {
+        // Best-effort : une notification qui échoue ne doit JAMAIS annuler la
+        // création — même convention que les ~14 appels d'`emit` existants.
+        try {
+          await this.notificationService.emit({
+            type: 'DI_CATEGORY_CREATED',
+            diId: null, // une catégorie n'est pas une DI
+            actorId: (profile as any)?._id ?? null,
+            actorRole: (profile as any)?.role ?? null,
+            message: `Nouvelle catégorie de diagnostic « ${doc.category} » créée`,
+            payload: { categoryId: doc._id, category: doc.category },
+            notify: { roles: CATEGORY_WATCHERS },
+          });
+        } catch (err) {
+          this.logger.warn(
+            `emit DI_CATEGORY_CREATED a échoué (${doc._id}) : ${
+              (err as Error)?.message ?? err
+            }`,
+          );
+        }
       }
-    }
 
-    // `created` est un champ de RÉPONSE : il n'est pas sur le document, on le
-    // recolle sur l'objet renvoyé. `toObject()` n'existe pas sur un lean/plain,
-    // d'où le repli.
-    const plain = (doc as any)?.toObject?.() ?? doc;
-    return { ...plain, created };
+      // `created` est un champ de RÉPONSE : il n'est pas sur le document, on le
+      // recolle sur l'objet renvoyé. `toObject()` n'existe pas sur un lean/plain,
+      // d'où le repli.
+      const plain = (doc as any)?.toObject?.() ?? doc;
+      return { ...plain, created };
+    } catch (error) {
+      throw withErrorContext(error, 'DiCategoryResolver.createDiCategory');
+    }
   }
 
   @Mutation(() => DiCategory)
@@ -91,7 +96,11 @@ export class DiCategoryResolver {
 
   @Query(() => DiCategory)
   async findOneDiCategory(@Args('_id') _id: string): Promise<DiCategory> {
-    return await this.diCategoryService.findOneDiCategory(_id);
+    try {
+      return await this.diCategoryService.findOneDiCategory(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'DiCategoryResolver.findOneDiCategory');
+    }
   }
 
   @Query(() => [DiCategory])

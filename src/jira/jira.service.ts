@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * Jira Cloud integration (REST API v3).
@@ -94,36 +95,48 @@ export class JiraService {
   }
 
   private authHeaders(): Record<string, string> {
-    const basic = Buffer.from(`${this.email}:${this.apiToken}`).toString(
-      'base64',
-    );
-    return {
-      Authorization: `Basic ${basic}`,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    };
+    try {
+      const basic = Buffer.from(`${this.email}:${this.apiToken}`).toString(
+        'base64',
+      );
+      return {
+        Authorization: `Basic ${basic}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      };
+    } catch (error) {
+      throw withErrorContext(error, 'JiraService.authHeaders');
+    }
   }
 
   /** BASSE/MOYENNE/HAUTE → Jira's default priority names; null = omit field. */
   private mapPriority(priorite?: string): string | null {
-    switch ((priorite ?? '').toUpperCase()) {
-      case 'BASSE':
-        return 'Low';
-      case 'MOYENNE':
-        return 'Medium';
-      case 'HAUTE':
-        return 'High';
-      default:
-        return null;
+    try {
+      switch ((priorite ?? '').toUpperCase()) {
+        case 'BASSE':
+          return 'Low';
+        case 'MOYENNE':
+          return 'Medium';
+        case 'HAUTE':
+          return 'High';
+        default:
+          return null;
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'JiraService.mapPriority');
     }
   }
 
   /** Date → "YYYY-MM-DD" (Jira `duedate`); null when absent/invalid. */
   private toDueDate(value?: Date | string | null): string | null {
-    if (!value) return null;
-    const d = new Date(value);
-    if (isNaN(d.getTime())) return null;
-    return d.toISOString().slice(0, 10);
+    try {
+      if (!value) return null;
+      const d = new Date(value);
+      if (isNaN(d.getTime())) return null;
+      return d.toISOString().slice(0, 10);
+    } catch (error) {
+      throw withErrorContext(error, 'JiraService.toDueDate');
+    }
   }
 
   /** The lines that make up the issue body (action detail + traceability). */
@@ -131,18 +144,22 @@ export class JiraService {
     action: JiraActionInput,
     meeting: JiraMeetingContext,
   ): string[] {
-    const lines: string[] = [];
-    if ((action.description ?? '').trim()) {
-      lines.push(action.description!.trim());
+    try {
+      const lines: string[] = [];
+      if ((action.description ?? '').trim()) {
+        lines.push(action.description!.trim());
+      }
+      const meta: string[] = [];
+      if (meeting.reference) meta.push(`Réunion: ${meeting.reference}`);
+      if (meeting._id) meta.push(`PV id: ${meeting._id}`);
+      const due = this.toDueDate(action.echeance);
+      if (due) meta.push(`Échéance: ${due}`);
+      if (action.priorite) meta.push(`Priorité: ${action.priorite}`);
+      if (meta.length) lines.push(meta.join(' · '));
+      return lines.length ? lines : ['—'];
+    } catch (error) {
+      throw withErrorContext(error, 'JiraService.descriptionLines');
     }
-    const meta: string[] = [];
-    if (meeting.reference) meta.push(`Réunion: ${meeting.reference}`);
-    if (meeting._id) meta.push(`PV id: ${meeting._id}`);
-    const due = this.toDueDate(action.echeance);
-    if (due) meta.push(`Échéance: ${due}`);
-    if (action.priorite) meta.push(`Priorité: ${action.priorite}`);
-    if (meta.length) lines.push(meta.join(' · '));
-    return lines.length ? lines : ['—'];
   }
 
   /**
@@ -153,18 +170,22 @@ export class JiraService {
     action: JiraActionInput,
     meeting: JiraMeetingContext,
   ): any {
-    const lines = this.descriptionLines(action, meeting);
-    if (this.apiVersion.startsWith('2')) {
-      return lines.join('\n');
+    try {
+      const lines = this.descriptionLines(action, meeting);
+      if (this.apiVersion.startsWith('2')) {
+        return lines.join('\n');
+      }
+      return {
+        type: 'doc',
+        version: 1,
+        content: lines.map((text) => ({
+          type: 'paragraph',
+          content: [{ type: 'text', text }],
+        })),
+      };
+    } catch (error) {
+      throw withErrorContext(error, 'JiraService.buildDescription');
     }
-    return {
-      type: 'doc',
-      version: 1,
-      content: lines.map((text) => ({
-        type: 'paragraph',
-        content: [{ type: 'text', text }],
-      })),
-    };
   }
 
   /**
@@ -176,20 +197,24 @@ export class JiraService {
   private async resolveAccountId(
     email?: string | null,
   ): Promise<string | null> {
-    if (!email) return null;
     try {
-      const res = await axios.get(
-        `${this.baseUrl}/rest/api/${this.apiVersion}/user/search`,
-        { headers: this.authHeaders(), params: { query: email }, timeout: this.timeout },
-      );
-      const rows: any[] = Array.isArray(res.data) ? res.data : [];
-      const exact = rows.find(
-        (u) =>
-          (u?.emailAddress ?? '').toLowerCase() === email.toLowerCase(),
-      );
-      return (exact ?? rows[0])?.accountId ?? null;
-    } catch {
-      return null;
+      if (!email) return null;
+      try {
+        const res = await axios.get(
+          `${this.baseUrl}/rest/api/${this.apiVersion}/user/search`,
+          { headers: this.authHeaders(), params: { query: email }, timeout: this.timeout },
+        );
+        const rows: any[] = Array.isArray(res.data) ? res.data : [];
+        const exact = rows.find(
+          (u) =>
+            (u?.emailAddress ?? '').toLowerCase() === email.toLowerCase(),
+        );
+        return await ((exact ?? rows[0])?.accountId ?? null);
+      } catch {
+        return null;
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'JiraService.resolveAccountId');
     }
   }
 
@@ -207,53 +232,57 @@ export class JiraService {
     action: JiraActionInput,
     meeting: JiraMeetingContext,
   ): Promise<JiraIssueResult | null> {
-    if (!this.isConfigured) return null;
-    const summary = (action.titre ?? '').trim();
-    if (!summary) return null;
-
-    const accountId = await this.resolveAccountId(action.assigneeEmail);
-
-    const fields: any = {
-      project: { key: this.projectKey },
-      summary: summary.slice(0, 254),
-      description: this.buildDescription(action, meeting),
-      issuetype: { name: this.issueType },
-    };
-    const priority = this.mapPriority(action.priorite);
-    if (priority) fields.priority = { name: priority };
-    const due = this.toDueDate(action.echeance);
-    if (due) fields.duedate = due;
-    if (accountId) fields.assignee = { id: accountId };
-
-    // assignFailed signal: a responsable email was given but no account matched.
-    const assigned = !!accountId;
-
     try {
-      const res = await this.postIssue(fields, meeting, false);
-      return { ...res, assigned };
-    } catch (err: any) {
-      if (err?.response?.status === 400) {
-        // Optional fields not configured on the project → retry minimal. The
-        // assignee is dropped in the minimal payload → assigned=false.
-        try {
-          const res = await this.postIssue(
-            {
-              project: fields.project,
-              summary: fields.summary,
-              description: fields.description,
-              issuetype: fields.issuetype,
-            },
-            meeting,
-            true,
-          );
-          return { ...res, assigned: false };
-        } catch (retryErr) {
-          await this.capture(action, meeting, retryErr);
-          return null;
+      if (!this.isConfigured) return null;
+      const summary = (action.titre ?? '').trim();
+      if (!summary) return null;
+
+      const accountId = await this.resolveAccountId(action.assigneeEmail);
+
+      const fields: any = {
+        project: { key: this.projectKey },
+        summary: summary.slice(0, 254),
+        description: this.buildDescription(action, meeting),
+        issuetype: { name: this.issueType },
+      };
+      const priority = this.mapPriority(action.priorite);
+      if (priority) fields.priority = { name: priority };
+      const due = this.toDueDate(action.echeance);
+      if (due) fields.duedate = due;
+      if (accountId) fields.assignee = { id: accountId };
+
+      // assignFailed signal: a responsable email was given but no account matched.
+      const assigned = !!accountId;
+
+      try {
+        const res = await this.postIssue(fields, meeting, false);
+        return { ...res, assigned };
+      } catch (err: any) {
+        if (err?.response?.status === 400) {
+          // Optional fields not configured on the project → retry minimal. The
+          // assignee is dropped in the minimal payload → assigned=false.
+          try {
+            const res = await this.postIssue(
+              {
+                project: fields.project,
+                summary: fields.summary,
+                description: fields.description,
+                issuetype: fields.issuetype,
+              },
+              meeting,
+              true,
+            );
+            return { ...res, assigned: false };
+          } catch (retryErr) {
+            await this.capture(action, meeting, retryErr);
+            return null;
+          }
         }
+        await this.capture(action, meeting, err);
+        return null;
       }
-      await this.capture(action, meeting, err);
-      return null;
+    } catch (error) {
+      throw withErrorContext(error, 'JiraService.createIssueForAction');
     }
   }
 
@@ -275,47 +304,51 @@ export class JiraService {
     action: JiraActionInput,
     meeting: JiraMeetingContext,
   ): Promise<JiraIssueResult | null> {
-    if (!this.isConfigured) return null;
-    const key = (issueKey ?? '').trim();
-    const summary = (action.titre ?? '').trim();
-    if (!key || !summary) return null;
-
-    const accountId = await this.resolveAccountId(action.assigneeEmail);
-    const assigned = !!accountId;
-
-    const fields: any = {
-      summary: summary.slice(0, 254),
-      description: this.buildDescription(action, meeting),
-    };
-    const priority = this.mapPriority(action.priorite);
-    if (priority) fields.priority = { name: priority };
-    const due = this.toDueDate(action.echeance);
-    if (due) fields.duedate = due;
-    if (accountId) fields.assignee = { id: accountId };
-
-    const url = `${this.baseUrl}/browse/${key}`;
     try {
-      await this.putIssue(key, fields);
-      this.logger.log(
-        `Updated Jira issue ${key} for PV ${meeting.reference ?? meeting._id}`,
-      );
-      return { issueKey: key, url, assigned };
-    } catch (err: any) {
-      if (err?.response?.status === 400) {
-        try {
-          await this.putIssue(key, {
-            summary: fields.summary,
-            description: fields.description,
-          });
-          this.logger.log(`Updated Jira issue ${key} (minimal payload)`);
-          return { issueKey: key, url, assigned: false };
-        } catch (retryErr) {
-          await this.capture(action, meeting, retryErr);
-          return null;
+      if (!this.isConfigured) return null;
+      const key = (issueKey ?? '').trim();
+      const summary = (action.titre ?? '').trim();
+      if (!key || !summary) return null;
+
+      const accountId = await this.resolveAccountId(action.assigneeEmail);
+      const assigned = !!accountId;
+
+      const fields: any = {
+        summary: summary.slice(0, 254),
+        description: this.buildDescription(action, meeting),
+      };
+      const priority = this.mapPriority(action.priorite);
+      if (priority) fields.priority = { name: priority };
+      const due = this.toDueDate(action.echeance);
+      if (due) fields.duedate = due;
+      if (accountId) fields.assignee = { id: accountId };
+
+      const url = `${this.baseUrl}/browse/${key}`;
+      try {
+        await this.putIssue(key, fields);
+        this.logger.log(
+          `Updated Jira issue ${key} for PV ${meeting.reference ?? meeting._id}`,
+        );
+        return { issueKey: key, url, assigned };
+      } catch (err: any) {
+        if (err?.response?.status === 400) {
+          try {
+            await this.putIssue(key, {
+              summary: fields.summary,
+              description: fields.description,
+            });
+            this.logger.log(`Updated Jira issue ${key} (minimal payload)`);
+            return { issueKey: key, url, assigned: false };
+          } catch (retryErr) {
+            await this.capture(action, meeting, retryErr);
+            return null;
+          }
         }
+        await this.capture(action, meeting, err);
+        return null;
       }
-      await this.capture(action, meeting, err);
-      return null;
+    } catch (error) {
+      throw withErrorContext(error, 'JiraService.updateIssueForAction');
     }
   }
 
@@ -335,30 +368,34 @@ export class JiraService {
     fields: string[] = ['summary', 'duedate', 'assignee'],
     maxResults = 50,
   ): Promise<JiraSearchIssue[]> {
-    if (!this.isConfigured) {
-      throw new Error(
-        'Jira not configured (JIRA_BASE_URL/JIRA_EMAIL/JIRA_API_TOKEN/JIRA_PROJECT_KEY)',
+    try {
+      if (!this.isConfigured) {
+        throw new Error(
+          'Jira not configured (JIRA_BASE_URL/JIRA_EMAIL/JIRA_API_TOKEN/JIRA_PROJECT_KEY)',
+        );
+      }
+      const res = await axios.post(
+        `${this.baseUrl}/rest/api/${this.apiVersion}/search/jql`,
+        { jql, fields, maxResults },
+        { headers: this.authHeaders(), timeout: this.timeout },
       );
+      const issues: any[] = Array.isArray(res.data?.issues)
+        ? res.data.issues
+        : [];
+      return issues.map((it) => {
+        const f = it?.fields ?? {};
+        return {
+          issueKey: it?.key,
+          titre: f.summary ?? '',
+          responsable:
+            f.assignee?.emailAddress ?? f.assignee?.displayName ?? null,
+          echeance: f.duedate ? new Date(f.duedate) : null,
+          url: `${this.baseUrl}/browse/${it?.key}`,
+        };
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'JiraService.searchIssues');
     }
-    const res = await axios.post(
-      `${this.baseUrl}/rest/api/${this.apiVersion}/search/jql`,
-      { jql, fields, maxResults },
-      { headers: this.authHeaders(), timeout: this.timeout },
-    );
-    const issues: any[] = Array.isArray(res.data?.issues)
-      ? res.data.issues
-      : [];
-    return issues.map((it) => {
-      const f = it?.fields ?? {};
-      return {
-        issueKey: it?.key,
-        titre: f.summary ?? '',
-        responsable:
-          f.assignee?.emailAddress ?? f.assignee?.displayName ?? null,
-        echeance: f.duedate ? new Date(f.duedate) : null,
-        url: `${this.baseUrl}/browse/${it?.key}`,
-      };
-    });
   }
 
   private async postIssue(
@@ -366,29 +403,37 @@ export class JiraService {
     meeting: JiraMeetingContext,
     minimal: boolean,
   ): Promise<{ issueKey: string; url: string }> {
-    const res = await axios.post(
-      this.issueUrlBase,
-      { fields },
-      { headers: this.authHeaders(), timeout: this.timeout },
-    );
-    const issueKey = res.data?.key as string;
-    const url = `${this.baseUrl}/browse/${issueKey}`;
-    this.logger.log(
-      `Created Jira issue ${issueKey} for PV ${
+    try {
+      const res = await axios.post(
+        this.issueUrlBase,
+        { fields },
+        { headers: this.authHeaders(), timeout: this.timeout },
+      );
+      const issueKey = res.data?.key as string;
+      const url = `${this.baseUrl}/browse/${issueKey}`;
+      this.logger.log(
+        `Created Jira issue ${issueKey} for PV ${
         meeting.reference ?? meeting._id
       }${minimal ? ' (minimal payload)' : ''}`,
-    );
-    return { issueKey, url };
+      );
+      return { issueKey, url };
+    } catch (error) {
+      throw withErrorContext(error, 'JiraService.postIssue');
+    }
   }
 
   /** PUT the given fields onto an existing issue. Throws on HTTP error (the
    *  caller handles 400-minimal retry / capture). Jira returns 204 No Content. */
   private async putIssue(issueKey: string, fields: any): Promise<void> {
-    await axios.put(
-      `${this.issueUrlBase}/${encodeURIComponent(issueKey)}`,
-      { fields },
-      { headers: this.authHeaders(), timeout: this.timeout },
-    );
+    try {
+      await axios.put(
+        `${this.issueUrlBase}/${encodeURIComponent(issueKey)}`,
+        { fields },
+        { headers: this.authHeaders(), timeout: this.timeout },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'JiraService.putIssue');
+    }
   }
 
   /** Structured, PII-free capture (no emails/tokens in the payload). */
@@ -397,25 +442,29 @@ export class JiraService {
     meeting: JiraMeetingContext,
     err: any,
   ): Promise<void> {
-    const status = err?.response?.status;
-    const body = err?.response?.data;
-    const detail = status
-      ? `HTTP ${status}: ${JSON.stringify(
+    try {
+      const status = err?.response?.status;
+      const body = err?.response?.data;
+      const detail = status
+        ? `HTTP ${status}: ${JSON.stringify(
           body?.errors ?? body?.errorMessages ?? body ?? '',
         )}`
-      : err?.message ?? String(err);
-    await this.opError.capture({
-      module: 'reunion-pv',
-      submodule: 'jira',
-      method: 'CREATE_ISSUE',
-      severity: 'LOW',
-      error: 'Jira issue creation failed',
-      message: String(detail).slice(0, 500),
-      payload: {
-        pvId: meeting?._id,
-        reference: meeting?.reference,
-        action: (action?.titre ?? '').slice(0, 80),
-      },
-    });
+        : err?.message ?? String(err);
+      await this.opError.capture({
+        module: 'reunion-pv',
+        submodule: 'jira',
+        method: 'CREATE_ISSUE',
+        severity: 'LOW',
+        error: 'Jira issue creation failed',
+        message: String(detail).slice(0, 500),
+        payload: {
+          pvId: meeting?._id,
+          reference: meeting?.reference,
+          action: (action?.titre ?? '').slice(0, 80),
+        },
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'JiraService.capture');
+    }
   }
 }

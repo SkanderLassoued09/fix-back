@@ -1,3 +1,4 @@
+import { withErrorContext } from '../../common/error-context';
 /**
  * Normalisation d'un nom de tiers (Client ou Société) — clé de rapprochement
  * PARTAGÉE entre l'import (`matchTier`) et les alias (`tier_aliases`), pour que
@@ -7,13 +8,17 @@
  * espaces multiples réduits, trim. Ex. « PERSO (PROMODAR) » → « perso promodar ».
  */
 export function normalizeTierName(s: unknown): string {
-  return String(s ?? '')
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .replace(/\s+/g, ' ');
+  try {
+    return String(s ?? '')
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+      .replace(/\s+/g, ' ');
+  } catch (error) {
+    throw withErrorContext(error, 'normalizeTierName');
+  }
 }
 
 /**
@@ -31,5 +36,9 @@ export type DecisionKind = 'client' | 'company';
  * `{}`, `null`, `undefined`, …) est rejeté.
  */
 export function isValidDecisionKind(v: unknown): v is DecisionKind {
-  return v === 'client' || v === 'company';
+  try {
+    return v === 'client' || v === 'company';
+  } catch (error) {
+    throw withErrorContext(error, 'isValidDecisionKind');
+  }
 }

@@ -14,6 +14,7 @@ import {
   Stat,
   StatsCount,
   StatsTableData,
+  WorkTimer,
 } from './entities/stat.entity';
 import {
   CreateStatInput,
@@ -27,6 +28,7 @@ import { Logger, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 import { PubSub } from 'graphql-subscriptions';
 import { PaginationConfigDi } from 'src/di/dto/create-di.input';
+import { withErrorContext } from '../common/error-context';
 
 @Resolver(() => Stat)
 export class StatResolver {
@@ -37,20 +39,28 @@ export class StatResolver {
     private readonly pubsub: PubSub,
   ) {}
   @Mutation(() => CreateStatNotificationReturn)
-  createStat(@Args('createStatInput') createStatInput: CreateStatInput) {
-    this.pubsub.publish('you-got-notification-diagnostic', {
-      notificationDiagnostic: {
-        _idDi: createStatInput._idDi,
-        messageNotification: createStatInput.notificationMessage,
-        _idtechDiag: createStatInput.id_tech_diag,
-      },
-    });
-    return this.statService.createStat(createStatInput);
+  async createStat(@Args('createStatInput') createStatInput: CreateStatInput) {
+    try {
+      this.pubsub.publish('you-got-notification-diagnostic', {
+        notificationDiagnostic: {
+          _idDi: createStatInput._idDi,
+          messageNotification: createStatInput.notificationMessage,
+          _idtechDiag: createStatInput.id_tech_diag,
+        },
+      });
+      return await this.statService.createStat(createStatInput);
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.createStat');
+    }
   }
 
   @Subscription(() => CreateStatNotificationReturn)
   notificationDiagnostic() {
-    return this.pubsub.asyncIterator('you-got-notification-diagnostic');
+    try {
+      return this.pubsub.asyncIterator('you-got-notification-diagnostic');
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.notificationDiagnostic');
+    }
   }
 
   @Mutation(() => Boolean)
@@ -92,7 +102,11 @@ export class StatResolver {
   }
   @Subscription(() => CreateStatNotificationReturn)
   notificationReparation() {
-    return this.pubsub.asyncIterator('you-got-notification-reparation');
+    try {
+      return this.pubsub.asyncIterator('you-got-notification-reparation');
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.notificationReparation');
+    }
   }
 
   /**
@@ -105,8 +119,12 @@ export class StatResolver {
     @Args('_id') _id: string,
     @Args('diagTime') diagTime: string,
   ) {
-    const isUpdated = await this.statService.lapTime(_id, diagTime);
-    return !!isUpdated;
+    try {
+      const isUpdated = await this.statService.lapTime(_id, diagTime);
+      return !!isUpdated;
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.lapTimeForPauseAndGetBack');
+    }
   }
 
   @Mutation(() => Boolean)
@@ -114,17 +132,40 @@ export class StatResolver {
     @Args('_id') _id: string,
     @Args('repTime') repTime: string,
   ) {
-    const isUpdated = await this.statService.lapTimeForReaparation(_id, repTime);
-    return !!isUpdated;
+    try {
+      const isUpdated = await this.statService.lapTimeForReaparation(_id, repTime);
+      return !!isUpdated;
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.lapTimeForPauseAndGetBackForReaparation');
+    }
   }
 
   /**
    * 
   this function will get last time pause to continue counting later 
    */
+  /**
+   * Chrono diag/réparation d'un Stat — SEULE source de l'affichage du compteur.
+   * Le front ne reconstruit plus l'état depuis la ligne de liste, le cache
+   * Apollo et localStorage : il affiche cet instantané.
+   */
+  @Query(() => WorkTimer)
+  @UseGuards(JwtAuthGuard)
+  async workTimer(@Args('statId') statId: string) {
+    try {
+      return await this.statService.getWorkTimer(statId);
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.workTimer');
+    }
+  }
+
   @Query(() => Stat)
-  getLastPauseTime(@Args('_id') _id: string) {
-    return this.statService.getLastPauseTime(_id);
+  async getLastPauseTime(@Args('_id') _id: string) {
+    try {
+      return await this.statService.getLastPauseTime(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.getLastPauseTime');
+    }
   }
 
   /**
@@ -135,98 +176,136 @@ export class StatResolver {
 
   // this one to get last time when he makes pause for reapartion
   @Query(() => Stat)
-  getLastPauseTimeforreaparation(@Args('_id') _id: string) {
-    return this.statService.getLastPauseTimeForReparation(_id);
+  async getLastPauseTimeforreaparation(@Args('_id') _id: string) {
+    try {
+      return await this.statService.getLastPauseTimeForReparation(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.getLastPauseTimeforreaparation');
+    }
   }
 
   @Query(() => StatsTableData)
   @UseGuards(JwtAuthGuard)
-  searchTechDI(
+  async searchTechDI(
     @CurrentUser() profile: Profile,
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
     @Args('search') search: SearchInput,
     @Args('startDate', { nullable: true }) startDate?: string,
     @Args('endDate', { nullable: true }) endDate?: string,
   ) {
-    // Convert the date strings to JavaScript Date objects if provided
-    const start = startDate ? new Date(startDate) : undefined;
-    const end = endDate ? new Date(endDate) : undefined;
+    try {
+      // Convert the date strings to JavaScript Date objects if provided
+      const start = startDate ? new Date(startDate) : undefined;
+      const end = endDate ? new Date(endDate) : undefined;
 
-    return this.statService.searchTechDi(
-      paginationConfig,
-      search,
-      profile._id,
-      profile.role,
-      start,
-      end,
-    );
+      return await this.statService.searchTechDi(
+        paginationConfig,
+        search,
+        profile._id,
+        profile.role,
+        start,
+        end,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.searchTechDI');
+    }
   }
 
   @Query(() => StatsTableData)
   @UseGuards(JwtAuthGuard)
-  getDiForTech(
+  async getDiForTech(
     @CurrentUser() profile: Profile,
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
     @Args('startDate', { nullable: true }) startDate?: string,
     @Args('endDate', { nullable: true }) endDate?: string,
   ) {
-    // Convert the date strings to JavaScript Date objects if provided
-    const start = startDate ? new Date(startDate) : undefined;
-    const end = endDate ? new Date(endDate) : undefined;
+    try {
+      // Convert the date strings to JavaScript Date objects if provided
+      const start = startDate ? new Date(startDate) : undefined;
+      const end = endDate ? new Date(endDate) : undefined;
 
-    return this.statService.getDiForTech(
-      paginationConfig,
-      profile._id,
-      profile.role,
-      start,
-      end,
-    );
+      return await this.statService.getDiForTech(
+        paginationConfig,
+        profile._id,
+        profile.role,
+        start,
+        end,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.getDiForTech');
+    }
   }
 
   @Query(() => [StatsCount])
   @UseGuards(JwtAuthGuard)
-  getDiStatusCounts(
+  async getDiStatusCounts(
     @CurrentUser() tech: Profile,
     @Args('startDate', { nullable: true }) startDate?: string,
     @Args('endDate', { nullable: true }) endDate?: string,
   ) {
-    // Convert the date strings to JavaScript Date objects if provided
-    const start = startDate ? new Date(startDate) : undefined;
-    const end = endDate ? new Date(endDate) : undefined;
+    try {
+      // Convert the date strings to JavaScript Date objects if provided
+      const start = startDate ? new Date(startDate) : undefined;
+      const end = endDate ? new Date(endDate) : undefined;
 
-    return this.statService.getDiStatusCounts(tech._id, start, end);
+      return await this.statService.getDiStatusCounts(tech._id, start, end);
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.getDiStatusCounts');
+    }
   }
 
   @Query(() => Stat)
   async getStatbyID(@Args('_idSTAT') _idSTAT: string) {
-    return await this.statService.getDIByStat(_idSTAT);
+    try {
+      return await this.statService.getDIByStat(_idSTAT);
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.getStatbyID');
+    }
   }
 
   @Query(() => DiReparationInfo)
   async getStatInfoForTechReparation(@Args('_idDi') _idDi: string) {
-    const value = await this.statService.getStatInfoForTechReparation(_idDi);
+    try {
+      const value = await this.statService.getStatInfoForTechReparation(_idDi);
 
-    return value;
+      return value;
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.getStatInfoForTechReparation');
+    }
   }
 
   // NULLABLE : une DI peut n'avoir aucun `Stat` pour le cycle demandé (aucun
   // technicien affecté). Auparavant la requête retombait sur le Stat d'un autre
   // cycle ; elle renvoie désormais `null`, ce que le type doit autoriser.
   @Query(() => Stat, { nullable: true })
-  getInfoStatByIdDi(
+  async getInfoStatByIdDi(
     @Args('_idDi') _idDi: string,
     @Args('_idLogs', { nullable: true }) _idLogs: number,
   ) {
-    return this.statService.getInfoStatByIdDi(_idDi, _idLogs);
+    try {
+      return await this.statService.getInfoStatByIdDi(_idDi, _idLogs);
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.getInfoStatByIdDi');
+    }
   }
 
-  @Query(() => Stat)
-  getStatByIdlogs(@Args('_idDi') _idDi: string) {
-    return this.statService.getStatByIdlogs(_idDi);
+  // Nullable : une DI pas encore affectée à un technicien (CREATED, PENDING1)
+  // n'a AUCUN Stat — état normal, pas une erreur.
+  @Query(() => Stat, { nullable: true })
+  async getStatByIdlogs(@Args('_idDi') _idDi: string) {
+    try {
+      return await this.statService.getStatByIdlogs(_idDi);
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.getStatByIdlogs');
+    }
   }
   @Query(() => [Stat])
   async getRetourDataStats(@Args('_idDi') _idDi: string) {
-    return await this.statService.getRetourDataStats(_idDi);
+    try {
+      return await this.statService.getRetourDataStats(_idDi);
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.getRetourDataStats');
+    }
   }
 
   @Query(() => DiStatConsistencyReport)
@@ -234,7 +313,11 @@ export class StatResolver {
   async checkDiStatConsistency(
     @Args('limit', { nullable: true, type: () => Int }) limit?: number,
   ) {
-    return await this.statService.checkDiStatConsistency(limit);
+    try {
+      return await this.statService.checkDiStatConsistency(limit);
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.checkDiStatConsistency');
+    }
   }
 
   @Mutation(() => Stat)
@@ -242,7 +325,11 @@ export class StatResolver {
     @Args('statId') statId: string,
     @Args('pauseLog') pauseLog: PauseLogInput,
   ): Promise<Stat> {
-    return this.statService.addPauseLog(statId, pauseLog);
+    try {
+      return await this.statService.addPauseLog(statId, pauseLog);
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.addPauseLog');
+    }
   }
 
   @Mutation(() => Stat)
@@ -251,10 +338,14 @@ export class StatResolver {
     @Args('pauseLogId') pauseLogId: string,
     @Args('updatedPauseTime') updatedPauseTime: UpdatedPauseTime,
   ): Promise<Stat> {
-    return this.statService.updatePauseTime(
-      statId,
-      pauseLogId,
-      updatedPauseTime,
-    );
+    try {
+      return await this.statService.updatePauseTime(
+        statId,
+        pauseLogId,
+        updatedPauseTime,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'StatResolver.updatePauseLog');
+    }
   }
 }

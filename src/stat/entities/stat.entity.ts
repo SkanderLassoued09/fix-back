@@ -1,4 +1,4 @@
-import { ObjectType, Field, Int } from '@nestjs/graphql';
+import { ObjectType, Field, Int, Float } from '@nestjs/graphql';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 import { Di } from 'src/di/entities/di.entity';
@@ -184,6 +184,40 @@ export class WorkSegment {
  * plus `diagTimeStart` — le cumul de `diag_time` au moment de l'affectation —
  * qui rend la contribution de chaque technicien vérifiable.
  */
+/**
+ * Chrono d'UNE phase (diagnostic ou réparation) tel que le serveur le voit.
+ * Modèle « Toggl » : un chrono qui tourne = son instant de départ ; l'écoulé est
+ * RECALCULÉ (`accumulatedMs + now − runningSince`), jamais compté en ticks.
+ */
+@ObjectType()
+export class WorkTimerPhase {
+  /** Temps déjà cumulé (segments fermés), en ms. */
+  @Field(() => Float)
+  accumulatedMs: number;
+  /** Début du segment EN COURS, ou null si la phase ne tourne pas. */
+  @Field(() => Date, { nullable: true })
+  runningSince: Date | null;
+}
+
+/**
+ * Instantané faisant FOI pour l'affichage du chrono d'un Stat (un cycle).
+ * `serverNow` permet au client de corriger le décalage de son horloge.
+ */
+@ObjectType()
+export class WorkTimer {
+  @Field()
+  statId: string;
+  /** Statut de la DI (source du libellé Pause/Reprendre). */
+  @Field()
+  status: string;
+  @Field(() => WorkTimerPhase)
+  diag: WorkTimerPhase;
+  @Field(() => WorkTimerPhase)
+  rep: WorkTimerPhase;
+  @Field(() => Date)
+  serverNow: Date;
+}
+
 @ObjectType()
 export class StatDiagAssignment {
   @Field({ nullable: true })

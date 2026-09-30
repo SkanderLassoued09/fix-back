@@ -1,5 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 import { AppService } from './app.service';
+import { withErrorContext } from './common/error-context';
 
 @Controller()
 export class AppController {
@@ -7,6 +8,10 @@ export class AppController {
 
   @Get()
   getHello(): string {
-    return this.appService.getHello();
+    try {
+      return this.appService.getHello();
+    } catch (error) {
+      throw withErrorContext(error, 'AppController.getHello');
+    }
   }
 }

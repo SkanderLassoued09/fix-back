@@ -5,6 +5,7 @@ import {
   StagnationDispatch,
   StagnationDispatchType,
 } from './entities/stagnation-dispatch.entity';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * Historique des rappels de stagnation d'UNE DI. La collection est cléée par la
@@ -24,18 +25,25 @@ export class StagnationDispatchResolver {
     @Args('idNum') idNum: string,
     @Args('limit', { type: () => Int, nullable: true }) limit?: number,
   ): Promise<StagnationDispatchType[]> {
-    if (!idNum) return [];
-    const rows = await this.dispatchModel
-      .find({ idNum })
-      .sort({ date: -1 })
-      .limit(Math.min(Math.max(limit ?? 100, 1), 365))
-      .lean();
-    return (rows as any[]).map((r) => ({
-      date: r.date,
-      idNum: r.idNum,
-      status: r.status,
-      ageHours: r.ageHours ?? null,
-      sentAt: r.sentAt ?? null,
-    }));
+    try {
+      if (!idNum) return [];
+      const rows = await this.dispatchModel
+        .find({ idNum })
+        .sort({ date: -1 })
+        .limit(Math.min(Math.max(limit ?? 100, 1), 365))
+        .lean();
+      return (rows as any[]).map((r) => ({
+        date: r.date,
+        idNum: r.idNum,
+        status: r.status,
+        ageHours: r.ageHours ?? null,
+        sentAt: r.sentAt ?? null,
+      }));
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'StagnationDispatchResolver.diStagnationHistory',
+      );
+    }
   }
 }

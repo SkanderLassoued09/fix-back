@@ -7,6 +7,7 @@ import { Company } from 'src/company/entities/company.entity';
 import { Profile } from 'src/profile/entities/profile.entity';
 import { Stat } from 'src/stat/entities/stat.entity';
 import { currentActor } from 'src/common/request-context';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * Channels — each `sendXxx` posts through `postEmbed(channel, payload)`.
@@ -92,13 +93,17 @@ const STATUS_LABELS: Record<string, string> = {
 
 /** Human-readable byte size for embeds (`1.4 MB`) — display only. */
 function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.min(
-    Math.floor(Math.log(bytes) / Math.log(1024)),
-    units.length - 1,
-  );
-  return `${(bytes / 1024 ** i).toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
+  try {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.min(
+      Math.floor(Math.log(bytes) / Math.log(1024)),
+      units.length - 1,
+    );
+    return `${(bytes / 1024 ** i).toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
+  } catch (error) {
+    throw withErrorContext(error, 'formatBytes');
+  }
 }
 
 interface EmbedContext {
@@ -155,17 +160,21 @@ export class DiscordHookService {
    * skipped by `postEmbed` (warned once, never throws).
    */
   private urlFor(channel: ChannelKey): string {
-    switch (channel) {
-      case 'GENERAL_ATELIER':
-        return process.env.DISCORD_GENERAL_ATELIER_WEBHOOK || '';
-      case 'SERVICE_TECHNIQUE':
-        return process.env.DISCORD_SERVICE_TECHNIQUE_WEBHOOK || '';
-      case 'DEMANDE_PDF':
-        return process.env.DISCORD_DEMANDE_PDF_WEBHOOK || '';
-      case 'ERROR':
-        return process.env.DISCORD_ERROR_WEBHOOK || '';
-      case 'APP_ALERT':
-        return process.env.DISCORD_APP_ALERT_WEBHOOK || '';
+    try {
+      switch (channel) {
+        case 'GENERAL_ATELIER':
+          return process.env.DISCORD_GENERAL_ATELIER_WEBHOOK || '';
+        case 'SERVICE_TECHNIQUE':
+          return process.env.DISCORD_SERVICE_TECHNIQUE_WEBHOOK || '';
+        case 'DEMANDE_PDF':
+          return process.env.DISCORD_DEMANDE_PDF_WEBHOOK || '';
+        case 'ERROR':
+          return process.env.DISCORD_ERROR_WEBHOOK || '';
+        case 'APP_ALERT':
+          return process.env.DISCORD_APP_ALERT_WEBHOOK || '';
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.urlFor');
     }
   }
 
@@ -180,23 +189,27 @@ export class DiscordHookService {
     channel: ChannelKey,
     payload: object,
   ): Promise<void> {
-    // 🔕 GATE — coupe À LA SOURCE tout ce qui passe par ici quand
-    // DISCORD_NOTIFS_DISABLED vaut true (ouvert : false).
-    //
-    // Hors gate (appellent `deliverEmbed` DIRECTEMENT) :
-    //   - RETOUR 1/2/3, STAGNATION, RAPPEL STOCK MAGASIN, SAUVEGARDE BDD ;
-    //   - canal ERROR (`sendOperationalError`) — canal d'ALERTE, pas du bruit
-    //     DI : coupé, les pannes n'étaient plus visibles que dans un fichier
-    //     de log que personne ne surveille ;
-    //   - digest DiArchive (`sendDiArchiveDigest`) — aucun autre canal : le
-    //     cron calculait tout et ne publiait rien.
-    // ▶️ Pour réactiver le flux DI : passer DISCORD_NOTIFS_DISABLED à false.
-    //    ⚠️ Avant de le faire : il n'y a ni file d'attente ni gestion du 429
-    //    (Discord limite à ~5 req/s par webhook).
-    if (DISCORD_NOTIFS_DISABLED) {
-      return;
+    try {
+      // 🔕 GATE — coupe À LA SOURCE tout ce qui passe par ici quand
+      // DISCORD_NOTIFS_DISABLED vaut true (ouvert : false).
+      //
+      // Hors gate (appellent `deliverEmbed` DIRECTEMENT) :
+      //   - RETOUR 1/2/3, STAGNATION, RAPPEL STOCK MAGASIN, SAUVEGARDE BDD ;
+      //   - canal ERROR (`sendOperationalError`) — canal d'ALERTE, pas du bruit
+      //     DI : coupé, les pannes n'étaient plus visibles que dans un fichier
+      //     de log que personne ne surveille ;
+      //   - digest DiArchive (`sendDiArchiveDigest`) — aucun autre canal : le
+      //     cron calculait tout et ne publiait rien.
+      // ▶️ Pour réactiver le flux DI : passer DISCORD_NOTIFS_DISABLED à false.
+      //    ⚠️ Avant de le faire : il n'y a ni file d'attente ni gestion du 429
+      //    (Discord limite à ~5 req/s par webhook).
+      if (DISCORD_NOTIFS_DISABLED) {
+        return;
+      }
+      return await this.deliverEmbed(channel, payload);
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.postEmbed');
     }
-    return this.deliverEmbed(channel, payload);
   }
 
   /** Envoi bas-niveau réel vers le webhook Discord (sans gate). Utilisé
@@ -206,32 +219,36 @@ export class DiscordHookService {
     channel: ChannelKey,
     payload: object,
   ): Promise<void> {
-    const url = this.urlFor(channel);
-    if (!url) {
-      if (!this.warnedMissing.has(channel)) {
-        this.warnedMissing.add(channel);
-        this.logger.warn(
-          `Discord channel "${channel}" webhook is not configured → post skipped`,
-        );
-      }
-      return;
-    }
     try {
-      // TIMEOUT OBLIGATOIRE : axios attend indéfiniment par défaut
-      // (`timeout: 0`). Or 31 de ces envois sont `await`és DANS des mutations
-      // DI : un webhook qui pend bloquait la mutation, donc la requête du
-      // technicien, sans limite.
-      await axios.post(url, payload, { timeout: DISCORD_TIMEOUT_MS });
-    } catch (err) {
-      // Le CODE HTTP est journalisé : sans lui, un 429 (limite de débit
-      // Discord — 4 cas constatés dans les journaux) était indiscernable
-      // d'un 404 ou d'une panne réseau.
-      const status = (err as any)?.response?.status;
-      this.logger.warn(
-        `Discord post to "${channel}" failed${
+      const url = this.urlFor(channel);
+      if (!url) {
+        if (!this.warnedMissing.has(channel)) {
+          this.warnedMissing.add(channel);
+          this.logger.warn(
+            `Discord channel "${channel}" webhook is not configured → post skipped`,
+          );
+        }
+        return;
+      }
+      try {
+        // TIMEOUT OBLIGATOIRE : axios attend indéfiniment par défaut
+        // (`timeout: 0`). Or 31 de ces envois sont `await`és DANS des mutations
+        // DI : un webhook qui pend bloquait la mutation, donc la requête du
+        // technicien, sans limite.
+        await axios.post(url, payload, { timeout: DISCORD_TIMEOUT_MS });
+      } catch (err) {
+        // Le CODE HTTP est journalisé : sans lui, un 429 (limite de débit
+        // Discord — 4 cas constatés dans les journaux) était indiscernable
+        // d'un 404 ou d'une panne réseau.
+        const status = (err as any)?.response?.status;
+        this.logger.warn(
+          `Discord post to "${channel}" failed${
           status ? ` [HTTP ${status}]` : ''
         }: ${(err as Error)?.message}`,
-      );
+        );
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.deliverEmbed');
     }
   }
 
@@ -262,28 +279,32 @@ export class DiscordHookService {
     channelName: string,
     nodeEnv: string,
   ): Promise<void> {
-    const envUpper = (nodeEnv || '').toUpperCase();
-    const tunis = new Intl.DateTimeFormat('fr-FR', {
-      timeZone: 'Africa/Tunis',
-      dateStyle: 'short',
-      timeStyle: 'medium',
-    }).format(new Date());
-    await axios.post(webhookUrl, {
-      embeds: [
-        {
-          title: `🔔 TEST WEBHOOK — [${envUpper}]`,
-          description: `Si vous voyez ce message, le canal **${channelName}** de l'environnement **${nodeEnv}** est correctement câblé.`,
-          color: 3447003, // blue
-          fields: [
-            { name: 'Canal', value: channelName, inline: true },
-            { name: 'Environnement', value: envUpper, inline: true },
-            { name: '🕐 Heure (Africa/Tunis)', value: tunis, inline: false },
-          ],
-          footer: { text: 'Fixtronix — diagnostic des webhooks' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const envUpper = (nodeEnv || '').toUpperCase();
+      const tunis = new Intl.DateTimeFormat('fr-FR', {
+        timeZone: 'Africa/Tunis',
+        dateStyle: 'short',
+        timeStyle: 'medium',
+      }).format(new Date());
+      await axios.post(webhookUrl, {
+        embeds: [
+          {
+            title: `🔔 TEST WEBHOOK — [${envUpper}]`,
+            description: `Si vous voyez ce message, le canal **${channelName}** de l'environnement **${nodeEnv}** est correctement câblé.`,
+            color: 3447003, // blue
+            fields: [
+              { name: 'Canal', value: channelName, inline: true },
+              { name: 'Environnement', value: envUpper, inline: true },
+              { name: '🕐 Heure (Africa/Tunis)', value: tunis, inline: false },
+            ],
+            footer: { text: 'Fixtronix — diagnostic des webhooks' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendTestEmbed');
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -292,78 +313,102 @@ export class DiscordHookService {
   // ─────────────────────────────────────────────────────────────────────
 
   resolveStatusLabel(status: string | undefined | null): string {
-    if (!status) return 'Inconnu';
-    return STATUS_LABELS[status] || status;
+    try {
+      if (!status) return 'Inconnu';
+      return STATUS_LABELS[status] || status;
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.resolveStatusLabel');
+    }
   }
 
   private formatProfile(p: any): string {
-    if (!p) return 'N/A';
-    if (p.username) return p.username;
-    const full = `${p.firstName || ''} ${p.lastName || ''}`.trim();
-    return full || 'N/A';
+    try {
+      if (!p) return 'N/A';
+      if (p.username) return p.username;
+      const full = `${p.firstName || ''} ${p.lastName || ''}`.trim();
+      return full || 'N/A';
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.formatProfile');
+    }
   }
 
   async resolveProfileDisplay(value: any): Promise<string> {
-    if (!value) return 'N/A';
-    if (typeof value === 'object') {
-      const display = this.formatProfile(value);
-      if (display !== 'N/A') return display;
-      // object lacks username/name fields — fall back to id lookup
-      if (value._id) {
-        const p = await this.profileModel.findOne({ _id: value._id }).lean();
+    try {
+      if (!value) return 'N/A';
+      if (typeof value === 'object') {
+        const display = this.formatProfile(value);
+        if (display !== 'N/A') return display;
+        // object lacks username/name fields — fall back to id lookup
+        if (value._id) {
+          const p = await this.profileModel.findOne({ _id: value._id }).lean();
+          return this.formatProfile(p);
+        }
+        return 'N/A';
+      }
+      if (typeof value === 'string') {
+        // looks like an id — resolve. If it doesn't match a profile, return
+        // 'N/A' rather than echoing the raw string (avoid id leak).
+        const p = await this.profileModel.findOne({ _id: value }).lean();
         return this.formatProfile(p);
       }
       return 'N/A';
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.resolveProfileDisplay');
     }
-    if (typeof value === 'string') {
-      // looks like an id — resolve. If it doesn't match a profile, return
-      // 'N/A' rather than echoing the raw string (avoid id leak).
-      const p = await this.profileModel.findOne({ _id: value }).lean();
-      return this.formatProfile(p);
-    }
-    return 'N/A';
   }
 
   private formatClient(c: any): string {
-    if (!c) return '';
-    return `${c.first_name || ''} ${c.last_name || ''}`.trim();
+    try {
+      if (!c) return '';
+      return `${c.first_name || ''} ${c.last_name || ''}`.trim();
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.formatClient');
+    }
   }
 
   private async resolveClientName(value: any): Promise<string> {
-    if (!value) return '';
-    if (typeof value === 'object') {
-      const display = this.formatClient(value);
-      if (display) return display;
-      if (value._id) {
-        const c = await this.clientModel.findOne({ _id: value._id }).lean();
+    try {
+      if (!value) return '';
+      if (typeof value === 'object') {
+        const display = this.formatClient(value);
+        if (display) return display;
+        if (value._id) {
+          const c = await this.clientModel.findOne({ _id: value._id }).lean();
+          return this.formatClient(c);
+        }
+        return '';
+      }
+      if (typeof value === 'string') {
+        const c = await this.clientModel.findOne({ _id: value }).lean();
         return this.formatClient(c);
       }
       return '';
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.resolveClientName');
     }
-    if (typeof value === 'string') {
-      const c = await this.clientModel.findOne({ _id: value }).lean();
-      return this.formatClient(c);
-    }
-    return '';
   }
 
   private async resolveCompanyName(value: any): Promise<string> {
-    if (!value) return '';
-    if (typeof value === 'object') {
-      if (value.name) return value.name;
-      if (value._id) {
-        const co: any = await this.companyModel
-          .findOne({ _id: value._id })
-          .lean();
-        return co?.name || '';
+    try {
+      if (!value) return '';
+      if (typeof value === 'object') {
+        if (value.name) return await value.name;
+        if (value._id) {
+          const co: any = await this.companyModel
+            .findOne({ _id: value._id })
+            .lean();
+          return await (co?.name || '');
+        }
+        return '';
+      }
+      if (typeof value === 'string') {
+        const co: any = await this.companyModel.findOne({ _id: value }).lean();
+        return await (co?.name || '');
       }
       return '';
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.resolveCompanyName');
     }
-    if (typeof value === 'string') {
-      const co: any = await this.companyModel.findOne({ _id: value }).lean();
-      return co?.name || '';
-    }
-    return '';
   }
 
   /**
@@ -439,26 +484,30 @@ export class DiscordHookService {
     di: any,
     opts: EmbedContextOptions = {},
   ): Promise<EmbedContext> {
-    const idnum = di?._idnum || 'N/A';
-    const title = di?.title || 'N/A';
-    const [clientName, companyName, actorLabel, techLabel] = await Promise.all([
-      this.resolveClientName(di?.client_id),
-      this.resolveCompanyName(di?.company_id),
-      this.resolveActorLabel(opts.actor),
-      this.resolveTechLabel(di, opts),
-    ]);
-    const useCompany = Boolean(companyName);
-    return {
-      idnum,
-      title,
-      clientName: clientName || 'N/A',
-      companyName: companyName || 'N/A',
-      customerLabel: useCompany ? companyName : clientName || 'N/A',
-      customerFieldName: useCompany ? '🏢 Société' : '👤 Client',
-      statusLabel: this.resolveStatusLabel(di?.status),
-      actorLabel,
-      techLabel,
-    };
+    try {
+      const idnum = di?._idnum || 'N/A';
+      const title = di?.title || 'N/A';
+      const [clientName, companyName, actorLabel, techLabel] = await Promise.all([
+        this.resolveClientName(di?.client_id),
+        this.resolveCompanyName(di?.company_id),
+        this.resolveActorLabel(opts.actor),
+        this.resolveTechLabel(di, opts),
+      ]);
+      const useCompany = Boolean(companyName);
+      return {
+        idnum,
+        title,
+        clientName: clientName || 'N/A',
+        companyName: companyName || 'N/A',
+        customerLabel: useCompany ? companyName : clientName || 'N/A',
+        customerFieldName: useCompany ? '🏢 Société' : '👤 Client',
+        statusLabel: this.resolveStatusLabel(di?.status),
+        actorLabel,
+        techLabel,
+      };
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.buildContext');
+    }
   }
 
   // Build the standard skeleton: DI Number, Title, Customer, Status, Actor,
@@ -468,23 +517,27 @@ export class DiscordHookService {
     statusOverride?: string,
     extraFields: any[] = [],
   ) {
-    return [
-      { name: '🆔 N° DI', value: ctx.idnum, inline: true },
-      { name: '📄 Titre', value: ctx.title },
-      {
-        name: ctx.customerFieldName,
-        value: ctx.customerLabel,
-        inline: true,
-      },
-      {
-        name: '📊 Statut',
-        value: statusOverride || ctx.statusLabel,
-        inline: true,
-      },
-      { name: '🙋 Action par', value: ctx.actorLabel, inline: true },
-      { name: '👨‍🔧 Technicien', value: ctx.techLabel, inline: true },
-      ...extraFields,
-    ];
+    try {
+      return [
+        { name: '🆔 N° DI', value: ctx.idnum, inline: true },
+        { name: '📄 Titre', value: ctx.title },
+        {
+          name: ctx.customerFieldName,
+          value: ctx.customerLabel,
+          inline: true,
+        },
+        {
+          name: '📊 Statut',
+          value: statusOverride || ctx.statusLabel,
+          inline: true,
+        },
+        { name: '🙋 Action par', value: ctx.actorLabel, inline: true },
+        { name: '👨‍🔧 Technicien', value: ctx.techLabel, inline: true },
+        ...extraFields,
+      ];
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.buildBaseFields');
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -493,22 +546,26 @@ export class DiscordHookService {
   // ─────────────────────────────────────────────────────────────────────
 
   async sendDiPendingNotification(di: any) {
-    // Acteur = créateur de la DI (juste aussi pour un import, où la requête
-    // n'est pas celle du créateur) ; remplace l'ancien champ « Créée par ».
-    const ctx = await this.buildContext(di, { actor: di?.createdBy });
+    try {
+      // Acteur = créateur de la DI (juste aussi pour un import, où la requête
+      // n'est pas celle du créateur) ; remplace l'ancien champ « Créée par ».
+      const ctx = await this.buildContext(di, { actor: di?.createdBy });
 
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '📌 DI en attente',
-          description: 'Une nouvelle DI a été créée et est en attente.',
-          color: 16776960, // yellow (pending)
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '📌 DI en attente',
+            description: 'Une nouvelle DI a été créée et est en attente.',
+            color: 16776960, // yellow (pending)
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiPendingNotification');
+    }
   }
 
   async sendDiAssignedToTech({
@@ -520,591 +577,707 @@ export class DiscordHookService {
     stat: any;
     technician: any;
   }) {
-    const ctx = await this.buildContext(
-      {
-        ...di,
-        // The Stat carries the live status when DI hasn't been refetched yet.
-        status: stat?.status || di?.status,
-      },
-      { tech: { diag: technician } },
-    );
-
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
+    try {
+      const ctx = await this.buildContext(
         {
-          title: '🛠️ DI affectée au technicien',
-          description: 'Une DI a été affectée pour diagnostic.',
-          color: 3447003, // blue
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
+          ...di,
+          // The Stat carries the live status when DI hasn't been refetched yet.
+          status: stat?.status || di?.status,
         },
-      ],
-    });
+        { tech: { diag: technician } },
+      );
+
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🛠️ DI affectée au technicien',
+            description: 'Une DI a été affectée pour diagnostic.',
+            color: 3447003, // blue
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiAssignedToTech');
+    }
   }
 
   async sendComponentsSentToCoordinator(di: any) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '📦 Composants envoyés pour validation',
-          description: 'Le magasin a envoyé des composants à la coordinatrice pour validation.',
-          color: 10197915,
-          fields: this.buildBaseFields(ctx, undefined, [
-            { name: '🏬 Source', value: 'Magasin', inline: true },
-            { name: '🧑‍💼 Destinataire', value: 'Coordinatrice', inline: true },
-          ]),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '📦 Composants envoyés pour validation',
+            description: 'Le magasin a envoyé des composants à la coordinatrice pour validation.',
+            color: 10197915,
+            fields: this.buildBaseFields(ctx, undefined, [
+              { name: '🏬 Source', value: 'Magasin', inline: true },
+              { name: '🧑‍💼 Destinataire', value: 'Coordinatrice', inline: true },
+            ]),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendComponentsSentToCoordinator');
+    }
   }
 
   async sendComponentsConfirmedByCoordinator(di: any) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '✅ Composants validés par la coordinatrice',
-          description:
-            'La coordinatrice a validé les composants. Le magasin peut continuer.',
-          color: 3066993,
-          fields: this.buildBaseFields(ctx, undefined, [
-            { name: '🧑‍💼 Source', value: 'Coordinatrice', inline: true },
-            { name: '🏬 Destinataire', value: 'Magasin', inline: true },
-          ]),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '✅ Composants validés par la coordinatrice',
+            description:
+              'La coordinatrice a validé les composants. Le magasin peut continuer.',
+            color: 3066993,
+            fields: this.buildBaseFields(ctx, undefined, [
+              { name: '🧑‍💼 Source', value: 'Coordinatrice', inline: true },
+              { name: '🏬 Destinataire', value: 'Magasin', inline: true },
+            ]),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendComponentsConfirmedByCoordinator');
+    }
   }
 
   async sendDiInMagasin(di: any) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '🏬 DI arrivée au magasin',
-          description: 'La DI est maintenant au magasin.',
-          color: 5763719,
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🏬 DI arrivée au magasin',
+            description: 'La DI est maintenant au magasin.',
+            color: 5763719,
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiInMagasin');
+    }
   }
 
   async sendDiStatusPending3(di: any) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '🚚 DI passée en attente réparation',
-          description: 'La DI passe à l\'étape suivante (attente réparation).',
-          color: 5793266,
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🚚 DI passée en attente réparation',
+            description: 'La DI passe à l\'étape suivante (attente réparation).',
+            color: 5793266,
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiStatusPending3');
+    }
   }
 
   async sendDiDevisUploaded({ di, fileName }: { di: any; fileName: string }) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '🧾 Devis ajouté',
-          description: 'Un devis a été ajouté.',
-          color: 10181046,
-          fields: this.buildBaseFields(ctx, undefined, [
-            { name: '📎 Fichier', value: fileName },
-          ]),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🧾 Devis ajouté',
+            description: 'Un devis a été ajouté.',
+            color: 10181046,
+            fields: this.buildBaseFields(ctx, undefined, [
+              { name: '📎 Fichier', value: fileName },
+            ]),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiDevisUploaded');
+    }
   }
 
   async sendDiBCUploaded({ di, fileName }: { di: any; fileName: string }) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '📄 Bon de commande ajouté',
-          description: 'Un bon de commande (PDF) a été ajouté pour cette DI.',
-          color: 3447003,
-          fields: this.buildBaseFields(ctx, undefined, [
-            { name: '📎 Fichier', value: fileName },
-          ]),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '📄 Bon de commande ajouté',
+            description: 'Un bon de commande (PDF) a été ajouté pour cette DI.',
+            color: 3447003,
+            fields: this.buildBaseFields(ctx, undefined, [
+              { name: '📎 Fichier', value: fileName },
+            ]),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiBCUploaded');
+    }
   }
 
   async sendDiPriceAssigned({ di, price }: { di: any; price: number }) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '💰 Prix affecté à la DI',
-          description: 'La facturation a été effectuée.',
-          color: 3066993,
-          fields: this.buildBaseFields(ctx, undefined, [
-            { name: '💵 Prix', value: `${price} TND`, inline: true },
-          ]),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '💰 Prix affecté à la DI',
+            description: 'La facturation a été effectuée.',
+            color: 3066993,
+            fields: this.buildBaseFields(ctx, undefined, [
+              { name: '💵 Prix', value: `${price} TND`, inline: true },
+            ]),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiPriceAssigned');
+    }
   }
 
   async sendDiStatusPending2(di: any) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '📦 Statut de la DI mis à jour',
-          description: 'La DI est passée à l\'étape suivante (attente de facturation).',
-          color: 15844367,
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '📦 Statut de la DI mis à jour',
+            description: 'La DI est passée à l\'étape suivante (attente de facturation).',
+            color: 15844367,
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiStatusPending2');
+    }
   }
 
   async sendDiPricing(di: any) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '💰 DI prête pour facturation',
-          description: 'Une DI est prête pour la facturation. Action requise par l\'administrateur.',
-          color: 16753920,
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '💰 DI prête pour facturation',
+            description: 'Une DI est prête pour la facturation. Action requise par l\'administrateur.',
+            color: 16753920,
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiPricing');
+    }
   }
 
   async sendDiStatusPending1(di: any) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '🆕 DI créée',
-          description: 'Une nouvelle DI est entrée dans le flux.',
-          color: 16776960,
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🆕 DI créée',
+            description: 'Une nouvelle DI est entrée dans le flux.',
+            color: 16776960,
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiStatusPending1');
+    }
   }
 
   async sendDiIgnored(di: any) {
-    const ctx = await this.buildContext(di);
-    const isMax = (di?.ignoreCount || 0) >= 3;
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: isMax ? '⚠️ DI ignorée (limite atteinte)' : '⚠️ DI ignorée',
-          description: isMax
-            ? 'Cette DI a atteint la limite maximale d\'ignorance.'
-            : 'Cette DI a été ignorée.',
-          color: isMax ? 15158332 : 16776960,
-          fields: this.buildBaseFields(ctx, undefined, [
-            {
-              name: '🚫 Nombre d\'ignorances',
-              value: `${di?.ignoreCount ?? 0}/3`,
-              inline: true,
-            },
-          ]),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      const isMax = (di?.ignoreCount || 0) >= 3;
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: isMax ? '⚠️ DI ignorée (limite atteinte)' : '⚠️ DI ignorée',
+            description: isMax
+              ? 'Cette DI a atteint la limite maximale d\'ignorance.'
+              : 'Cette DI a été ignorée.',
+            color: isMax ? 15158332 : 16776960,
+            fields: this.buildBaseFields(ctx, undefined, [
+              {
+                name: '🚫 Nombre d\'ignorances',
+                value: `${di?.ignoreCount ?? 0}/3`,
+                inline: true,
+              },
+            ]),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiIgnored');
+    }
   }
 
   async sendDiFinished(di: any) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '🎉 DI terminée',
-          description: 'Le processus de réparation est entièrement terminé.',
-          color: 3066993,
-          fields: this.buildBaseFields(ctx, undefined, [
-            {
-              name: '💵 Prix final',
-              value: di?.price ? `${di.price} TND` : 'N/A',
-              inline: true,
-            },
-          ]),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🎉 DI terminée',
+            description: 'Le processus de réparation est entièrement terminé.',
+            color: 3066993,
+            fields: this.buildBaseFields(ctx, undefined, [
+              {
+                name: '💵 Prix final',
+                value: di?.price ? `${di.price} TND` : 'N/A',
+                inline: true,
+              },
+            ]),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiFinished');
+    }
   }
 
   async sendDiIrreparable(di: any) {
-    // Clôture d'une DI NON RÉPARABLE (statut terminal IRREPARABLE) — l'équipement
-    // ne peut pas être réparé. Miroir de `sendDiFinished` (canal général).
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '⛔ DI irréparable',
-          description: 'Équipement jugé non réparable — dossier clôturé.',
-          color: 15158332,
-          fields: this.buildBaseFields(ctx, undefined, [
-            {
-              name: '💵 Diagnostic',
-              value: di?.price ? `${di.price} TND` : 'Non facturé',
-              inline: true,
-            },
-          ]),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      // Clôture d'une DI NON RÉPARABLE (statut terminal IRREPARABLE) — l'équipement
+      // ne peut pas être réparé. Miroir de `sendDiFinished` (canal général).
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '⛔ DI irréparable',
+            description: 'Équipement jugé non réparable — dossier clôturé.',
+            color: 15158332,
+            fields: this.buildBaseFields(ctx, undefined, [
+              {
+                name: '💵 Diagnostic',
+                value: di?.price ? `${di.price} TND` : 'Non facturé',
+                inline: true,
+              },
+            ]),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiIrreparable');
+    }
   }
 
   async sendDiInReparation(di: any) {
-    // Called when status is REPARATION — assigned but not yet started.
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '🛠️ DI prête pour réparation',
-          description:
-            'Phase de réparation affectée. En attente du démarrage par le technicien.',
-          color: 15105570,
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      // Called when status is REPARATION — assigned but not yet started.
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🛠️ DI prête pour réparation',
+            description:
+              'Phase de réparation affectée. En attente du démarrage par le technicien.',
+            color: 15105570,
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiInReparation');
+    }
   }
 
   async sendDiagnosticFinished({ di, diag }: { di: any; diag: any }) {
-    const ctx = await this.buildContext(di);
-    const repairable = diag?.can_be_repaired
-      ? '✅ Réparable'
-      : '🚫 Non réparable';
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '✅ Diagnostic terminé',
-          description: 'Le technicien a terminé le diagnostic.',
-          color: diag?.can_be_repaired ? 3066993 : 15158332,
-          fields: this.buildBaseFields(ctx, undefined, [
-            { name: '🧾 Résultat', value: repairable, inline: true },
-            {
-              name: '📦 Contient PDR',
-              value: diag?.contain_pdr ? 'Oui' : 'Non',
-              inline: true,
-            },
-            {
-              name: '⚠️ Erreur Fixtronix',
-              value: diag?.isErrorFromFixtronix ? 'Oui' : 'Non',
-              inline: true,
-            },
-            {
-              name: '📝 Note de diagnostic',
-              value: diag?.remarque_tech_diagnostic || 'N/A',
-            },
-          ]),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      const repairable = diag?.can_be_repaired
+        ? '✅ Réparable'
+        : '🚫 Non réparable';
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '✅ Diagnostic terminé',
+            description: 'Le technicien a terminé le diagnostic.',
+            color: diag?.can_be_repaired ? 3066993 : 15158332,
+            fields: this.buildBaseFields(ctx, undefined, [
+              { name: '🧾 Résultat', value: repairable, inline: true },
+              {
+                name: '📦 Contient PDR',
+                value: diag?.contain_pdr ? 'Oui' : 'Non',
+                inline: true,
+              },
+              {
+                name: '⚠️ Erreur Fixtronix',
+                value: diag?.isErrorFromFixtronix ? 'Oui' : 'Non',
+                inline: true,
+              },
+              {
+                name: '📝 Note de diagnostic',
+                value: diag?.remarque_tech_diagnostic || 'N/A',
+              },
+            ]),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiagnosticFinished');
+    }
   }
 
   // ── Pause / Resume / Started / Assigned (workflow refinements) ──────
 
   async sendDiagnosticPaused(di: any) {
+    try {
 
-    const ctx = await this.buildContext(di);
-    const note = di?.remarque_tech_diagnostic;
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '⏸️ Diagnostic en pause',
-          description: 'Le technicien a mis le diagnostic en pause.',
-          color: 9807270,
-          fields: this.buildBaseFields(
-            ctx,
-            undefined,
-            note ? [{ name: '📝 Note', value: note }] : [],
-          ),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+      const ctx = await this.buildContext(di);
+      const note = di?.remarque_tech_diagnostic;
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '⏸️ Diagnostic en pause',
+            description: 'Le technicien a mis le diagnostic en pause.',
+            color: 9807270,
+            fields: this.buildBaseFields(
+              ctx,
+              undefined,
+              note ? [{ name: '📝 Note', value: note }] : [],
+            ),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiagnosticPaused');
+    }
   }
 
   async sendDiagnosticResumed(di: any) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '▶️ Diagnostic repris',
-          description: 'Le technicien a repris le diagnostic.',
-          color: 3447003,
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '▶️ Diagnostic repris',
+            description: 'Le technicien a repris le diagnostic.',
+            color: 3447003,
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiagnosticResumed');
+    }
   }
 
   async sendDiagnosticStarted(di: any) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '🔍 Diagnostic démarré',
-          description: 'Le technicien a démarré le diagnostic.',
-          color: 3447003,
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🔍 Diagnostic démarré',
+            description: 'Le technicien a démarré le diagnostic.',
+            color: 3447003,
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiagnosticStarted');
+    }
   }
 
   async sendDiagnosticAssigned(di: any, technician?: any) {
-    // Le technicien affecté est passé en surcharge (prioritaire sur la ligne
-    // Stat) : le champ standard « 👨‍🔧 Technicien » le porte, sans doublon.
-    const ctx = await this.buildContext(di, {
-      tech: { diag: technician ?? undefined },
-    });
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '🧭 Diagnostic affecté',
-          description: 'La coordinatrice a affecté cette DI au diagnostic.',
-          color: 3447003,
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      // Le technicien affecté est passé en surcharge (prioritaire sur la ligne
+      // Stat) : le champ standard « 👨‍🔧 Technicien » le porte, sans doublon.
+      const ctx = await this.buildContext(di, {
+        tech: { diag: technician ?? undefined },
+      });
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🧭 Diagnostic affecté',
+            description: 'La coordinatrice a affecté cette DI au diagnostic.',
+            color: 3447003,
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiagnosticAssigned');
+    }
   }
 
   async sendReparationStarted(di: any) {
+    try {
 
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '🔧 Réparation démarrée',
-          description: 'Le technicien a démarré la réparation.',
-          color: 15105570,
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🔧 Réparation démarrée',
+            description: 'Le technicien a démarré la réparation.',
+            color: 15105570,
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendReparationStarted');
+    }
   }
 
   async sendReparationPaused(di: any) {
+    try {
 
-    const ctx = await this.buildContext(di);
-    const note = di?.remarque_tech_repair;
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '⏸️ Réparation en pause',
-          description: 'Le technicien a mis la réparation en pause.',
-          color: 9807270,
-          fields: this.buildBaseFields(
-            ctx,
-            undefined,
-            note ? [{ name: '📝 Note', value: note }] : [],
-          ),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+      const ctx = await this.buildContext(di);
+      const note = di?.remarque_tech_repair;
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '⏸️ Réparation en pause',
+            description: 'Le technicien a mis la réparation en pause.',
+            color: 9807270,
+            fields: this.buildBaseFields(
+              ctx,
+              undefined,
+              note ? [{ name: '📝 Note', value: note }] : [],
+            ),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendReparationPaused');
+    }
   }
 
   async sendReparationResumed(di: any) {
+    try {
 
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '▶️ Réparation reprise',
-          description: 'Le technicien a repris la réparation.',
-          color: 15105570,
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '▶️ Réparation reprise',
+            description: 'Le technicien a repris la réparation.',
+            color: 15105570,
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendReparationResumed');
+    }
   }
 
   async sendDiNegotiation1(di: any) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '🤝 Négociation démarrée (Manager)',
-          description: 'La DI est entrée dans le premier tour de négociation (Manager).',
-          color: 15418782,
-          fields: this.buildBaseFields(ctx, undefined, [
-            {
-              name: '💵 Prix initial',
-              value: di?.price ? `${di.price} TND` : 'N/A',
-              inline: true,
-            },
-          ]),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🤝 Négociation démarrée (Manager)',
+            description: 'La DI est entrée dans le premier tour de négociation (Manager).',
+            color: 15418782,
+            fields: this.buildBaseFields(ctx, undefined, [
+              {
+                name: '💵 Prix initial',
+                value: di?.price ? `${di.price} TND` : 'N/A',
+                inline: true,
+              },
+            ]),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiNegotiation1');
+    }
   }
 
   async sendDiNegotiation2(di: any) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '🤝 Négociation escaladée (Admin Manager)',
-          description: 'Négociation escaladée vers l\'Admin Manager.',
-          color: 15418782,
-          fields: this.buildBaseFields(ctx, undefined, [
-            {
-              name: '💵 Prix initial',
-              value: di?.price ? `${di.price} TND` : 'N/A',
-              inline: true,
-            },
-            {
-              name: '💵 Prix final',
-              value: di?.final_price ? `${di.final_price} TND` : 'N/A',
-              inline: true,
-            },
-          ]),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🤝 Négociation escaladée (Admin Manager)',
+            description: 'Négociation escaladée vers l\'Admin Manager.',
+            color: 15418782,
+            fields: this.buildBaseFields(ctx, undefined, [
+              {
+                name: '💵 Prix initial',
+                value: di?.price ? `${di.price} TND` : 'N/A',
+                inline: true,
+              },
+              {
+                name: '💵 Prix final',
+                value: di?.final_price ? `${di.final_price} TND` : 'N/A',
+                inline: true,
+              },
+            ]),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiNegotiation2');
+    }
   }
 
   async sendDiCancelled(di: any) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '❌ DI annulée',
-          description: 'La DI a été annulée pendant la négociation.',
-          color: 15158332,
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '❌ DI annulée',
+            description: 'La DI a été annulée pendant la négociation.',
+            color: 15158332,
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiCancelled');
+    }
   }
 
   async sendDiAbandoned(di: any, motif: string) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '🚫 Diagnostic abandonné',
-          description: `Un technicien a abandonné le diagnostic — motif : ${motif}. DI renvoyée à la coordination (PENDING1) pour réaffectation.`,
-          color: 15105570,
-          fields: this.buildBaseFields(ctx),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🚫 Diagnostic abandonné',
+            description: `Un technicien a abandonné le diagnostic — motif : ${motif}. DI renvoyée à la coordination (PENDING1) pour réaffectation.`,
+            color: 15105570,
+            fields: this.buildBaseFields(ctx),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiAbandoned');
+    }
   }
 
   async sendDiRetour(di: any, level: 1 | 2 | 3) {
-    // Technicien du cycle QUI REVIENT (niveau - 1) : la ligne Stat du nouveau
-    // cycle n'existe pas encore au moment du retour.
-    const ctx = await this.buildContext(di, { cycle: level - 1 });
-    const titles = {
-      1: '🔁 Retour 1',
-      2: '🔁 Retour 2',
-      3: '⚠️ Retour 3 — Alerte finale',
-    };
-    const colors = { 1: 15844367, 2: 15105570, 3: 15158332 } as const;
-    const descriptions = {
-      1: 'DI retournée pour la première fois.',
-      2: 'DI retournée une seconde fois.',
-      3: 'La DI a atteint le niveau de retour final. Attention opérationnelle requise.',
-    };
-    // Notification CONSERVÉE → envoi direct (contourne le gate de postEmbed).
-    await this.deliverEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: titles[level],
-          description: descriptions[level],
-          color: colors[level],
-          fields: this.buildBaseFields(ctx, undefined, [
-            {
-              name: '🚫 Nombre d\'ignorances',
-              value: `${di?.ignoreCount ?? 0}/3`,
-              inline: true,
-            },
-          ]),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      // Technicien du cycle QUI REVIENT (niveau - 1) : la ligne Stat du nouveau
+      // cycle n'existe pas encore au moment du retour.
+      const ctx = await this.buildContext(di, { cycle: level - 1 });
+      const titles = {
+        1: '🔁 Retour 1',
+        2: '🔁 Retour 2',
+        3: '⚠️ Retour 3 — Alerte finale',
+      };
+      const colors = { 1: 15844367, 2: 15105570, 3: 15158332 } as const;
+      const descriptions = {
+        1: 'DI retournée pour la première fois.',
+        2: 'DI retournée une seconde fois.',
+        3: 'La DI a atteint le niveau de retour final. Attention opérationnelle requise.',
+      };
+      // Notification CONSERVÉE → envoi direct (contourne le gate de postEmbed).
+      await this.deliverEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: titles[level],
+            description: descriptions[level],
+            color: colors[level],
+            fields: this.buildBaseFields(ctx, undefined, [
+              {
+                name: '🚫 Nombre d\'ignorances',
+                value: `${di?.ignoreCount ?? 0}/3`,
+                inline: true,
+              },
+            ]),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiRetour');
+    }
   }
 
   async sendDiBLUploaded({ di, fileName }: { di: any; fileName: string }) {
-    const ctx = await this.buildContext(di);
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '📦 Bon de livraison ajouté',
-          description: 'Un bon de livraison (BL) a été ajouté.',
-          color: 3447003,
-          fields: this.buildBaseFields(ctx, undefined, [
-            { name: '📎 Fichier', value: fileName },
-          ]),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const ctx = await this.buildContext(di);
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '📦 Bon de livraison ajouté',
+            description: 'Un bon de livraison (BL) a été ajouté.',
+            color: 3447003,
+            fields: this.buildBaseFields(ctx, undefined, [
+              { name: '📎 Fichier', value: fileName },
+            ]),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiBLUploaded');
+    }
   }
 
   /**
@@ -1126,50 +1299,54 @@ export class DiscordHookService {
     message: string;
     payload?: Record<string, any>;
   }) {
-    const severityColor: Record<string, number> = {
-      CRITICAL: 15158332, // red
-      HIGH: 15158332, // red
-      MEDIUM: 16289308, // orange
-      LOW: 10070709, // grey
-    };
-    const severityEmoji: Record<string, string> = {
-      CRITICAL: '🛑',
-      HIGH: '🚨',
-      MEDIUM: '⚠️',
-      LOW: 'ℹ️',
-    };
+    try {
+      const severityColor: Record<string, number> = {
+        CRITICAL: 15158332, // red
+        HIGH: 15158332, // red
+        MEDIUM: 16289308, // orange
+        LOW: 10070709, // grey
+      };
+      const severityEmoji: Record<string, string> = {
+        CRITICAL: '🛑',
+        HIGH: '🚨',
+        MEDIUM: '⚠️',
+        LOW: 'ℹ️',
+      };
 
-    // Keep payload compact for the embed — full payload is in the daily
-    // log file. Discord rejects fields > 1024 chars.
-    let payloadPreview = '_(vide)_';
-    if (entry.payload && Object.keys(entry.payload).length) {
-      const json = JSON.stringify(entry.payload, null, 0);
-      payloadPreview = '```json\n' + (json.length > 800 ? json.slice(0, 797) + '...' : json) + '\n```';
+      // Keep payload compact for the embed — full payload is in the daily
+      // log file. Discord rejects fields > 1024 chars.
+      let payloadPreview = '_(vide)_';
+      if (entry.payload && Object.keys(entry.payload).length) {
+        const json = JSON.stringify(entry.payload, null, 0);
+        payloadPreview = '```json\n' + (json.length > 800 ? json.slice(0, 797) + '...' : json) + '\n```';
+      }
+
+      // HORS GATE (`deliverEmbed`) : le gate visait le BRUIT du flux DI, pas le
+      // canal d'ALERTE. Passé par `postEmbed`, il était coupé lui aussi — les
+      // pannes opérationnelles n'étaient alors plus visibles QUE dans
+      // `logs/YYYY-MM/errors-*.log`, un fichier que personne ne surveille. Même
+      // traitement que les alertes de sauvegarde BDD.
+      await this.deliverEmbed('ERROR', {
+        embeds: [
+          {
+            title: `${severityEmoji[entry.severity] ?? '⚠️'} FIXTRONIX · Erreur opérationnelle`,
+            description: entry.error,
+            color: severityColor[entry.severity] ?? severityColor.MEDIUM,
+            fields: [
+              { name: '🧩 Module', value: `\`${entry.module}/${entry.submodule}\``, inline: true },
+              { name: '🛠 Méthode', value: `\`${entry.method}\``, inline: true },
+              { name: '🎚 Gravité', value: entry.severity, inline: true },
+              { name: '💬 Message', value: entry.message?.slice(0, 1000) || '_(aucun message)_' },
+              { name: '📦 Données', value: payloadPreview },
+            ],
+            footer: { text: "Fixtronix · Capture d'erreur" },
+            timestamp: entry.timestamp,
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendOperationalError');
     }
-
-    // HORS GATE (`deliverEmbed`) : le gate visait le BRUIT du flux DI, pas le
-    // canal d'ALERTE. Passé par `postEmbed`, il était coupé lui aussi — les
-    // pannes opérationnelles n'étaient alors plus visibles QUE dans
-    // `logs/YYYY-MM/errors-*.log`, un fichier que personne ne surveille. Même
-    // traitement que les alertes de sauvegarde BDD.
-    await this.deliverEmbed('ERROR', {
-      embeds: [
-        {
-          title: `${severityEmoji[entry.severity] ?? '⚠️'} FIXTRONIX · Erreur opérationnelle`,
-          description: entry.error,
-          color: severityColor[entry.severity] ?? severityColor.MEDIUM,
-          fields: [
-            { name: '🧩 Module', value: `\`${entry.module}/${entry.submodule}\``, inline: true },
-            { name: '🛠 Méthode', value: `\`${entry.method}\``, inline: true },
-            { name: '🎚 Gravité', value: entry.severity, inline: true },
-            { name: '💬 Message', value: entry.message?.slice(0, 1000) || '_(aucun message)_' },
-            { name: '📦 Données', value: payloadPreview },
-          ],
-          footer: { text: "Fixtronix · Capture d'erreur" },
-          timestamp: entry.timestamp,
-        },
-      ],
-    });
   }
 
   /**
@@ -1186,46 +1363,50 @@ export class DiscordHookService {
     messages: { message: string; drift: boolean }[];
     suppressed?: number;
   }) {
-    // Legacy dev-only channel; separate from the 5 channel-migration URLs.
-    // Off in prod (DISCORD_NOTIFY_VALIDATION=false). Skip silently if no
-    // URL configured so a missing var never breaks the drift-watch path.
-    const url = process.env.DISCORD_VALIDATION_WEBHOOK_URL;
-    if (!url) {
-      this.logger.warn(
-        'DISCORD_VALIDATION_WEBHOOK_URL not set → validation error not sent',
-      );
-      return;
-    }
-    const hasDrift = entry.messages.some((m) => m.drift);
-    const lines = entry.messages
-      .map((m) => `${m.drift ? '⚠ ' : '• '}${m.message}`)
-      .join('\n')
-      .slice(0, 1000);
-    const description =
-      (hasDrift ? '⚠ **Drift front↔back probable**\n' : '') +
-      (entry.suppressed
-        ? `_(+${entry.suppressed} occurrence(s) regroupée(s) depuis le dernier envoi)_`
-        : '');
+    try {
+      // Legacy dev-only channel; separate from the 5 channel-migration URLs.
+      // Off in prod (DISCORD_NOTIFY_VALIDATION=false). Skip silently if no
+      // URL configured so a missing var never breaks the drift-watch path.
+      const url = process.env.DISCORD_VALIDATION_WEBHOOK_URL;
+      if (!url) {
+        this.logger.warn(
+          'DISCORD_VALIDATION_WEBHOOK_URL not set → validation error not sent',
+        );
+        return;
+      }
+      const hasDrift = entry.messages.some((m) => m.drift);
+      const lines = entry.messages
+        .map((m) => `${m.drift ? '⚠ ' : '• '}${m.message}`)
+        .join('\n')
+        .slice(0, 1000);
+      const description =
+        (hasDrift ? '⚠ **Drift front↔back probable**\n' : '') +
+        (entry.suppressed
+          ? `_(+${entry.suppressed} occurrence(s) regroupée(s) depuis le dernier envoi)_`
+          : '');
 
-    await axios.post(url, {
-      embeds: [
-        {
-          title: `🧪 Validation échouée · ${entry.operation}`,
-          description: description || undefined,
-          color: 16289308, // orange
-          fields: [
-            { name: '🌐 Env', value: `\`${entry.env}\``, inline: true },
-            {
-              name: '🔗 Correlation',
-              value: `\`${entry.correlationId}\``,
-              inline: true,
-            },
-            { name: '📋 Messages', value: lines || '_(aucun)_' },
-          ],
-          footer: { text: 'Fixtronix · Validation drift watch (dev)' },
-        },
-      ],
-    });
+      await axios.post(url, {
+        embeds: [
+          {
+            title: `🧪 Validation échouée · ${entry.operation}`,
+            description: description || undefined,
+            color: 16289308, // orange
+            fields: [
+              { name: '🌐 Env', value: `\`${entry.env}\``, inline: true },
+              {
+                name: '🔗 Correlation',
+                value: `\`${entry.correlationId}\``,
+                inline: true,
+              },
+              { name: '📋 Messages', value: lines || '_(aucun)_' },
+            ],
+            footer: { text: 'Fixtronix · Validation drift watch (dev)' },
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendValidationError');
+    }
   }
 
   /**
@@ -1247,17 +1428,21 @@ export class DiscordHookService {
    * dépôt à dépendre de ce détail d'implémentation.
    */
   async sendDiArchiveDigest(description: string): Promise<void> {
-    await this.deliverEmbed('APP_ALERT', {
-      embeds: [
-        {
-          title: '📊 FIXTRONIX · Suivi documentaire DiArchive',
-          description,
-          color: 16289308, // amber — constant across cases per user spec
-          footer: { text: 'Fixtronix · Digest quotidien' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      await this.deliverEmbed('APP_ALERT', {
+        embeds: [
+          {
+            title: '📊 FIXTRONIX · Suivi documentaire DiArchive',
+            description,
+            color: 16289308, // amber — constant across cases per user spec
+            footer: { text: 'Fixtronix · Digest quotidien' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDiArchiveDigest');
+    }
   }
 
   async sendDbBackupSuccess(info: {
@@ -1271,51 +1456,55 @@ export class DiscordHookService {
     kept?: number;
     env?: string;
   }): Promise<void> {
-    const envUpper = (info.env || process.env.NODE_ENV || 'development')
-      .trim()
-      .toUpperCase();
-    const when = new Intl.DateTimeFormat('fr-FR', {
-      timeZone: process.env.APP_TIMEZONE || 'Africa/Tunis',
-      dateStyle: 'short',
-      timeStyle: 'short',
-    }).format(new Date());
+    try {
+      const envUpper = (info.env || process.env.NODE_ENV || 'development')
+        .trim()
+        .toUpperCase();
+      const when = new Intl.DateTimeFormat('fr-FR', {
+        timeZone: process.env.APP_TIMEZONE || 'Africa/Tunis',
+        dateStyle: 'short',
+        timeStyle: 'short',
+      }).format(new Date());
 
-    await this.deliverEmbed('APP_ALERT', {
-      embeds: [
-        {
-          title: `💾 Sauvegarde BDD OK — [${envUpper}]`,
-          description:
-            `Base \`${info.dbName}\` sauvegardée sur Google Drive · ${when} (Africa/Tunis).` +
-            (info.webViewLink ? `\n[Ouvrir le fichier](${info.webViewLink})` : ''),
-          color: 3066993, // green
-          fields: [
-            { name: '📄 Fichier', value: info.fileName, inline: false },
-            {
-              name: '📦 Taille',
-              value: formatBytes(info.sizeBytes),
-              inline: true,
-            },
-            {
-              name: '⏱️ Durée',
-              value: `${(info.durationMs / 1000).toFixed(1)} s`,
-              inline: true,
-            },
-            { name: '📁 Dossier', value: info.folderName, inline: true },
-            ...(typeof info.deleted === 'number'
-              ? [
-                  {
-                    name: '🧹 Rétention',
-                    value: `${info.kept ?? '?'} conservé(s), ${info.deleted} supprimé(s)`,
-                    inline: false,
-                  },
-                ]
-              : []),
-          ],
-          footer: { text: 'Fixtronix · Sauvegarde quotidienne' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+      await this.deliverEmbed('APP_ALERT', {
+        embeds: [
+          {
+            title: `💾 Sauvegarde BDD OK — [${envUpper}]`,
+            description:
+              `Base \`${info.dbName}\` sauvegardée sur Google Drive · ${when} (Africa/Tunis).` +
+              (info.webViewLink ? `\n[Ouvrir le fichier](${info.webViewLink})` : ''),
+            color: 3066993, // green
+            fields: [
+              { name: '📄 Fichier', value: info.fileName, inline: false },
+              {
+                name: '📦 Taille',
+                value: formatBytes(info.sizeBytes),
+                inline: true,
+              },
+              {
+                name: '⏱️ Durée',
+                value: `${(info.durationMs / 1000).toFixed(1)} s`,
+                inline: true,
+              },
+              { name: '📁 Dossier', value: info.folderName, inline: true },
+              ...(typeof info.deleted === 'number'
+                ? [
+                    {
+                      name: '🧹 Rétention',
+                      value: `${info.kept ?? '?'} conservé(s), ${info.deleted} supprimé(s)`,
+                      inline: false,
+                    },
+                  ]
+                : []),
+            ],
+            footer: { text: 'Fixtronix · Sauvegarde quotidienne' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDbBackupSuccess');
+    }
   }
 
   /**
@@ -1329,41 +1518,45 @@ export class DiscordHookService {
     step?: string;
     env?: string;
   }): Promise<void> {
-    const envUpper = (info.env || process.env.NODE_ENV || 'development')
-      .trim()
-      .toUpperCase();
-    const when = new Intl.DateTimeFormat('fr-FR', {
-      timeZone: process.env.APP_TIMEZONE || 'Africa/Tunis',
-      dateStyle: 'short',
-      timeStyle: 'short',
-    }).format(new Date());
+    try {
+      const envUpper = (info.env || process.env.NODE_ENV || 'development')
+        .trim()
+        .toUpperCase();
+      const when = new Intl.DateTimeFormat('fr-FR', {
+        timeZone: process.env.APP_TIMEZONE || 'Africa/Tunis',
+        dateStyle: 'short',
+        timeStyle: 'short',
+      }).format(new Date());
 
-    await this.deliverEmbed('APP_ALERT', {
-      embeds: [
-        {
-          title: `🚨 ÉCHEC sauvegarde BDD — [${envUpper}]`,
-          description:
-            `**Aucune sauvegarde n'a été produite ce soir.** Intervention requise · ${when} (Africa/Tunis).`,
-          color: 15158332, // red
-          fields: [
-            {
-              name: '🗄️ Base',
-              value: info.dbName || 'inconnue',
-              inline: true,
-            },
-            { name: '🔧 Étape', value: info.step || 'inconnue', inline: true },
-            {
-              name: '❌ Motif',
-              // Discord hard-caps a field value at 1024 chars.
-              value: (info.reason || 'inconnu').slice(0, 1024),
-              inline: false,
-            },
-          ],
-          footer: { text: 'Fixtronix · Sauvegarde quotidienne' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+      await this.deliverEmbed('APP_ALERT', {
+        embeds: [
+          {
+            title: `🚨 ÉCHEC sauvegarde BDD — [${envUpper}]`,
+            description:
+              `**Aucune sauvegarde n'a été produite ce soir.** Intervention requise · ${when} (Africa/Tunis).`,
+            color: 15158332, // red
+            fields: [
+              {
+                name: '🗄️ Base',
+                value: info.dbName || 'inconnue',
+                inline: true,
+              },
+              { name: '🔧 Étape', value: info.step || 'inconnue', inline: true },
+              {
+                name: '❌ Motif',
+                // Discord hard-caps a field value at 1024 chars.
+                value: (info.reason || 'inconnu').slice(0, 1024),
+                inline: false,
+              },
+            ],
+            footer: { text: 'Fixtronix · Sauvegarde quotidienne' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDbBackupFailure');
+    }
   }
 
   /**
@@ -1377,38 +1570,42 @@ export class DiscordHookService {
     fileName?: string;
     env?: string;
   }): Promise<void> {
-    const envUpper = (info.env || process.env.NODE_ENV || 'development')
-      .trim()
-      .toUpperCase();
-    const when = new Intl.DateTimeFormat('fr-FR', {
-      timeZone: process.env.APP_TIMEZONE || 'Africa/Tunis',
-      dateStyle: 'short',
-      timeStyle: 'short',
-    }).format(new Date());
+    try {
+      const envUpper = (info.env || process.env.NODE_ENV || 'development')
+        .trim()
+        .toUpperCase();
+      const when = new Intl.DateTimeFormat('fr-FR', {
+        timeZone: process.env.APP_TIMEZONE || 'Africa/Tunis',
+        dateStyle: 'short',
+        timeStyle: 'short',
+      }).format(new Date());
 
-    await this.deliverEmbed('APP_ALERT', {
-      embeds: [
-        {
-          title: `🚨 ÉCHEC export ACTIONS EN COURS — [${envUpper}]`,
-          description: `Le fichier Drive n'a PAS été mis à jour · ${when} (Africa/Tunis).`,
-          color: 15158332, // red
-          fields: [
-            {
-              name: '📄 Fichier',
-              value: info.fileName || 'inconnu',
-              inline: true,
-            },
-            {
-              name: '❌ Motif',
-              value: (info.reason || 'inconnu').slice(0, 1024),
-              inline: false,
-            },
-          ],
-          footer: { text: 'Fixtronix · Export ACTIONS EN COURS' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+      await this.deliverEmbed('APP_ALERT', {
+        embeds: [
+          {
+            title: `🚨 ÉCHEC export ACTIONS EN COURS — [${envUpper}]`,
+            description: `Le fichier Drive n'a PAS été mis à jour · ${when} (Africa/Tunis).`,
+            color: 15158332, // red
+            fields: [
+              {
+                name: '📄 Fichier',
+                value: info.fileName || 'inconnu',
+                inline: true,
+              },
+              {
+                name: '❌ Motif',
+                value: (info.reason || 'inconnu').slice(0, 1024),
+                inline: false,
+              },
+            ],
+            footer: { text: 'Fixtronix · Export ACTIONS EN COURS' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendActionsEnCoursExportFailure');
+    }
   }
 
   /**
@@ -1426,55 +1623,59 @@ export class DiscordHookService {
     metadata?: Record<string, any>;
     createdAt?: Date;
   }) {
-    const meta = alert.metadata ?? {};
-    const ageHours =
-      typeof meta.ageMs === 'number'
-        ? Math.round(meta.ageMs / (60 * 60 * 1000))
-        : null;
-    const statusLabel = meta.status
-      ? STATUS_LABELS[meta.status] ?? meta.status
-      : 'unknown';
-    const severityColor: Record<string, number> = {
-      CRITICAL: 15158332, // red
-      WARNING: 16289308, // orange
-      INFO: 3447003, // blue
-    };
-    const severityEmoji: Record<string, string> = {
-      CRITICAL: '🚨',
-      WARNING: '⚠️',
-      INFO: 'ℹ️',
-    };
+    try {
+      const meta = alert.metadata ?? {};
+      const ageHours =
+        typeof meta.ageMs === 'number'
+          ? Math.round(meta.ageMs / (60 * 60 * 1000))
+          : null;
+      const statusLabel = meta.status
+        ? STATUS_LABELS[meta.status] ?? meta.status
+        : 'unknown';
+      const severityColor: Record<string, number> = {
+        CRITICAL: 15158332, // red
+        WARNING: 16289308, // orange
+        INFO: 3447003, // blue
+      };
+      const severityEmoji: Record<string, string> = {
+        CRITICAL: '🚨',
+        WARNING: '⚠️',
+        INFO: 'ℹ️',
+      };
 
-    await this.deliverEmbed('APP_ALERT', {
-      embeds: [
-        {
-          title: `${severityEmoji[alert.severity] ?? '⚠️'} FIXTRONIX · Alerte opérationnelle`,
-          description:
-            'Cette DI est restée trop longtemps dans le même statut et nécessite une revue opérationnelle.',
-          color: severityColor[alert.severity] ?? severityColor.WARNING,
-          fields: [
-            { name: '🧾 DI', value: String(meta.diIdnum ?? alert.diId), inline: true },
-            { name: '📌 Statut', value: statusLabel, inline: true },
-            { name: '🎚 Gravité', value: alert.severity, inline: true },
-            {
-              name: '⏱ Durée de stagnation',
-              value: ageHours !== null ? `${ageHours}h` : 'n/a',
-              inline: true,
-            },
-            { name: '🪧 Seuil', value: alert.type, inline: true },
-            {
-              name: '🆔 Alerte',
-              value: alert._id,
-              inline: true,
-            },
-          ],
-          footer: { text: 'Fixtronix · Opérations' },
-          timestamp: (alert.createdAt ?? new Date()).toISOString
-            ? (alert.createdAt as Date).toISOString()
-            : new Date().toISOString(),
-        },
-      ],
-    });
+      await this.deliverEmbed('APP_ALERT', {
+        embeds: [
+          {
+            title: `${severityEmoji[alert.severity] ?? '⚠️'} FIXTRONIX · Alerte opérationnelle`,
+            description:
+              'Cette DI est restée trop longtemps dans le même statut et nécessite une revue opérationnelle.',
+            color: severityColor[alert.severity] ?? severityColor.WARNING,
+            fields: [
+              { name: '🧾 DI', value: String(meta.diIdnum ?? alert.diId), inline: true },
+              { name: '📌 Statut', value: statusLabel, inline: true },
+              { name: '🎚 Gravité', value: alert.severity, inline: true },
+              {
+                name: '⏱ Durée de stagnation',
+                value: ageHours !== null ? `${ageHours}h` : 'n/a',
+                inline: true,
+              },
+              { name: '🪧 Seuil', value: alert.type, inline: true },
+              {
+                name: '🆔 Alerte',
+                value: alert._id,
+                inline: true,
+              },
+            ],
+            footer: { text: 'Fixtronix · Opérations' },
+            timestamp: (alert.createdAt ?? new Date()).toISOString
+              ? (alert.createdAt as Date).toISOString()
+              : new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendStagnationAlert');
+    }
   }
 
   /**
@@ -1494,56 +1695,60 @@ export class DiscordHookService {
     }>;
     generatedAt?: Date;
   }): Promise<void> {
-    const severityColor: Record<string, number> = {
-      CRITICAL: 15158332, // red
-      WARNING: 16289308, // orange
-      INFO: 3447003, // blue
-    };
-    const severityEmoji: Record<string, string> = {
-      CRITICAL: '🔴',
-      WARNING: '🟠',
-      INFO: '🟡',
-    };
-    // Embed color follows the worst severity that actually has DIs in it.
-    const rank: Record<string, number> = { INFO: 0, WARNING: 1, CRITICAL: 2 };
-    const worst = digest.buckets
-      .filter((b) => b.count > 0)
-      .reduce(
-        (acc, b) =>
-          (rank[b.severity] ?? 0) > (rank[acc] ?? 0) ? b.severity : acc,
-        'INFO',
-      );
+    try {
+      const severityColor: Record<string, number> = {
+        CRITICAL: 15158332, // red
+        WARNING: 16289308, // orange
+        INFO: 3447003, // blue
+      };
+      const severityEmoji: Record<string, string> = {
+        CRITICAL: '🔴',
+        WARNING: '🟠',
+        INFO: '🟡',
+      };
+      // Embed color follows the worst severity that actually has DIs in it.
+      const rank: Record<string, number> = { INFO: 0, WARNING: 1, CRITICAL: 2 };
+      const worst = digest.buckets
+        .filter((b) => b.count > 0)
+        .reduce(
+          (acc, b) =>
+            (rank[b.severity] ?? 0) > (rank[acc] ?? 0) ? b.severity : acc,
+          'INFO',
+        );
 
-    const when = new Intl.DateTimeFormat('fr-FR', {
-      timeZone: 'Africa/Tunis',
-      dateStyle: 'short',
-      timeStyle: 'short',
-    }).format(digest.generatedAt ?? new Date());
+      const when = new Intl.DateTimeFormat('fr-FR', {
+        timeZone: 'Africa/Tunis',
+        dateStyle: 'short',
+        timeStyle: 'short',
+      }).format(digest.generatedAt ?? new Date());
 
-    const fields = digest.buckets.map((b) => ({
-      name: `${severityEmoji[b.severity] ?? '•'} ${b.label} — ${b.count}`,
-      value: b.count
-        ? (
-            b.examples.map((ref) => `• ${ref}`).join('\n') +
-            (b.count > b.examples.length
-              ? `\n… +${b.count - b.examples.length} autre(s)`
-              : '')
-          ).slice(0, 1024)
-        : '_aucune_',
-    }));
+      const fields = digest.buckets.map((b) => ({
+        name: `${severityEmoji[b.severity] ?? '•'} ${b.label} — ${b.count}`,
+        value: b.count
+          ? (
+              b.examples.map((ref) => `• ${ref}`).join('\n') +
+              (b.count > b.examples.length
+                ? `\n… +${b.count - b.examples.length} autre(s)`
+                : '')
+            ).slice(0, 1024)
+          : '_aucune_',
+      }));
 
-    await this.deliverEmbed('APP_ALERT', {
-      embeds: [
-        {
-          title: '📊 Rappel quotidien — DI stagnantes',
-          description: `${digest.total} DI en attente, regroupées par ancienneté · ${when} (Africa/Tunis).`,
-          color: severityColor[worst] ?? severityColor.INFO,
-          fields,
-          footer: { text: 'Fixtronix · Rappel stagnation' },
-          timestamp: (digest.generatedAt ?? new Date()).toISOString(),
-        },
-      ],
-    });
+      await this.deliverEmbed('APP_ALERT', {
+        embeds: [
+          {
+            title: '📊 Rappel quotidien — DI stagnantes',
+            description: `${digest.total} DI en attente, regroupées par ancienneté · ${when} (Africa/Tunis).`,
+            color: severityColor[worst] ?? severityColor.INFO,
+            fields,
+            footer: { text: 'Fixtronix · Rappel stagnation' },
+            timestamp: (digest.generatedAt ?? new Date()).toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendStagnationDigest');
+    }
   }
 
   /**
@@ -1560,38 +1765,42 @@ export class DiscordHookService {
     examples: string[]; // _idNum refs (up to ~8)
     spreadsheetUrl?: string; // lien PROFOND vers l'onglet du jour (gid)
   }): Promise<void> {
-    const when = new Intl.DateTimeFormat('fr-FR', {
-      timeZone: 'Africa/Tunis',
-      dateStyle: 'short',
-      timeStyle: 'short',
-    }).format(new Date());
-    // Lien cliquable vers la feuille du jour — titre + ligne « Détails ».
-    const link = report.spreadsheetUrl
-      ? `\n🔗 [Ouvrir la feuille « ${report.date} »](${report.spreadsheetUrl})`
-      : '';
-    await this.deliverEmbed('APP_ALERT', {
-      embeds: [
-        {
-          title: '⏳ Rappel quotidien — DI stagnantes',
-          ...(report.spreadsheetUrl ? { url: report.spreadsheetUrl } : {}),
-          description:
-            `${report.count} DI stagnante(s) dans le même statut depuis ≥ ${report.seuil} ${report.unite}.\n` +
-            `Feuille du jour : \`${report.date}\` · ${when} (Africa/Tunis).` +
-            link,
-          color: 16289308, // orange (WARNING)
-          fields: report.examples.length
-            ? [
-                {
-                  name: `Exemples (${report.examples.length})`,
-                  value: report.examples.map((r) => `• ${r}`).join('\n'),
-                },
-              ]
-            : [],
-          footer: { text: 'Fixtronix · Rappel stagnation quotidien' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    try {
+      const when = new Intl.DateTimeFormat('fr-FR', {
+        timeZone: 'Africa/Tunis',
+        dateStyle: 'short',
+        timeStyle: 'short',
+      }).format(new Date());
+      // Lien cliquable vers la feuille du jour — titre + ligne « Détails ».
+      const link = report.spreadsheetUrl
+        ? `\n🔗 [Ouvrir la feuille « ${report.date} »](${report.spreadsheetUrl})`
+        : '';
+      await this.deliverEmbed('APP_ALERT', {
+        embeds: [
+          {
+            title: '⏳ Rappel quotidien — DI stagnantes',
+            ...(report.spreadsheetUrl ? { url: report.spreadsheetUrl } : {}),
+            description:
+              `${report.count} DI stagnante(s) dans le même statut depuis ≥ ${report.seuil} ${report.unite}.\n` +
+              `Feuille du jour : \`${report.date}\` · ${when} (Africa/Tunis).` +
+              link,
+            color: 16289308, // orange (WARNING)
+            fields: report.examples.length
+              ? [
+                  {
+                    name: `Exemples (${report.examples.length})`,
+                    value: report.examples.map((r) => `• ${r}`).join('\n'),
+                  },
+                ]
+              : [],
+            footer: { text: 'Fixtronix · Rappel stagnation quotidien' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendDailyStagnationReminder');
+    }
   }
 
   /**
@@ -1616,51 +1825,55 @@ export class DiscordHookService {
       examples: string;
     };
   }): Promise<void> {
-    const when = new Intl.DateTimeFormat('fr-FR', {
-      timeZone: 'Africa/Tunis',
-      dateStyle: 'short',
-      timeStyle: 'short',
-    }).format(new Date());
+    try {
+      const when = new Intl.DateTimeFormat('fr-FR', {
+        timeZone: 'Africa/Tunis',
+        dateStyle: 'short',
+        timeStyle: 'short',
+      }).format(new Date());
 
-    const fields: Array<{ name: string; value: string }> = [];
-    if (report.rupture.count) {
-      fields.push({
-        name: `\u{1F534} Rupture (${report.rupture.count})`,
-        value: report.rupture.examples || '—',
-      });
-    }
-    if (report.low.count) {
-      fields.push({
-        name: `\u{1F7E0} Bientôt vide \u2264${report.threshold} (${report.low.count})`,
-        value: report.low.examples || '—',
-      });
-    }
-    if (report.incomplete.affected) {
-      fields.push({
-        name: `\u{1F4DD} Fiches à compléter (${report.incomplete.affected})`,
-        value:
-          `Statut : ${report.incomplete.status} · Prix : ${report.incomplete.price} · ` +
-          `Quantité : ${report.incomplete.qty}\n` +
-          (report.incomplete.examples || '—'),
-      });
-    }
+      const fields: Array<{ name: string; value: string }> = [];
+      if (report.rupture.count) {
+        fields.push({
+          name: `\u{1F534} Rupture (${report.rupture.count})`,
+          value: report.rupture.examples || '—',
+        });
+      }
+      if (report.low.count) {
+        fields.push({
+          name: `\u{1F7E0} Bientôt vide \u2264${report.threshold} (${report.low.count})`,
+          value: report.low.examples || '—',
+        });
+      }
+      if (report.incomplete.affected) {
+        fields.push({
+          name: `\u{1F4DD} Fiches à compléter (${report.incomplete.affected})`,
+          value:
+            `Statut : ${report.incomplete.status} · Prix : ${report.incomplete.price} · ` +
+            `Quantité : ${report.incomplete.qty}\n` +
+            (report.incomplete.examples || '—'),
+        });
+      }
 
-    const summary = report.incomplete.affected
-      ? `Une fiche au statut vide n'est ni décrémentée ni surveillée : la compléter la fait entrer dans le suivi de stock.`
-      : `Stock à réapprovisionner.`;
+      const summary = report.incomplete.affected
+        ? `Une fiche au statut vide n'est ni décrémentée ni surveillée : la compléter la fait entrer dans le suivi de stock.`
+        : `Stock à réapprovisionner.`;
 
-    await this.deliverEmbed(STOCK_REMINDER_CHANNEL, {
-      embeds: [
-        {
-          title: '\u{1F4E6} Rappel matinal — stock magasin',
-          description: `${summary}\n${when} (Africa/Tunis).`,
-          color: 16289308, // orange (WARNING)
-          fields,
-          footer: { text: 'Fixtronix · Rappel stock magasin' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+      await this.deliverEmbed(STOCK_REMINDER_CHANNEL, {
+        embeds: [
+          {
+            title: '\u{1F4E6} Rappel matinal — stock magasin',
+            description: `${summary}\n${when} (Africa/Tunis).`,
+            color: 16289308, // orange (WARNING)
+            fields,
+            footer: { text: 'Fixtronix · Rappel stock magasin' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendMagasinStockReminder');
+    }
   }
 
   /**
@@ -1679,57 +1892,61 @@ export class DiscordHookService {
     profile?: any;
     categoryName?: string;
   }) {
+    try {
 
-    const author = await this.resolveProfileDisplay(profile);
-    const role = profile?.role ? ` · ${profile.role}` : '';
-    // 0 = initial value of a composant created without a price → « — ».
-    const priceLine = (v: any) =>
-      Number(v) > 0
-        ? `${Number(v).toLocaleString('fr-TN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} TND`
-        : '—';
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '🧩 Nouveau composant catalogue',
-          description: `Le composant **${composant?.name ?? '—'}** a été ajouté au catalogue.`,
-          color: 3066993, // green — non-critical informational
-          fields: [
-            {
-              name: '👤 Auteur',
-              value: `${author}${role}`,
-              inline: true,
-            },
-            {
-              name: '🏷️ Catégorie',
-              value: categoryName || composant?.category_composant_id || '—',
-              inline: true,
-            },
-            {
-              name: '📦 Package',
-              value: composant?.package || '—',
-              inline: true,
-            },
-            {
-              name: '💵 Prix achat',
-              value: priceLine(composant?.prix_achat),
-              inline: true,
-            },
-            {
-              name: '💰 Prix vente',
-              value: priceLine(composant?.prix_vente),
-              inline: true,
-            },
-            {
-              name: '📊 Stock',
-              value: String(composant?.quantity_stocked ?? 0),
-              inline: true,
-            },
-          ],
-          footer: { text: 'Fixtronix · Catalogue' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+      const author = await this.resolveProfileDisplay(profile);
+      const role = profile?.role ? ` · ${profile.role}` : '';
+      // 0 = initial value of a composant created without a price → « — ».
+      const priceLine = (v: any) =>
+        Number(v) > 0
+          ? `${Number(v).toLocaleString('fr-TN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} TND`
+          : '—';
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🧩 Nouveau composant catalogue',
+            description: `Le composant **${composant?.name ?? '—'}** a été ajouté au catalogue.`,
+            color: 3066993, // green — non-critical informational
+            fields: [
+              {
+                name: '👤 Auteur',
+                value: `${author}${role}`,
+                inline: true,
+              },
+              {
+                name: '🏷️ Catégorie',
+                value: categoryName || composant?.category_composant_id || '—',
+                inline: true,
+              },
+              {
+                name: '📦 Package',
+                value: composant?.package || '—',
+                inline: true,
+              },
+              {
+                name: '💵 Prix achat',
+                value: priceLine(composant?.prix_achat),
+                inline: true,
+              },
+              {
+                name: '💰 Prix vente',
+                value: priceLine(composant?.prix_vente),
+                inline: true,
+              },
+              {
+                name: '📊 Stock',
+                value: String(composant?.quantity_stocked ?? 0),
+                inline: true,
+              },
+            ],
+            footer: { text: 'Fixtronix · Catalogue' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendComposantCreated');
+    }
   }
 
   /**
@@ -1749,33 +1966,37 @@ export class DiscordHookService {
     assignedBy?: any;
     activeDiCount?: number;
   }) {
+    try {
 
-    // Technicien réparation + affecteur passés en surcharge : ils alimentent les
-    // champs standards « 👨‍🔧 Technicien » et « 🙋 Action par ».
-    const ctx = await this.buildContext(di, {
-      tech: { rep: technician },
-      actor: assignedBy,
-    });
-    const extras: Array<{ name: string; value: string; inline?: boolean }> = [];
-    if (Number.isFinite(activeDiCount)) {
-      extras.push({
-        name: '📋 DI actifs (tech)',
-        value: String(activeDiCount),
-        inline: true,
+      // Technicien réparation + affecteur passés en surcharge : ils alimentent les
+      // champs standards « 👨‍🔧 Technicien » et « 🙋 Action par ».
+      const ctx = await this.buildContext(di, {
+        tech: { rep: technician },
+        actor: assignedBy,
       });
+      const extras: Array<{ name: string; value: string; inline?: boolean }> = [];
+      if (Number.isFinite(activeDiCount)) {
+        extras.push({
+          name: '📋 DI actifs (tech)',
+          value: String(activeDiCount),
+          inline: true,
+        });
+      }
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '🛠️ Réparation affectée',
+            description: 'Le coordinateur a affecté ce DI à un technicien réparation.',
+            color: 15105570, // orange
+            fields: this.buildBaseFields(ctx, undefined, extras),
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendReparationAssigned');
     }
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
-        {
-          title: '🛠️ Réparation affectée',
-          description: 'Le coordinateur a affecté ce DI à un technicien réparation.',
-          color: 15105570, // orange
-          fields: this.buildBaseFields(ctx, undefined, extras),
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
   }
 
   /**
@@ -1794,91 +2015,103 @@ export class DiscordHookService {
     di?: any;
     profile?: any;
   }) {
-    const authorName = profile
-      ? `${profile.firstName ?? ''} ${profile.lastName ?? ''}`.trim() ||
-        profile.username ||
-        'Utilisateur'
-      : 'Utilisateur';
-    const fields: Array<{ name: string; value: string; inline?: boolean }> = [
-      { name: '🆔 Référence', value: pv?.reference ?? 'N/A', inline: true },
-      { name: '📝 Titre', value: String(pv?.titre ?? 'N/A').slice(0, 256) },
-      { name: '👤 Créé par', value: authorName, inline: true },
-      {
-        name: '📅 Date réunion',
-        value: pv?.dateReunion
-          ? new Date(pv.dateReunion).toISOString().slice(0, 10)
-          : 'N/A',
-        inline: true,
-      },
-    ];
-    if (pv?.prochaineReunion) {
-      fields.push({
-        name: '📆 Prochaine réunion',
-        value: this.formatReunionDateTime(pv.prochaineReunion),
-        inline: true,
-      });
-    }
-    if (di?._idnum) {
-      fields.push({ name: '🔗 DI liée', value: String(di._idnum), inline: true });
-    }
-    if (pv?.contexteRetour?.niveau) {
-      fields.push({
-        name: '🔁 Niveau Retour',
-        value: String(pv.contexteRetour.niveau),
-        inline: true,
-      });
-    }
-    // Personnes concernées — resolve participant profile ids to display names.
-    const participantsLine = await this.resolveParticipantsLine(
-      pv?.participants,
-    );
-    if (participantsLine) {
-      fields.push({ name: '👥 Participants', value: participantsLine });
-    }
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
+    try {
+      const authorName = profile
+        ? `${profile.firstName ?? ''} ${profile.lastName ?? ''}`.trim() ||
+          profile.username ||
+          'Utilisateur'
+        : 'Utilisateur';
+      const fields: Array<{ name: string; value: string; inline?: boolean }> = [
+        { name: '🆔 Référence', value: pv?.reference ?? 'N/A', inline: true },
+        { name: '📝 Titre', value: String(pv?.titre ?? 'N/A').slice(0, 256) },
+        { name: '👤 Créé par', value: authorName, inline: true },
         {
-          title: '📄 Procès-Verbal de Réunion',
-          description: 'Un PV de réunion vient d\'être enregistré.',
-          color: 3447003, // blue
-          fields,
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
+          name: '📅 Date réunion',
+          value: pv?.dateReunion
+            ? new Date(pv.dateReunion).toISOString().slice(0, 10)
+            : 'N/A',
+          inline: true,
         },
-      ],
-    });
+      ];
+      if (pv?.prochaineReunion) {
+        fields.push({
+          name: '📆 Prochaine réunion',
+          value: this.formatReunionDateTime(pv.prochaineReunion),
+          inline: true,
+        });
+      }
+      if (di?._idnum) {
+        fields.push({ name: '🔗 DI liée', value: String(di._idnum), inline: true });
+      }
+      if (pv?.contexteRetour?.niveau) {
+        fields.push({
+          name: '🔁 Niveau Retour',
+          value: String(pv.contexteRetour.niveau),
+          inline: true,
+        });
+      }
+      // Personnes concernées — resolve participant profile ids to display names.
+      const participantsLine = await this.resolveParticipantsLine(
+        pv?.participants,
+      );
+      if (participantsLine) {
+        fields.push({ name: '👥 Participants', value: participantsLine });
+      }
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '📄 Procès-Verbal de Réunion',
+            description: 'Un PV de réunion vient d\'être enregistré.',
+            color: 3447003, // blue
+            fields,
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendReunionPvCreated');
+    }
   }
 
   /** Africa/Tunis date+time for meeting embeds (reminder needs the hour). */
   private formatReunionDateTime(value: any): string {
-    if (!value) return 'N/A';
-    const d = new Date(value);
-    if (isNaN(d.getTime())) return 'N/A';
-    return new Intl.DateTimeFormat('fr-FR', {
-      timeZone: 'Africa/Tunis',
-      dateStyle: 'short',
-      timeStyle: 'short',
-    }).format(d);
+    try {
+      if (!value) return 'N/A';
+      const d = new Date(value);
+      if (isNaN(d.getTime())) return 'N/A';
+      return new Intl.DateTimeFormat('fr-FR', {
+        timeZone: 'Africa/Tunis',
+        dateStyle: 'short',
+        timeStyle: 'short',
+      }).format(d);
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.formatReunionDateTime');
+    }
   }
 
   /** "Alice Martin (Présent) · Bob Durand (Excusé)" — resolved, capped for the
    *  Discord 1024-char field. Empty string when there are no participants. */
   private async resolveParticipantsLine(participants: any[]): Promise<string> {
-    const list = Array.isArray(participants) ? participants : [];
-    if (!list.length) return '';
-    const statutLabel: Record<string, string> = {
-      PRESENT: 'Présent',
-      ABSENT: 'Absent',
-      EXCUSE: 'Excusé',
-    };
-    const names = await Promise.all(
-      list.slice(0, 30).map(async (p) => {
-        const name = await this.resolveProfileDisplay(p?.profile ?? p);
-        const st = statutLabel[p?.statut] ? ` (${statutLabel[p.statut]})` : '';
-        return `${name}${st}`;
-      }),
-    );
-    return names.join(' · ').slice(0, 1024);
+    try {
+      const list = Array.isArray(participants) ? participants : [];
+      if (!list.length) return '';
+      const statutLabel: Record<string, string> = {
+        PRESENT: 'Présent',
+        ABSENT: 'Absent',
+        EXCUSE: 'Excusé',
+      };
+      const names = await Promise.all(
+        list.slice(0, 30).map(async (p) => {
+          const name = await this.resolveProfileDisplay(p?.profile ?? p);
+          const st = statutLabel[p?.statut] ? ` (${statutLabel[p.statut]})` : '';
+          return `${name}${st}`;
+        }),
+      );
+      return names.join(' · ').slice(0, 1024);
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.resolveParticipantsLine');
+    }
   }
 
   /**
@@ -1894,41 +2127,45 @@ export class DiscordHookService {
     pv: any;
     url?: string | null;
   }): Promise<void> {
-    const fields: Array<{ name: string; value: string; inline?: boolean }> = [
-      { name: '🆔 Référence', value: pv?.reference ?? 'N/A', inline: true },
-      { name: '📝 Titre', value: String(pv?.titre ?? 'N/A').slice(0, 256) },
-      {
-        name: '🕐 Heure (Africa/Tunis)',
-        value: this.formatReunionDateTime(pv?.dateReunion),
-        inline: true,
-      },
-    ];
-    if (pv?.objet) {
-      fields.push({ name: '🎯 Objet', value: String(pv.objet).slice(0, 1024) });
-    }
-    const participantsLine = await this.resolveParticipantsLine(
-      pv?.participants,
-    );
-    if (participantsLine) {
-      fields.push({ name: '👥 Participants', value: participantsLine });
-    }
-    if (url) {
-      fields.push({ name: '🔗 Documenter', value: `[Ouvrir la réunion](${url})` });
-    }
-    await this.postEmbed('GENERAL_ATELIER', {
-      embeds: [
+    try {
+      const fields: Array<{ name: string; value: string; inline?: boolean }> = [
+        { name: '🆔 Référence', value: pv?.reference ?? 'N/A', inline: true },
+        { name: '📝 Titre', value: String(pv?.titre ?? 'N/A').slice(0, 256) },
         {
-          title: '⏰ Rappel — réunion dans ~5 min',
-          ...(url ? { url } : {}),
-          description:
-            'La réunion va commencer. Ouvrez-la pour documenter (ordre du jour, décisions, actions…).',
-          color: 16763904, // amber
-          fields,
-          footer: { text: 'Fixtronix · Rappel réunion' },
-          timestamp: new Date().toISOString(),
+          name: '🕐 Heure (Africa/Tunis)',
+          value: this.formatReunionDateTime(pv?.dateReunion),
+          inline: true,
         },
-      ],
-    });
+      ];
+      if (pv?.objet) {
+        fields.push({ name: '🎯 Objet', value: String(pv.objet).slice(0, 1024) });
+      }
+      const participantsLine = await this.resolveParticipantsLine(
+        pv?.participants,
+      );
+      if (participantsLine) {
+        fields.push({ name: '👥 Participants', value: participantsLine });
+      }
+      if (url) {
+        fields.push({ name: '🔗 Documenter', value: `[Ouvrir la réunion](${url})` });
+      }
+      await this.postEmbed('GENERAL_ATELIER', {
+        embeds: [
+          {
+            title: '⏰ Rappel — réunion dans ~5 min',
+            ...(url ? { url } : {}),
+            description:
+              'La réunion va commencer. Ouvrez-la pour documenter (ordre du jour, décisions, actions…).',
+            color: 16763904, // amber
+            fields,
+            footer: { text: 'Fixtronix · Rappel réunion' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendReunionReminder');
+    }
   }
 
   /**
@@ -1950,54 +2187,58 @@ export class DiscordHookService {
       url?: string;
     }>,
   ): Promise<void> {
-    // DEDICATED APP_ALERT channel only — NO legacy fallback. Resolve + guard
-    // here (not via the best-effort `postEmbed`) so a missing URL or an HTTP
-    // failure THROWS: the SYNC_JIRA_DUE_SOON caller reverts the claimed rows to
-    // PENDING instead of marking them PROCESSED with nothing delivered.
-    const url = this.urlFor('APP_ALERT');
-    if (!url) {
-      throw new Error('Discord APP_ALERT webhook not configured');
-    }
+    try {
+      // DEDICATED APP_ALERT channel only — NO legacy fallback. Resolve + guard
+      // here (not via the best-effort `postEmbed`) so a missing URL or an HTTP
+      // failure THROWS: the SYNC_JIRA_DUE_SOON caller reverts the claimed rows to
+      // PENDING instead of marking them PROCESSED with nothing delivered.
+      const url = this.urlFor('APP_ALERT');
+      if (!url) {
+        throw new Error('Discord APP_ALERT webhook not configured');
+      }
 
-    // Section by responsable (null/empty → "Non assigné").
-    const groups = new Map<string, typeof items>();
-    for (const it of items) {
-      const key = (it.responsable ?? '').trim() || 'Non assigné';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(it);
-    }
+      // Section by responsable (null/empty → "Non assigné").
+      const groups = new Map<string, typeof items>();
+      for (const it of items) {
+        const key = (it.responsable ?? '').trim() || 'Non assigné';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(it);
+      }
 
-    const fmtEcheance = (d?: Date | string | null): string =>
-      d
-        ? new Date(d).toLocaleDateString('fr-FR', { timeZone: 'Africa/Tunis' })
-        : 'N/A';
+      const fmtEcheance = (d?: Date | string | null): string =>
+        d
+          ? new Date(d).toLocaleDateString('fr-FR', { timeZone: 'Africa/Tunis' })
+          : 'N/A';
 
-    // Discord limits: ≤25 fields, field value ≤1024 chars.
-    const fields = [...groups.entries()].slice(0, 25).map(([resp, tasks]) => ({
-      name: `👤 ${resp}`.slice(0, 256),
-      value: tasks
-        .map(
-          (t) =>
-            `• [${t.issueKey}](${t.url ?? ''}) — ${String(t.titre ?? '').slice(
+      // Discord limits: ≤25 fields, field value ≤1024 chars.
+      const fields = [...groups.entries()].slice(0, 25).map(([resp, tasks]) => ({
+        name: `👤 ${resp}`.slice(0, 256),
+        value: tasks
+          .map(
+            (t) =>
+              `• [${t.issueKey}](${t.url ?? ''}) — ${String(t.titre ?? '').slice(
               0,
               120,
             )} _(échéance ${fmtEcheance(t.echeance)})_`,
-        )
-        .join('\n')
-        .slice(0, 1024),
-    }));
+          )
+          .join('\n')
+          .slice(0, 1024),
+      }));
 
-    await axios.post(url, {
-      embeds: [
-        {
-          title: '⏰ Tâches Jira proches échéance',
-          description: `${items.length} tâche(s) à traiter, regroupée(s) par responsable.`,
-          color: 16763904, // amber
-          fields,
-          footer: { text: 'Fixtronix System' },
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+      await axios.post(url, {
+        embeds: [
+          {
+            title: '⏰ Tâches Jira proches échéance',
+            description: `${items.length} tâche(s) à traiter, regroupée(s) par responsable.`,
+            color: 16763904, // amber
+            fields,
+            footer: { text: 'Fixtronix System' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendJiraTasksDigest');
+    }
   }
 }

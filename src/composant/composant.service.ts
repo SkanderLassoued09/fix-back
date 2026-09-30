@@ -14,6 +14,7 @@ import { GraphQLError } from 'graphql';
 import { GoogleDriveService } from 'src/google-drive/google-drive.service';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { withComposantDefaults } from './composant-defaults';
+import { withErrorContext } from '../common/error-context';
 @Injectable()
 export class ComposantService {
   constructor(
@@ -41,18 +42,22 @@ export class ComposantService {
   private async assertCategoryExists(
     categoryId: string | null | undefined,
   ): Promise<void> {
-    if (!categoryId || categoryId === 'null' || categoryId === 'undefined') {
-      return;
-    }
-    const exists = await this.categoryModel.exists({
-      _id: categoryId,
-      isDeleted: { $ne: true },
-    });
-    if (!exists) {
-      throw new GraphQLError(
-        `Catégorie '${categoryId}' introuvable — sélectionnez une catégorie valide.`,
-        { extensions: { code: 'BAD_USER_INPUT' } },
-      );
+    try {
+      if (!categoryId || categoryId === 'null' || categoryId === 'undefined') {
+        return;
+      }
+      const exists = await this.categoryModel.exists({
+        _id: categoryId,
+        isDeleted: { $ne: true },
+      });
+      if (!exists) {
+        throw new GraphQLError(
+          `Catégorie '${categoryId}' introuvable — sélectionnez une catégorie valide.`,
+          { extensions: { code: 'BAD_USER_INPUT' } },
+        );
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantService.assertCategoryExists');
     }
   }
 
@@ -116,20 +121,24 @@ export class ComposantService {
    * compris (suppression douce : un id reste occupé).
    */
   async generateComposantId(): Promise<number> {
-    const prefix = 'Cmp';
-    const rows = await this.ComposantModel.find(
-      { _id: { $regex: `^${prefix}\\d+$` } },
-      { _id: 1 },
-    ).lean();
+    try {
+      const prefix = 'Cmp';
+      const rows = await this.ComposantModel.find(
+        { _id: { $regex: `^${prefix}\\d+$` } },
+        { _id: 1 },
+      ).lean();
 
-    let maxIndex = -1;
-    for (const row of rows) {
-      const parsed = Number(String(row._id).slice(prefix.length));
-      if (Number.isFinite(parsed) && parsed > maxIndex) {
-        maxIndex = parsed;
+      let maxIndex = -1;
+      for (const row of rows) {
+        const parsed = Number(String(row._id).slice(prefix.length));
+        if (Number.isFinite(parsed) && parsed > maxIndex) {
+          maxIndex = parsed;
+        }
       }
+      return maxIndex + 1;
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantService.generateComposantId');
     }
-    return maxIndex + 1;
   }
 
   async createComposant(
@@ -218,11 +227,15 @@ export class ComposantService {
   }
 
   async removeComposant(_id: string): Promise<Composant> {
-    return await this.ComposantModel.findOneAndUpdate(
-      { _id },
-      { $set: { isDeleted: true } },
-      { new: true },
-    );
+    try {
+      return await this.ComposantModel.findOneAndUpdate(
+        { _id },
+        { $set: { isDeleted: true } },
+        { new: true },
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantService.removeComposant');
+    }
   }
 
   async findAllComposants(): Promise<[Composant]> {
@@ -251,45 +264,53 @@ export class ComposantService {
   }
 
   async findOneComposant(name: string): Promise<Composant> {
-    // Aligné sur findAllComposants : un composant soft-supprimé ne doit pas
-    // rester chargeable/modifiable via le modal (il « ressuscitait » sinon).
-    // `$ne: true` et non `false` : les documents hérités SANS champ isDeleted
-    // doivent rester trouvables ({isDeleted: false} ne matche pas un champ
-    // absent en Mongo).
-    const composant = await this.ComposantModel.findOne({
-      name,
-      isDeleted: { $ne: true },
-    }).exec();
-    if (!composant) {
-      // Clean NOT_FOUND instead of returning null into the non-nullable
-      // `Query.findOneComposant` field (which surfaced as an unreadable
-      // "Cannot return null for non-nullable field" internal error).
-      throw new GraphQLError(`Composant '${name}' introuvable.`, {
-        extensions: { code: 'NOT_FOUND' },
-      });
+    try {
+      // Aligné sur findAllComposants : un composant soft-supprimé ne doit pas
+      // rester chargeable/modifiable via le modal (il « ressuscitait » sinon).
+      // `$ne: true` et non `false` : les documents hérités SANS champ isDeleted
+      // doivent rester trouvables ({isDeleted: false} ne matche pas un champ
+      // absent en Mongo).
+      const composant = await this.ComposantModel.findOne({
+        name,
+        isDeleted: { $ne: true },
+      }).exec();
+      if (!composant) {
+        // Clean NOT_FOUND instead of returning null into the non-nullable
+        // `Query.findOneComposant` field (which surfaced as an unreadable
+        // "Cannot return null for non-nullable field" internal error).
+        throw new GraphQLError(`Composant '${name}' introuvable.`, {
+          extensions: { code: 'NOT_FOUND' },
+        });
+      }
+      return composant;
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantService.findOneComposant');
     }
-    return composant;
   }
   async updateComposant(updateComposant: CreateComposantInput) {
-    await this.assertCategoryExists(updateComposant.category_composant_id);
-    const update = await this.ComposantModel.findByIdAndUpdate(
-      updateComposant._id,
-      {
-        $set: {
-          package: updateComposant.package,
-          prix_achat: updateComposant.prix_achat,
-          prix_vente: updateComposant.prix_vente,
-          coming_date: updateComposant.coming_date,
-          link: updateComposant.link,
-          quantity_stocked: updateComposant.quantity_stocked,
-          pdf: updateComposant.pdf,
-          status_composant: updateComposant.status_composant,
-          category_composant_id: updateComposant.category_composant_id,
+    try {
+      await this.assertCategoryExists(updateComposant.category_composant_id);
+      const update = await this.ComposantModel.findByIdAndUpdate(
+        updateComposant._id,
+        {
+          $set: {
+            package: updateComposant.package,
+            prix_achat: updateComposant.prix_achat,
+            prix_vente: updateComposant.prix_vente,
+            coming_date: updateComposant.coming_date,
+            link: updateComposant.link,
+            quantity_stocked: updateComposant.quantity_stocked,
+            pdf: updateComposant.pdf,
+            status_composant: updateComposant.status_composant,
+            category_composant_id: updateComposant.category_composant_id,
+          },
         },
-      },
-      { new: true },
-    );
-    return update;
+        { new: true },
+      );
+      return update;
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantService.updateComposant');
+    }
   }
 
   /**
@@ -299,23 +320,27 @@ export class ComposantService {
    * name/package/price/etc. just to change one field.
    */
   async updateComposantPartial(input: UpdateComposantInput) {
-    const { _id, ...rest } = input;
-    const updateSet: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(rest)) {
-      if (value !== undefined) {
-        updateSet[key] = value;
+    try {
+      const { _id, ...rest } = input;
+      const updateSet: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(rest)) {
+        if (value !== undefined) {
+          updateSet[key] = value;
+        }
       }
-    }
-    if ('category_composant_id' in updateSet) {
-      await this.assertCategoryExists(
-        updateSet.category_composant_id as string,
+      if ('category_composant_id' in updateSet) {
+        await this.assertCategoryExists(
+          updateSet.category_composant_id as string,
+        );
+      }
+      return await this.ComposantModel.findByIdAndUpdate(
+        _id,
+        { $set: updateSet },
+        { new: true },
       );
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantService.updateComposantPartial');
     }
-    return await this.ComposantModel.findByIdAndUpdate(
-      _id,
-      { $set: updateSet },
-      { new: true },
-    );
   }
 
   // this function after recieving ticket from tech
@@ -447,7 +472,11 @@ export class ComposantService {
    * par ici. Même expression que `composant_category.service.ts`.
    */
   private static escapeRegex(input: string): string {
-    return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    try {
+      return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantService.escapeRegex');
+    }
   }
 
   /** Sentinelle du bucket « Sans catégorie » (voir composantCategoryTree). */
@@ -458,9 +487,13 @@ export class ComposantService {
 
   /** Normalise un libellé pour la comparaison (casse + espaces). */
   private static normalizeLabel(value: unknown): string {
-    return String(value ?? '')
-      .trim()
-      .toLowerCase();
+    try {
+      return String(value ?? '')
+        .trim()
+        .toLowerCase();
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantService.normalizeLabel');
+    }
   }
 
   /**
@@ -469,8 +502,12 @@ export class ComposantService {
    * en base (écrites par l'ancien `updateComposant`), pas les types.
    */
   private static isBlankCategoryRef(value: unknown): boolean {
-    const raw = String(value ?? '').trim();
-    return raw === '' || raw === 'undefined' || raw === 'null';
+    try {
+      const raw = String(value ?? '').trim();
+      return raw === '' || raw === 'undefined' || raw === 'null';
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantService.isBlankCategoryRef');
+    }
   }
 
   /**
@@ -484,52 +521,56 @@ export class ComposantService {
   private async buildBrowseFilter(
     input: ComposantBrowseInput,
   ): Promise<Record<string, any>> {
-    // `$ne: true` et non `false` : aligné sur findOneComposant — un document
-    // hérité SANS le champ `isDeleted` ne doit pas disparaître du picker.
-    const filter: Record<string, any> = { isDeleted: { $ne: true } };
+    try {
+      // `$ne: true` et non `false` : aligné sur findOneComposant — un document
+      // hérité SANS le champ `isDeleted` ne doit pas disparaître du picker.
+      const filter: Record<string, any> = { isDeleted: { $ne: true } };
 
-    const search = (input?.search ?? '').trim();
-    if (search.length >= ComposantService.MIN_SEARCH_LENGTH) {
-      filter.name = {
-        $regex: ComposantService.escapeRegex(search),
-        $options: 'i',
-      };
-    }
+      const search = (input?.search ?? '').trim();
+      if (search.length >= ComposantService.MIN_SEARCH_LENGTH) {
+        filter.name = {
+          $regex: ComposantService.escapeRegex(search),
+          $options: 'i',
+        };
+      }
 
-    const categoryId = (input?.categoryId ?? '').trim();
-    if (!categoryId) {
+      const categoryId = (input?.categoryId ?? '').trim();
+      if (!categoryId) {
+        return filter;
+      }
+
+      const categories = await this.categoryModel
+        .find({ isDeleted: { $ne: true } })
+        .select('_id category_composant')
+        .lean();
+
+      if (categoryId === ComposantService.UNCATEGORIZED_ID) {
+        // Tout ce qui ne pointe AUCUNE catégorie connue — ni par _id, ni par
+        // libellé. `$nin` matche aussi les documents où le champ est ABSENT,
+        // ce qui est exactement le comportement voulu.
+        const known = categories.flatMap((c: any) => [
+          String(c._id),
+          String(c.category_composant ?? ''),
+        ]);
+        filter.category_composant_id = {
+          $nin: [...new Set([...known, '', 'undefined', 'null'])],
+        };
+        return filter;
+      }
+
+      const match = categories.find(
+        (c: any) => String(c._id) === categoryId,
+      ) as any;
+      const label = match?.category_composant
+        ? String(match.category_composant)
+        : null;
+      filter.category_composant_id = label
+        ? { $in: [categoryId, label] }
+        : categoryId;
       return filter;
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantService.buildBrowseFilter');
     }
-
-    const categories = await this.categoryModel
-      .find({ isDeleted: { $ne: true } })
-      .select('_id category_composant')
-      .lean();
-
-    if (categoryId === ComposantService.UNCATEGORIZED_ID) {
-      // Tout ce qui ne pointe AUCUNE catégorie connue — ni par _id, ni par
-      // libellé. `$nin` matche aussi les documents où le champ est ABSENT,
-      // ce qui est exactement le comportement voulu.
-      const known = categories.flatMap((c: any) => [
-        String(c._id),
-        String(c.category_composant ?? ''),
-      ]);
-      filter.category_composant_id = {
-        $nin: [...new Set([...known, '', 'undefined', 'null'])],
-      };
-      return filter;
-    }
-
-    const match = categories.find(
-      (c: any) => String(c._id) === categoryId,
-    ) as any;
-    const label = match?.category_composant
-      ? String(match.category_composant)
-      : null;
-    filter.category_composant_id = label
-      ? { $in: [categoryId, label] }
-      : categoryId;
-    return filter;
   }
 
   /**
@@ -680,15 +721,19 @@ export class ComposantService {
   }
 
   async searchComposants(name: string): Promise<any[]> {
-    if (!name || name.trim().length < 2) {
-      return [];
-    }
+    try {
+      if (!name || name.trim().length < 2) {
+        return [];
+      }
 
-    return this.ComposantModel.find({
-      name: { $regex: name, $options: 'i' },
-      isDeleted: false,
-    })
-      .select('_id name')
-      .limit(20);
+      return await this.ComposantModel.find({
+        name: { $regex: name, $options: 'i' },
+        isDeleted: false,
+      })
+        .select('_id name')
+        .limit(20);
+    } catch (error) {
+      throw withErrorContext(error, 'ComposantService.searchComposants');
+    }
   }
 }

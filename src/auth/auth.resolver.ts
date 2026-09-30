@@ -4,6 +4,7 @@ import { Auth } from './entities/auth.entity';
 import { LoginAuthInput, LoginResponse } from './dto/create-auth.input';
 import { UseGuards } from '@nestjs/common';
 import { GqlAuthGuard } from './gql-auth-guard';
+import { withErrorContext } from '../common/error-context';
 
 @Resolver(() => Auth)
 export class AuthResolver {
@@ -12,7 +13,11 @@ export class AuthResolver {
   @Mutation(() => LoginResponse)
   @UseGuards(GqlAuthGuard)
   async login(@Args('loginAuthInput') loginAuthInput: LoginAuthInput) {
-    return this.authService.login(loginAuthInput);
+    try {
+      return await this.authService.login(loginAuthInput);
+    } catch (error) {
+      throw withErrorContext(error, 'AuthResolver.login');
+    }
   }
 
   /**
@@ -30,6 +35,10 @@ export class AuthResolver {
    */
   @Mutation(() => Boolean)
   async logout(@Args('token') token: string) {
-    return this.authService.logout({ token });
+    try {
+      return await this.authService.logout({ token });
+    } catch (error) {
+      throw withErrorContext(error, 'AuthResolver.logout');
+    }
   }
 }

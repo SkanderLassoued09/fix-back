@@ -4,6 +4,7 @@ import {
   IGoogleSheetMapper,
   SHEET_MAPPERS,
 } from './mappers/google-sheet-mapper.interface';
+import { withErrorContext } from '../common/error-context';
 
 /**
  * Orchestrator. Walks the registered mappers, fetches + maps + appends
@@ -29,7 +30,11 @@ export class SheetSyncService {
    * summary so cron/ACTION callers can log results.
    */
   async syncAllEntities(): Promise<SheetSyncSummary> {
-    return this.runMappers(this.mappers, 'syncAllEntities');
+    try {
+      return await this.runMappers(this.mappers, 'syncAllEntities');
+    } catch (error) {
+      throw withErrorContext(error, 'SheetSyncService.syncAllEntities');
+    }
   }
 
   /**
@@ -38,59 +43,67 @@ export class SheetSyncService {
    * log tabs (which would duplicate rows in Sheet1).
    */
   async syncSnapshotEntities(): Promise<SheetSyncSummary> {
-    const snapshots = this.mappers.filter((m) => m.mode === 'snapshot');
-    return this.runMappers(snapshots, 'syncSnapshotEntities');
+    try {
+      const snapshots = this.mappers.filter((m) => m.mode === 'snapshot');
+      return await this.runMappers(snapshots, 'syncSnapshotEntities');
+    } catch (error) {
+      throw withErrorContext(error, 'SheetSyncService.syncSnapshotEntities');
+    }
   }
 
   private async runMappers(
     mappers: IGoogleSheetMapper<any>[],
     label: string,
   ): Promise<SheetSyncSummary> {
-    this.logger.log(
-      `START ${label} · mappers=${mappers.map((m) => m.entityName).join(', ') || '(none)'}`,
-    );
-    const startedAt = Date.now();
-    const summary: SheetSyncSummary = { successes: [], failures: [], totalRows: 0 };
+    try {
+      this.logger.log(
+        `START ${label} · mappers=${mappers.map((m) => m.entityName).join(', ') || '(none)'}`,
+      );
+      const startedAt = Date.now();
+      const summary: SheetSyncSummary = { successes: [], failures: [], totalRows: 0 };
 
-    for (const mapper of mappers) {
-      const tag = mapper.entityName;
-      try {
-        const entities = await mapper.fetch();
-        this.logger.log(`[${tag}] fetched ${entities.length} entity(ies)`);
-        const rows = entities.map((e) => mapper.mapToSheetRow(e));
+      for (const mapper of mappers) {
+        const tag = mapper.entityName;
+        try {
+          const entities = await mapper.fetch();
+          this.logger.log(`[${tag}] fetched ${entities.length} entity(ies)`);
+          const rows = entities.map((e) => mapper.mapToSheetRow(e));
 
-        if (mapper.mode === 'snapshot') {
-          // Always write (even 0 rows) so the tab is cleared when nothing is
-          // in progress — keeps the live view truthful.
-          await this.sheets.replaceRows(mapper.range, rows, mapper.headerRow);
-          this.logger.log(`[${tag}] snapshot wrote ${rows.length} row(s) to ${mapper.range}`);
-        } else {
-          if (!rows.length) {
-            summary.successes.push({ entity: tag, rows: 0 });
-            continue;
+          if (mapper.mode === 'snapshot') {
+            // Always write (even 0 rows) so the tab is cleared when nothing is
+            // in progress — keeps the live view truthful.
+            await this.sheets.replaceRows(mapper.range, rows, mapper.headerRow);
+            this.logger.log(`[${tag}] snapshot wrote ${rows.length} row(s) to ${mapper.range}`);
+          } else {
+            if (!rows.length) {
+              summary.successes.push({ entity: tag, rows: 0 });
+              continue;
+            }
+            await this.sheets.appendRows(mapper.range, rows, mapper.headerRow);
+            this.logger.log(`[${tag}] appended ${rows.length} row(s) to ${mapper.range}`);
           }
-          await this.sheets.appendRows(mapper.range, rows, mapper.headerRow);
-          this.logger.log(`[${tag}] appended ${rows.length} row(s) to ${mapper.range}`);
+
+          summary.successes.push({ entity: tag, rows: rows.length });
+          summary.totalRows += rows.length;
+        } catch (err) {
+          const message = (err as Error)?.message ?? String(err);
+          summary.failures.push({ entity: tag, message });
+          this.logger.error(`[${tag}] sync failed: ${message}`);
+          // intentional: continue to the next mapper
         }
-
-        summary.successes.push({ entity: tag, rows: rows.length });
-        summary.totalRows += rows.length;
-      } catch (err) {
-        const message = (err as Error)?.message ?? String(err);
-        summary.failures.push({ entity: tag, message });
-        this.logger.error(`[${tag}] sync failed: ${message}`);
-        // intentional: continue to the next mapper
       }
-    }
 
-    const elapsedMs = Date.now() - startedAt;
-    summary.elapsedMs = elapsedMs;
-    this.logger.log(
-      `END ${label} · totalRows=${summary.totalRows} ` +
-        `successes=${summary.successes.length} failures=${summary.failures.length} ` +
-        `elapsedMs=${elapsedMs}`,
-    );
-    return summary;
+      const elapsedMs = Date.now() - startedAt;
+      summary.elapsedMs = elapsedMs;
+      this.logger.log(
+        `END ${label} · totalRows=${summary.totalRows} ` +
+          `successes=${summary.successes.length} failures=${summary.failures.length} ` +
+          `elapsedMs=${elapsedMs}`,
+      );
+      return summary;
+    } catch (error) {
+      throw withErrorContext(error, 'SheetSyncService.runMappers');
+    }
   }
 }
 

@@ -8,6 +8,7 @@ import {
 import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import * as jwt from 'jsonwebtoken';
+import { withErrorContext } from './common/error-context';
 
 // Même secret que `auth.module`/`jwt.strategy` (JWT partagé). La vérification
 // est faite ici SANS injecter `JwtService` : la gateway est fournie par 3
@@ -22,7 +23,11 @@ export class NotificationsGateway
   private logger: Logger = new Logger('NotificationsGateway');
 
   afterInit(server: Server) {
-    this.logger.log('Init');
+    try {
+      this.logger.log('Init');
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationsGateway.afterInit');
+    }
   }
 
   /**
@@ -34,22 +39,26 @@ export class NotificationsGateway
    * régression sur l'existant.
    */
   handleConnection(client: Socket) {
-    const token =
-      (client.handshake?.auth as any)?.token ||
-      (client.handshake?.query as any)?.token;
-    if (!token) return; // anonyme : broadcasts uniquement
     try {
-      const decoded: any = jwt.verify(String(token), JWT_SECRET);
-      const userId = decoded?._id;
-      const role = decoded?.role;
-      if (userId) {
-        client.data.userId = String(userId);
-        client.join(`user:${userId}`);
-        if (role) client.join(`role:${role}`);
+      const token =
+        (client.handshake?.auth as any)?.token ||
+        (client.handshake?.query as any)?.token;
+      if (!token) return; // anonyme : broadcasts uniquement
+      try {
+        const decoded: any = jwt.verify(String(token), JWT_SECRET);
+        const userId = decoded?._id;
+        const role = decoded?.role;
+        if (userId) {
+          client.data.userId = String(userId);
+          client.join(`user:${userId}`);
+          if (role) client.join(`role:${role}`);
+        }
+      } catch {
+        // token invalide/expiré → on laisse le socket anonyme (pas de throw :
+        // ne jamais casser la connexion temps réel existante).
       }
-    } catch {
-      // token invalide/expiré → on laisse le socket anonyme (pas de throw :
-      // ne jamais casser la connexion temps réel existante).
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationsGateway.handleConnection');
     }
   }
 
@@ -59,14 +68,22 @@ export class NotificationsGateway
 
   /** Émission CIBLÉE vers un utilisateur (room `user:{id}`) — jamais broadcast. */
   emitToUser(userId: string, payload: any) {
-    if (!userId) return;
-    this.server.to(`user:${userId}`).emit('notification.new', payload);
+    try {
+      if (!userId) return;
+      this.server.to(`user:${userId}`).emit('notification.new', payload);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationsGateway.emitToUser');
+    }
   }
 
   /** Émission ciblée vers tous les porteurs d'un rôle (room `role:{ROLE}`). */
   emitToRole(role: string, payload: any) {
-    if (!role) return;
-    this.server.to(`role:${role}`).emit('notification.new', payload);
+    try {
+      if (!role) return;
+      this.server.to(`role:${role}`).emit('notification.new', payload);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationsGateway.emitToRole');
+    }
   }
 
   /** Émission CIBLÉE de RETRAIT d'une notification (room `user:{id}`). Permet au
@@ -76,35 +93,79 @@ export class NotificationsGateway
     userId: string,
     payload: { diId?: string | null; type?: string | null },
   ) {
-    if (!userId) return;
-    this.server.to(`user:${userId}`).emit('notification.removed', payload);
+    try {
+      if (!userId) return;
+      this.server.to(`user:${userId}`).emit('notification.removed', payload);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationsGateway.emitRemovedToUser');
+    }
   }
 
   sendReminder(message: any) {
-    this.server.emit('reminder', message);
+    try {
+      this.server.emit('reminder', message);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationsGateway.sendReminder');
+    }
   }
 
   sendNotificationDiag(message: any) {
-    this.server.emit('sendDitoDiagnostique', message);
+    try {
+      this.server.emit('sendDitoDiagnostique', message);
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'NotificationsGateway.sendNotificationDiag',
+      );
+    }
   }
 
   sendNotifcationToAdmins(message: any) {
-    this.server.emit('sendNotifcationToAdmins', message);
+    try {
+      this.server.emit('sendNotifcationToAdmins', message);
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'NotificationsGateway.sendNotifcationToAdmins',
+      );
+    }
   }
 
   confirmComposant(message: any) {
-    this.server.emit('confirmAllComposant', message);
+    try {
+      this.server.emit('confirmAllComposant', message);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationsGateway.confirmComposant');
+    }
   }
 
   blAddedNotification(data: any) {
-    this.server.emit('blAddedNotification', data);
+    try {
+      this.server.emit('blAddedNotification', data);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationsGateway.blAddedNotification');
+    }
   }
 
   sendComponentToCoordinatorFromMagasin(data) {
-    this.server.emit('component:sent_to_coordinator', data);
+    try {
+      this.server.emit('component:sent_to_coordinator', data);
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'NotificationsGateway.sendComponentToCoordinatorFromMagasin',
+      );
+    }
   }
   sendComponentToMagasinFromCoordinator(data) {
-    this.server.emit('component:confirmed_by_coordinator', data);
+    try {
+      this.server.emit('component:confirmed_by_coordinator', data);
+    } catch (error) {
+      throw withErrorContext(
+        error,
+        'NotificationsGateway.sendComponentToMagasinFromCoordinator',
+      );
+    }
   }
 
   /**
@@ -115,7 +176,11 @@ export class NotificationsGateway
    *
    */
   updateTicket(message: { action: string; content: any; target?: any }) {
-    this.server.emit('updateTicket', message);
+    try {
+      this.server.emit('updateTicket', message);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationsGateway.updateTicket');
+    }
   }
 
   // ---- Generic operational alerts (stagnation, future ops monitors) -------
@@ -123,11 +188,19 @@ export class NotificationsGateway
   // was resolved. Frontend routes by `type` to badge/toast/inbox views.
 
   alertCreated(payload: any) {
-    this.server.emit('alert.created', payload);
+    try {
+      this.server.emit('alert.created', payload);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationsGateway.alertCreated');
+    }
   }
 
   alertResolved(payload: any) {
-    this.server.emit('alert.resolved', payload);
+    try {
+      this.server.emit('alert.resolved', payload);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationsGateway.alertResolved');
+    }
   }
 
   // ---- Import DI en bloc : progression d'un job d'exécution ----------------
@@ -143,6 +216,10 @@ export class NotificationsGateway
      *  « création de la DI… », « réactivation… » — pour un suivi ligne par ligne. */
     detail?: string;
   }) {
-    this.server.emit('di-import.progress', payload);
+    try {
+      this.server.emit('di-import.progress', payload);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationsGateway.diImportProgress');
+    }
   }
 }

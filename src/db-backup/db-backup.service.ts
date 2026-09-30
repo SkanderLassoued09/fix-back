@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { GoogleDriveService } from 'src/google-drive/google-drive.service';
+import { withErrorContext } from '../common/error-context';
 
 /** Outcome of one `run()` — returned so the ACTION trigger can one-line-log it
  *  and tests can assert on numbers without inspecting the Discord payload. */
@@ -100,16 +101,20 @@ export class DbBackupService {
    * dump the WHOLE cluster, not this environment's database).
    */
   parseDbName(uri: string): string | null {
-    if (!uri) return null;
-    // Strip the scheme, then everything up to the authority's `/`. Query string
-    // and options are dropped. Deliberately string-based: `new URL()` rejects
-    // several legal `mongodb+srv://` forms.
-    const withoutScheme = uri.replace(/^mongodb(\+srv)?:\/\//i, '');
-    const slash = withoutScheme.indexOf('/');
-    if (slash === -1) return null;
-    const afterSlash = withoutScheme.slice(slash + 1);
-    const dbName = afterSlash.split(/[?#]/)[0].trim();
-    return dbName ? decodeURIComponent(dbName) : null;
+    try {
+      if (!uri) return null;
+      // Strip the scheme, then everything up to the authority's `/`. Query string
+      // and options are dropped. Deliberately string-based: `new URL()` rejects
+      // several legal `mongodb+srv://` forms.
+      const withoutScheme = uri.replace(/^mongodb(\+srv)?:\/\//i, '');
+      const slash = withoutScheme.indexOf('/');
+      if (slash === -1) return null;
+      const afterSlash = withoutScheme.slice(slash + 1);
+      const dbName = afterSlash.split(/[?#]/)[0].trim();
+      return dbName ? decodeURIComponent(dbName) : null;
+    } catch (error) {
+      throw withErrorContext(error, 'DbBackupService.parseDbName');
+    }
   }
 
   /**
@@ -122,28 +127,36 @@ export class DbBackupService {
    * folder, not a suffix.
    */
   buildBackupFileName(at: Date = new Date()): string {
-    const tz = process.env.APP_TIMEZONE || 'Africa/Tunis';
-    const parts: Record<string, string> = {};
-    for (const p of new Intl.DateTimeFormat('en-GB', {
-      timeZone: tz,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    }).formatToParts(at)) {
-      parts[p.type] = p.value;
+    try {
+      const tz = process.env.APP_TIMEZONE || 'Africa/Tunis';
+      const parts: Record<string, string> = {};
+      for (const p of new Intl.DateTimeFormat('en-GB', {
+        timeZone: tz,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(at)) {
+        parts[p.type] = p.value;
+      }
+      // Some ICU builds emit hour "24" at midnight — normalize to "00".
+      const hour = parts.hour === '24' ? '00' : parts.hour;
+      return `backup_db_${parts.year}-${parts.month}-${parts.day}_${hour}${parts.minute}.gz`;
+    } catch (error) {
+      throw withErrorContext(error, 'DbBackupService.buildBackupFileName');
     }
-    // Some ICU builds emit hour "24" at midnight — normalize to "00".
-    const hour = parts.hour === '24' ? '00' : parts.hour;
-    return `backup_db_${parts.year}-${parts.month}-${parts.day}_${hour}${parts.minute}.gz`;
   }
 
   /** True for names this service owns — the retention purge only ever
    *  considers these, so an unrelated file dropped in the folder is safe. */
   isBackupFileName(name: string): boolean {
-    return /^backup_db_\d{4}-\d{2}-\d{2}_\d{4}\.gz$/.test(name || '');
+    try {
+      return /^backup_db_\d{4}-\d{2}-\d{2}_\d{4}\.gz$/.test(name || '');
+    } catch (error) {
+      throw withErrorContext(error, 'DbBackupService.isBackupFileName');
+    }
   }
 
   /**
@@ -153,31 +166,39 @@ export class DbBackupService {
    *   production → BACKUPS_PROD · preprod → BACKUPS_PREPROD · * → BACKUPS_DEV
    */
   resolveFolderName(): string {
-    const override = process.env.DB_BACKUP_FOLDER_NAME?.trim();
-    if (override) return override;
-    switch ((process.env.NODE_ENV || 'development').trim()) {
-      case 'production':
-        return 'BACKUPS_PROD';
-      case 'preprod':
-        return 'BACKUPS_PREPROD';
-      default:
-        return 'BACKUPS_DEV';
+    try {
+      const override = process.env.DB_BACKUP_FOLDER_NAME?.trim();
+      if (override) return override;
+      switch ((process.env.NODE_ENV || 'development').trim()) {
+        case 'production':
+          return 'BACKUPS_PROD';
+        case 'preprod':
+          return 'BACKUPS_PREPROD';
+        default:
+          return 'BACKUPS_DEV';
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'DbBackupService.resolveFolderName');
     }
   }
 
   /** Retention size: `DB_BACKUP_RETENTION`, default 30. `0` disables the
    *  purge entirely (explicit opt-out, logged). Invalid → default. */
   resolveRetention(): number {
-    const raw = process.env.DB_BACKUP_RETENTION?.trim();
-    if (raw === undefined || raw === '') return DbBackupService.DEFAULT_RETENTION;
-    const n = Number(raw);
-    if (!Number.isInteger(n) || n < 0) {
-      this.logger.warn(
-        `DB_BACKUP_RETENTION invalide ("${raw}") → valeur par défaut ${DbBackupService.DEFAULT_RETENTION}.`,
-      );
-      return DbBackupService.DEFAULT_RETENTION;
+    try {
+      const raw = process.env.DB_BACKUP_RETENTION?.trim();
+      if (raw === undefined || raw === '') return DbBackupService.DEFAULT_RETENTION;
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 0) {
+        this.logger.warn(
+          `DB_BACKUP_RETENTION invalide ("${raw}") → valeur par défaut ${DbBackupService.DEFAULT_RETENTION}.`,
+        );
+        return DbBackupService.DEFAULT_RETENTION;
+      }
+      return n;
+    } catch (error) {
+      throw withErrorContext(error, 'DbBackupService.resolveRetention');
     }
-    return n;
   }
 
   // ───────────────────────────────────────────────────────────────────────
@@ -193,81 +214,89 @@ export class DbBackupService {
    * mongod without credentials); if authentication is ever added to the URI,
    * switch to `mongodump --config=<file>` with the password in a 0600 file.
    */
-  protected runMongodump(uri: string, archivePath: string): Promise<void> {
-    const bin = process.env.MONGODUMP_PATH?.trim() || 'mongodump';
-    const timeoutMs =
-      Number(process.env.MONGODUMP_TIMEOUT_MS) ||
-      DbBackupService.DEFAULT_TIMEOUT_MS;
+  protected async runMongodump(uri: string, archivePath: string): Promise<void> {
+    try {
+      const bin = process.env.MONGODUMP_PATH?.trim() || 'mongodump';
+      const timeoutMs =
+        Number(process.env.MONGODUMP_TIMEOUT_MS) ||
+        DbBackupService.DEFAULT_TIMEOUT_MS;
 
-    return new Promise<void>((resolve, reject) => {
-      const child = spawn(
-        bin,
-        [`--uri=${uri}`, '--gzip', `--archive=${archivePath}`],
-        { windowsHide: true },
-      );
+      return await new Promise<void>((resolve, reject) => {
+        const child = spawn(
+          bin,
+          [`--uri=${uri}`, '--gzip', `--archive=${archivePath}`],
+          { windowsHide: true },
+        );
 
-      // mongodump writes its progress to stderr; keep only the tail for the
-      // error message. NEVER echo it wholesale — the URI is echoed back by
-      // some builds, and it can carry credentials.
-      let stderrTail = '';
-      child.stderr?.on('data', (chunk) => {
-        stderrTail = (stderrTail + String(chunk)).slice(-2000);
+        // mongodump writes its progress to stderr; keep only the tail for the
+        // error message. NEVER echo it wholesale — the URI is echoed back by
+        // some builds, and it can carry credentials.
+        let stderrTail = '';
+        child.stderr?.on('data', (chunk) => {
+          stderrTail = (stderrTail + String(chunk)).slice(-2000);
+        });
+
+        let timedOut = false;
+        const timer = setTimeout(() => {
+          timedOut = true;
+          child.kill('SIGKILL');
+        }, timeoutMs);
+
+        child.on('error', (err) => {
+          clearTimeout(timer);
+          // ENOENT = the binary is not installed / not on PATH. This is the
+          // single most likely production failure, so give the exact remedy.
+          if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            reject(
+              new Error(
+                `Binaire "${bin}" introuvable. mongodump fait partie de ` +
+                  '"mongodb-database-tools" (paquet SYSTÈME, PAS npm) : ' +
+                  'installe-le sur le serveur (apk add mongodb-tools / apt install mongodb-database-tools) ' +
+                  'ou renseigne MONGODUMP_PATH avec le chemin absolu du binaire.',
+              ),
+            );
+            return;
+          }
+          reject(new Error(`Échec du lancement de mongodump : ${err.message}`));
+        });
+
+        child.on('close', (code) => {
+          clearTimeout(timer);
+          if (timedOut) {
+            reject(
+              new Error(
+                `mongodump interrompu après ${timeoutMs} ms (timeout MONGODUMP_TIMEOUT_MS).`,
+              ),
+            );
+            return;
+          }
+          if (code !== 0) {
+            reject(
+              new Error(
+                `mongodump a terminé avec le code ${code}. ${this.redact(stderrTail).slice(-500)}`,
+              ),
+            );
+            return;
+          }
+          resolve();
+        });
       });
-
-      let timedOut = false;
-      const timer = setTimeout(() => {
-        timedOut = true;
-        child.kill('SIGKILL');
-      }, timeoutMs);
-
-      child.on('error', (err) => {
-        clearTimeout(timer);
-        // ENOENT = the binary is not installed / not on PATH. This is the
-        // single most likely production failure, so give the exact remedy.
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-          reject(
-            new Error(
-              `Binaire "${bin}" introuvable. mongodump fait partie de ` +
-                '"mongodb-database-tools" (paquet SYSTÈME, PAS npm) : ' +
-                'installe-le sur le serveur (apk add mongodb-tools / apt install mongodb-database-tools) ' +
-                'ou renseigne MONGODUMP_PATH avec le chemin absolu du binaire.',
-            ),
-          );
-          return;
-        }
-        reject(new Error(`Échec du lancement de mongodump : ${err.message}`));
-      });
-
-      child.on('close', (code) => {
-        clearTimeout(timer);
-        if (timedOut) {
-          reject(
-            new Error(
-              `mongodump interrompu après ${timeoutMs} ms (timeout MONGODUMP_TIMEOUT_MS).`,
-            ),
-          );
-          return;
-        }
-        if (code !== 0) {
-          reject(
-            new Error(
-              `mongodump a terminé avec le code ${code}. ${this.redact(stderrTail).slice(-500)}`,
-            ),
-          );
-          return;
-        }
-        resolve();
-      });
-    });
+    } catch (error) {
+      throw withErrorContext(error, 'DbBackupService.runMongodump');
+    }
   }
 
   /** Last-resort scrubber: masks any `mongodb://user:pass@` pair that a child
    *  process echoed back into its own output before we log it. */
   private redact(text: string): string {
-    return (text || '').replace(
-      /(mongodb(?:\+srv)?:\/\/)[^\s@]*@/gi,
-      '$1***:***@',
-    );
+    try {
+      return (text || '').replace(
+        /(mongodb(?:\+srv)?:\/\/)[^\s@]*@/gi,
+        '$1***:***@',
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DbBackupService.redact');
+    }
   }
 
   // ───────────────────────────────────────────────────────────────────────
@@ -280,169 +309,173 @@ export class DbBackupService {
    * a monitorable signal for the crontab, never a silent no-op.
    */
   async run(now: Date = new Date()): Promise<DbBackupResult> {
-    const startedAt = Date.now();
-    const env = (process.env.NODE_ENV || 'development').trim();
-    const uri = process.env.MONGODB_URI?.trim() || '';
-    const dbName = this.parseDbName(uri);
-    // Temp file path is decided up front so the `finally` can always clean it.
-    const fileName = this.buildBackupFileName(now);
-    const tmpDir = process.env.DB_BACKUP_TMP_DIR?.trim() || os.tmpdir();
-    const archivePath = path.join(tmpDir, `fixtronix-${process.pid}-${fileName}`);
-    let step: BackupStep = 'config';
-
     try {
-      if (!uri) {
-        throw new DbBackupError(
-          'MONGODB_URI absent — impossible de savoir quelle base sauvegarder.',
-          'config',
-        );
-      }
-      if (!dbName) {
-        throw new DbBackupError(
-          "MONGODB_URI ne contient pas de nom de base (ex. mongodb://host:27017/fixtronixproddb). " +
-            'Refus de lancer un dump sur le cluster entier.',
-          'config',
-        );
-      }
-      if (!(await this.drive.isConfigured())) {
-        throw new DbBackupError(
-          'Google Drive non configuré (OAuth absent) — la sauvegarde ne pourrait pas être envoyée.',
-          'config',
-        );
-      }
+      const startedAt = Date.now();
+      const env = (process.env.NODE_ENV || 'development').trim();
+      const uri = process.env.MONGODB_URI?.trim() || '';
+      const dbName = this.parseDbName(uri);
+      // Temp file path is decided up front so the `finally` can always clean it.
+      const fileName = this.buildBackupFileName(now);
+      const tmpDir = process.env.DB_BACKUP_TMP_DIR?.trim() || os.tmpdir();
+      const archivePath = path.join(tmpDir, `fixtronix-${process.pid}-${fileName}`);
+      let step: BackupStep = 'config';
 
-      // ── 1. Dump ────────────────────────────────────────────────────────
-      step = 'dump';
-      this.logger.log(
-        `Sauvegarde [${env}] : dump de la base "${dbName}" → ${fileName}`,
-      );
-      fs.mkdirSync(tmpDir, { recursive: true });
-      await this.runMongodump(uri, archivePath);
-
-      // ── 2. Verify the archive is real ──────────────────────────────────
-      if (!fs.existsSync(archivePath)) {
-        throw new DbBackupError(
-          `mongodump s'est terminé sans erreur mais aucun fichier n'a été produit (${fileName}).`,
-          'dump',
-        );
-      }
-      const sizeBytes = fs.statSync(archivePath).size;
-      if (sizeBytes <= 0) {
-        throw new DbBackupError(
-          `Dump VIDE (0 octet) pour la base "${dbName}" — upload refusé. ` +
-            'Un backup vide uploadé « avec succès » est le pire scénario possible.',
-          'dump',
-        );
-      }
-      this.logger.log(`Dump OK : ${sizeBytes} octets`);
-
-      // ── 3. Resolve the per-environment folder ──────────────────────────
-      step = 'folder';
-      const folderName = this.resolveFolderName();
-      const explicitId = process.env.DB_BACKUP_FOLDER_ID?.trim();
-      const folderId = explicitId
-        ? explicitId
-        : await this.drive.ensureNamedContainer(folderName);
-      this.logger.log(
-        `Dossier Drive de sauvegarde [${env}] : "${folderName}" (${folderId})`,
-      );
-      await this.assertFolderNotPublic(folderId, folderName, env);
-
-      // ── 4. Upload ──────────────────────────────────────────────────────
-      step = 'upload';
-      const buffer = fs.readFileSync(archivePath);
-      const uploaded = await this.drive.uploadFile(
-        folderId,
-        fileName,
-        buffer,
-        'application/gzip',
-      );
-      if (!uploaded?.id) {
-        throw new DbBackupError(
-          "L'upload Drive n'a retourné aucun identifiant de fichier — succès non vérifiable.",
-          'upload',
-        );
-      }
-      this.logger.log(`Upload Drive OK : ${fileName} (${uploaded.id})`);
-
-      // ── 5. Retention — ONLY now that the upload is confirmed ───────────
-      step = 'retention';
-      const { deleted, kept } = await this.purgeOldBackups(folderId);
-
-      const durationMs = Date.now() - startedAt;
-      const result: DbBackupResult = {
-        fileName,
-        dbName,
-        sizeBytes,
-        durationMs,
-        folderId,
-        folderName,
-        driveFileId: uploaded.id,
-        webViewLink: uploaded.webViewLink ?? '',
-        deleted,
-        kept,
-      };
-
-      // Success line — its ABSENCE is the daily alarm, so it is sent last and
-      // best-effort (a Discord outage must not turn a good backup into a
-      // failure: the dump IS on Drive at this point).
       try {
-        await this.discord.sendDbBackupSuccess({
+        if (!uri) {
+          throw new DbBackupError(
+            'MONGODB_URI absent — impossible de savoir quelle base sauvegarder.',
+            'config',
+          );
+        }
+        if (!dbName) {
+          throw new DbBackupError(
+            "MONGODB_URI ne contient pas de nom de base (ex. mongodb://host:27017/fixtronixproddb). " +
+              'Refus de lancer un dump sur le cluster entier.',
+            'config',
+          );
+        }
+        if (!(await this.drive.isConfigured())) {
+          throw new DbBackupError(
+            'Google Drive non configuré (OAuth absent) — la sauvegarde ne pourrait pas être envoyée.',
+            'config',
+          );
+        }
+
+        // ── 1. Dump ────────────────────────────────────────────────────────
+        step = 'dump';
+        this.logger.log(
+          `Sauvegarde [${env}] : dump de la base "${dbName}" → ${fileName}`,
+        );
+        fs.mkdirSync(tmpDir, { recursive: true });
+        await this.runMongodump(uri, archivePath);
+
+        // ── 2. Verify the archive is real ──────────────────────────────────
+        if (!fs.existsSync(archivePath)) {
+          throw new DbBackupError(
+            `mongodump s'est terminé sans erreur mais aucun fichier n'a été produit (${fileName}).`,
+            'dump',
+          );
+        }
+        const sizeBytes = fs.statSync(archivePath).size;
+        if (sizeBytes <= 0) {
+          throw new DbBackupError(
+            `Dump VIDE (0 octet) pour la base "${dbName}" — upload refusé. ` +
+              'Un backup vide uploadé « avec succès » est le pire scénario possible.',
+            'dump',
+          );
+        }
+        this.logger.log(`Dump OK : ${sizeBytes} octets`);
+
+        // ── 3. Resolve the per-environment folder ──────────────────────────
+        step = 'folder';
+        const folderName = this.resolveFolderName();
+        const explicitId = process.env.DB_BACKUP_FOLDER_ID?.trim();
+        const folderId = explicitId
+          ? explicitId
+          : await this.drive.ensureNamedContainer(folderName);
+        this.logger.log(
+          `Dossier Drive de sauvegarde [${env}] : "${folderName}" (${folderId})`,
+        );
+        await this.assertFolderNotPublic(folderId, folderName, env);
+
+        // ── 4. Upload ──────────────────────────────────────────────────────
+        step = 'upload';
+        const buffer = fs.readFileSync(archivePath);
+        const uploaded = await this.drive.uploadFile(
+          folderId,
+          fileName,
+          buffer,
+          'application/gzip',
+        );
+        if (!uploaded?.id) {
+          throw new DbBackupError(
+            "L'upload Drive n'a retourné aucun identifiant de fichier — succès non vérifiable.",
+            'upload',
+          );
+        }
+        this.logger.log(`Upload Drive OK : ${fileName} (${uploaded.id})`);
+
+        // ── 5. Retention — ONLY now that the upload is confirmed ───────────
+        step = 'retention';
+        const { deleted, kept } = await this.purgeOldBackups(folderId);
+
+        const durationMs = Date.now() - startedAt;
+        const result: DbBackupResult = {
           fileName,
           dbName,
           sizeBytes,
           durationMs,
+          folderId,
           folderName,
-          webViewLink: result.webViewLink,
+          driveFileId: uploaded.id,
+          webViewLink: uploaded.webViewLink ?? '',
           deleted,
           kept,
-          env,
-        });
-      } catch (err) {
-        this.logger.warn(
-          `Notification Discord de succès non envoyée : ${(err as Error).message}`,
-        );
-      }
+        };
 
-      this.logger.log(
-        `Sauvegarde terminée [${env}] · base=${dbName} fichier=${fileName} ` +
-          `taille=${sizeBytes}o durée=${durationMs}ms rétention: ${kept} conservé(s), ${deleted} supprimé(s)`,
-      );
-      return result;
-    } catch (err) {
-      const reason = this.redact((err as Error)?.message ?? String(err));
-      const failedStep = err instanceof DbBackupError ? err.step : step;
-      this.logger.error(
-        `ÉCHEC sauvegarde [${env}] à l'étape "${failedStep}" : ${reason}`,
-      );
-      // Alert first, best-effort — a failing webhook must not mask the real
-      // cause, which is rethrown below.
-      try {
-        await this.discord.sendDbBackupFailure({
-          reason,
-          dbName: dbName ?? undefined,
-          step: failedStep,
-          env,
-        });
-      } catch (notifyErr) {
-        this.logger.error(
-          `Alerte Discord d'échec NON envoyée : ${(notifyErr as Error).message}`,
-        );
-      }
-      throw err instanceof Error ? err : new Error(reason);
-    } finally {
-      // ALWAYS remove the temp archive — success, dump failure, upload failure
-      // or crash. Skipping this fills the disk one dump per night, silently.
-      try {
-        if (fs.existsSync(archivePath)) {
-          fs.unlinkSync(archivePath);
-          this.logger.log(`Fichier temporaire supprimé : ${archivePath}`);
+        // Success line — its ABSENCE is the daily alarm, so it is sent last and
+        // best-effort (a Discord outage must not turn a good backup into a
+        // failure: the dump IS on Drive at this point).
+        try {
+          await this.discord.sendDbBackupSuccess({
+            fileName,
+            dbName,
+            sizeBytes,
+            durationMs,
+            folderName,
+            webViewLink: result.webViewLink,
+            deleted,
+            kept,
+            env,
+          });
+        } catch (err) {
+          this.logger.warn(
+            `Notification Discord de succès non envoyée : ${(err as Error).message}`,
+          );
         }
-      } catch (cleanupErr) {
-        this.logger.error(
-          `Fichier temporaire NON supprimé (${archivePath}) : ${(cleanupErr as Error).message}`,
+
+        this.logger.log(
+          `Sauvegarde terminée [${env}] · base=${dbName} fichier=${fileName} ` +
+            `taille=${sizeBytes}o durée=${durationMs}ms rétention: ${kept} conservé(s), ${deleted} supprimé(s)`,
         );
+        return result;
+      } catch (err) {
+        const reason = this.redact((err as Error)?.message ?? String(err));
+        const failedStep = err instanceof DbBackupError ? err.step : step;
+        this.logger.error(
+          `ÉCHEC sauvegarde [${env}] à l'étape "${failedStep}" : ${reason}`,
+        );
+        // Alert first, best-effort — a failing webhook must not mask the real
+        // cause, which is rethrown below.
+        try {
+          await this.discord.sendDbBackupFailure({
+            reason,
+            dbName: dbName ?? undefined,
+            step: failedStep,
+            env,
+          });
+        } catch (notifyErr) {
+          this.logger.error(
+            `Alerte Discord d'échec NON envoyée : ${(notifyErr as Error).message}`,
+          );
+        }
+        throw err instanceof Error ? err : new Error(reason);
+      } finally {
+        // ALWAYS remove the temp archive — success, dump failure, upload failure
+        // or crash. Skipping this fills the disk one dump per night, silently.
+        try {
+          if (fs.existsSync(archivePath)) {
+            fs.unlinkSync(archivePath);
+            this.logger.log(`Fichier temporaire supprimé : ${archivePath}`);
+          }
+        } catch (cleanupErr) {
+          this.logger.error(
+            `Fichier temporaire NON supprimé (${archivePath}) : ${(cleanupErr as Error).message}`,
+          );
+        }
       }
+    } catch (error) {
+      throw withErrorContext(error, 'DbBackupService.run');
     }
   }
 
@@ -458,35 +491,39 @@ export class DbBackupService {
   private async purgeOldBackups(
     folderId: string,
   ): Promise<{ deleted: number; kept: number }> {
-    const retention = this.resolveRetention();
-    const files = (await this.drive.listFilesInFolder(folderId)).filter((f) =>
-      this.isBackupFileName(f.name),
-    );
-    if (retention === 0) {
-      this.logger.warn(
-        `Rétention désactivée (DB_BACKUP_RETENTION=0) — ${files.length} sauvegarde(s) conservée(s), le dossier Drive grossira indéfiniment.`,
+    try {
+      const retention = this.resolveRetention();
+      const files = (await this.drive.listFilesInFolder(folderId)).filter((f) =>
+        this.isBackupFileName(f.name),
       );
-      return { deleted: 0, kept: files.length };
-    }
-    if (files.length <= retention) {
-      return { deleted: 0, kept: files.length };
-    }
-
-    // `listFilesInFolder` returns newest-first; everything past N is obsolete.
-    const obsolete = files.slice(retention);
-    let deleted = 0;
-    for (const f of obsolete) {
-      try {
-        await this.drive.deleteFile(f.id);
-        deleted++;
-        this.logger.log(`Rétention : ancienne sauvegarde supprimée ${f.name}`);
-      } catch (err) {
+      if (retention === 0) {
         this.logger.warn(
-          `Rétention : suppression de ${f.name} échouée — ${(err as Error).message}`,
+          `Rétention désactivée (DB_BACKUP_RETENTION=0) — ${files.length} sauvegarde(s) conservée(s), le dossier Drive grossira indéfiniment.`,
         );
+        return { deleted: 0, kept: files.length };
       }
+      if (files.length <= retention) {
+        return { deleted: 0, kept: files.length };
+      }
+
+      // `listFilesInFolder` returns newest-first; everything past N is obsolete.
+      const obsolete = files.slice(retention);
+      let deleted = 0;
+      for (const f of obsolete) {
+        try {
+          await this.drive.deleteFile(f.id);
+          deleted++;
+          this.logger.log(`Rétention : ancienne sauvegarde supprimée ${f.name}`);
+        } catch (err) {
+          this.logger.warn(
+            `Rétention : suppression de ${f.name} échouée — ${(err as Error).message}`,
+          );
+        }
+      }
+      return { deleted, kept: files.length - deleted };
+    } catch (error) {
+      throw withErrorContext(error, 'DbBackupService.purgeOldBackups');
     }
-    return { deleted, kept: files.length - deleted };
   }
 
   /**

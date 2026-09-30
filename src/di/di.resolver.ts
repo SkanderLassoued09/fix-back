@@ -44,24 +44,33 @@ import { StatService } from 'src/stat/stat.service';
 import { PubSub } from 'graphql-subscriptions';
 import { Stat } from 'src/stat/entities/stat.entity';
 import { rootCertificates } from 'tls';
+import { withErrorContext } from '../common/error-context';
 
 @Resolver(() => Di)
 export class DiResolver {
   // used to convert from string to number
   timeStringToSeconds(timeString) {
-    const [hours, minutes, seconds] = timeString.trim().split(':').map(Number);
-    return hours * 3600 + minutes * 60 + seconds;
+    try {
+      const [hours, minutes, seconds] = timeString.trim().split(':').map(Number);
+      return hours * 3600 + minutes * 60 + seconds;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.timeStringToSeconds');
+    }
   }
 
   // Function to convert seconds to "hh:mm:ss"
   secondsToTimeString(totalSeconds) {
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(
+    try {
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(
       2,
       '0',
     )}:${String(seconds).padStart(2, '0')}`;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.secondsToTimeString');
+    }
   }
 
   constructor(
@@ -84,24 +93,28 @@ export class DiResolver {
     @Args('AnnulerDiInput') input: AnnulerDiInput,
     @CurrentUser() profile: Profile,
   ) {
-    const ok = await this.profileService.verifyPassword(
-      profile.username,
-      input.password,
-    );
-    if (!ok) {
-      throw new GraphQLError('Mot de passe incorrect.', {
-        extensions: { code: 'UNAUTHENTICATED' },
+    try {
+      const ok = await this.profileService.verifyPassword(
+        profile.username,
+        input.password,
+      );
+      if (!ok) {
+        throw new GraphQLError('Mot de passe incorrect.', {
+          extensions: { code: 'UNAUTHENTICATED' },
+        });
+      }
+      return await this.diService.annulerDi(input.diId, {
+        parClient: input.parClient,
+        motif: input.motif,
+        motifAutre: input.motifAutre,
+        commentaire: input.commentaire,
+        // `username` (lisible) plutôt que `_id` → affichage direct « par … » dans
+        // le modal détail, sans résolution id→nom dans les mappers de liste.
+        annulePar: profile.username,
       });
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.annulerDi');
     }
-    return this.diService.annulerDi(input.diId, {
-      parClient: input.parClient,
-      motif: input.motif,
-      motifAutre: input.motifAutre,
-      commentaire: input.commentaire,
-      // `username` (lisible) plutôt que `_id` → affichage direct « par … » dans
-      // le modal détail, sans résolution id→nom dans les mappers de liste.
-      annulePar: profile.username,
-    });
   }
 
   /** RÉACTIVATION d'une DI annulée → statut précédent (lu dans statusHistory).
@@ -116,7 +129,11 @@ export class DiResolver {
     @Args('diId') diId: string,
     @CurrentUser() profile: Profile,
   ) {
-    return this.diService.reactiverDi(diId, { username: profile?.username });
+    try {
+      return await this.diService.reactiverDi(diId, { username: profile?.username });
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.reactiverDi');
+    }
   }
 
   /**
@@ -130,39 +147,63 @@ export class DiResolver {
     @Args('AbandonDiInput') input: AbandonDiInput,
     @CurrentUser() profile: Profile,
   ) {
-    return this.diService.abandonDi(input.diId, {
-      motif: input.motif,
-      motifAutre: input.motifAutre,
-      abandonedBy: profile.username,
-    });
+    try {
+      return await this.diService.abandonDi(input.diId, {
+        motif: input.motif,
+        motifAutre: input.motifAutre,
+        abandonedBy: profile.username,
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.abandonDi');
+    }
   }
 
   @Mutation(() => Di)
   @UseGuards(JwtAuthGuard)
-  createDi(
+  async createDi(
     @Args('createDiInput') createDiInput: CreateDiInput,
     @CurrentUser() profile: Profile,
   ) {
-    createDiInput.createdBy = profile._id;
-    return this.diService.createDi(createDiInput);
+    try {
+      createDiInput.createdBy = profile._id;
+      return await this.diService.createDi(createDiInput);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.createDi');
+    }
   }
 
   @Mutation(() => Di)
-  addDevis(@Args('_id') _id: string, @Args('pdf') pdf: string) {
-    return this.diService.addDevisPDF(_id, pdf);
+  async addDevis(@Args('_id') _id: string, @Args('pdf') pdf: string) {
+    try {
+      return await this.diService.addDevisPDF(_id, pdf);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.addDevis');
+    }
   }
 
   @Mutation(() => Di)
-  addBl(@Args('_id') _id: string, @Args('pdf') pdf: string) {
-    return this.diService.addBlPDF(_id, pdf);
+  async addBl(@Args('_id') _id: string, @Args('pdf') pdf: string) {
+    try {
+      return await this.diService.addBlPDF(_id, pdf);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.addBl');
+    }
   }
   @Mutation(() => Di)
-  addFacture(@Args('_id') _id: string, @Args('pdf') pdf: string) {
-    return this.diService.addFacturePDF(_id, pdf);
+  async addFacture(@Args('_id') _id: string, @Args('pdf') pdf: string) {
+    try {
+      return await this.diService.addFacturePDF(_id, pdf);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.addFacture');
+    }
   }
   @Mutation(() => Di)
-  addBC(@Args('_id') _id: string, @Args('pdf') pdf: string) {
-    return this.diService.addBCPDF(_id, pdf);
+  async addBC(@Args('_id') _id: string, @Args('pdf') pdf: string) {
+    try {
+      return await this.diService.addBCPDF(_id, pdf);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.addBC');
+    }
   }
 
   /**
@@ -172,8 +213,12 @@ export class DiResolver {
    */
   @Mutation(() => String)
   async resetAllDriveFolders() {
-    const r = await this.diService.resetAllDriveFolders();
-    return `Drive folders reset — companies: ${r.companies}, clients: ${r.clients}`;
+    try {
+      const r = await this.diService.resetAllDriveFolders();
+      return `Drive folders reset — companies: ${r.companies}, clients: ${r.clients}`;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.resetAllDriveFolders');
+    }
   }
 
   @Query(() => DiTableData)
@@ -181,7 +226,11 @@ export class DiResolver {
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
     @Args('filterConfig', { nullable: true }) filterConfig?: FilterConfigDi,
   ) {
-    return await this.diService.getAllDi(paginationConfig, filterConfig);
+    try {
+      return await this.diService.getAllDi(paginationConfig, filterConfig);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.getAllDi');
+    }
   }
   @Query(() => DiTableData)
   async searchDi(
@@ -190,11 +239,15 @@ export class DiResolver {
     @Args('search', { type: () => [SearchDiInput] }) search: SearchDiInput[],
     @Args('filterConfig', { nullable: true }) filterConfig?: FilterConfigDi,
   ) {
-    return await this.diService.searchDi(
-      paginationConfig,
-      search,
-      // filterConfig,
-    );
+    try {
+      return await this.diService.searchDi(
+        paginationConfig,
+        search,
+        // filterConfig,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.searchDi');
+    }
   }
 
   @Query(() => LogsDiData)
@@ -211,12 +264,20 @@ export class DiResolver {
    *  détail partagé ouvert au clic d'une notification (deep-link). */
   @Query(() => DiTable, { nullable: true })
   async getDiDetail(@Args('_id') _id: string) {
-    return this.diService.getDiDetailById(_id);
+    try {
+      return await this.diService.getDiDetailById(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.getDiDetail');
+    }
   }
 
   @Mutation(() => Di)
   async sendComponentToConMagasinForConfirmation(@Args('_id') _id: string) {
-    return await this.diService.sendComponentToConMagasinForConfirmation(_id);
+    try {
+      return await this.diService.sendComponentToConMagasinForConfirmation(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.sendComponentToConMagasinForConfirmation');
+    }
   }
 
   @Mutation(() => Di)
@@ -225,10 +286,14 @@ export class DiResolver {
     @Args('_id') _id: string,
     @CurrentUser() profile: Profile,
   ) {
-    return await this.diService.componentConfirmedFromCoordinator(
-      _id,
-      profile?._id ?? null,
-    );
+    try {
+      return await this.diService.componentConfirmedFromCoordinator(
+        _id,
+        profile?._id ?? null,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.componentConfirmedFromCoordinator');
+    }
   }
 
   @Mutation(() => Di)
@@ -237,10 +302,14 @@ export class DiResolver {
     @Args('diId') diId: string,
     @CurrentUser() profile: Profile,
   ) {
-    return await this.diService.sendDiToAdminsForPricing(
-      diId,
-      profile?._id ?? null,
-    );
+    try {
+      return await this.diService.sendDiToAdminsForPricing(
+        diId,
+        profile?._id ?? null,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.sendDiToAdminsForPricing');
+    }
   }
 
   @Mutation(() => Di)
@@ -249,10 +318,14 @@ export class DiResolver {
     @Args('diId') diId: string,
     @CurrentUser() profile: Profile,
   ) {
-    return await this.diService.confirmDiComponents(
-      diId,
-      profile?._id ?? null,
-    );
+    try {
+      return await this.diService.confirmDiComponents(
+        diId,
+        profile?._id ?? null,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.confirmDiComponents');
+    }
   }
 
   @Mutation(() => Di)
@@ -261,26 +334,38 @@ export class DiResolver {
     @Args('confirmationState') confirmationState: string,
     @Args('_idNotification', { nullable: true }) _idNotification?: string,
   ) {
-    this.pubsub.publish('confirmation-composant', {
-      notificationConfirmation: {
+    try {
+      this.pubsub.publish('confirmation-composant', {
+        notificationConfirmation: {
+          _id,
+        },
+      });
+      return await this.diService.confirmationBetweenMagasinAndCoordinator(
         _id,
-      },
-    });
-    return await this.diService.confirmationBetweenMagasinAndCoordinator(
-      _id,
-      confirmationState,
-      _idNotification,
-    );
+        confirmationState,
+        _idNotification,
+      );
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.confirmationComposant');
+    }
   }
 
   @Subscription(() => Di)
   notificationConfirmation() {
-    return this.pubsub.asyncIterator('confirmation-composant');
+    try {
+      return this.pubsub.asyncIterator('confirmation-composant');
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.notificationConfirmation');
+    }
   }
 
   @Mutation(() => Di)
   async deleteDi(@Args('_id') _id: string) {
-    return await this.diService.deleteDi(_id);
+    try {
+      return await this.diService.deleteDi(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.deleteDi');
+    }
   }
 
   // AUTHENTIFIÉE (comme `createDi`) : sans ça, le back ignore QUI modifie une DI
@@ -294,7 +379,11 @@ export class DiResolver {
     @Args('UpdateDi') updateDi: UpdateDi,
     @CurrentUser() profile: Profile,
   ) {
-    return await this.diService.updateDi(updateDi);
+    try {
+      return await this.diService.updateDi(updateDi);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.updateDi');
+    }
   }
 
   /**
@@ -312,10 +401,14 @@ export class DiResolver {
     @Args('input') input: AdminTechUpdateDiInput,
     @CurrentUser() profile: Profile,
   ) {
-    return await this.diService.adminTechUpdateDi(input, {
-      id: (profile as any)?._id ?? null,
-      role: (profile as any)?.role ?? null,
-    });
+    try {
+      return await this.diService.adminTechUpdateDi(input, {
+        id: (profile as any)?._id ?? null,
+        role: (profile as any)?.role ?? null,
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.adminTechUpdateDi');
+    }
   }
 
   /**
@@ -334,15 +427,23 @@ export class DiResolver {
     @Args('input') input: UpdateDiInfoInput,
     @CurrentUser() profile: Profile,
   ) {
-    return await this.diService.updateDiInfo(input, {
-      id: (profile as any)?._id ?? null,
-      role: (profile as any)?.role ?? null,
-    });
+    try {
+      return await this.diService.updateDiInfo(input, {
+        id: (profile as any)?._id ?? null,
+        role: (profile as any)?.role ?? null,
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.updateDiInfo');
+    }
   }
 
   @Query(() => Di)
-  getAllRemarque(@Args('_id') _id: string) {
-    return this.diService.getAllRemarque(_id);
+  async getAllRemarque(@Args('_id') _id: string) {
+    try {
+      return await this.diService.getAllRemarque(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.getAllRemarque');
+    }
   }
 
   @Query(() => DiTableData)
@@ -351,20 +452,32 @@ export class DiResolver {
     // Liste : filtres de colonnes cumulatifs (un objet seul reste accepté).
     @Args('search', { type: () => [SearchDiInput] }) search: SearchDiInput[],
   ) {
-    return this.diService.searchCoordinatorDI(paginationConfig, search);
+    try {
+      return await this.diService.searchCoordinatorDI(paginationConfig, search);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.searchCoordinatorDI');
+    }
   }
 
   @Query(() => DiTableData)
   async get_coordinatorDI(
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
   ) {
-    return await this.diService.get_coordinatorDI(paginationConfig);
+    try {
+      return await this.diService.get_coordinatorDI(paginationConfig);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.get_coordinatorDI');
+    }
   }
   @Query(() => DiTableData)
   async getDiForMagasin(
     @Args('paginationConfig') paginationConfig: PaginationConfigDi,
   ) {
-    return await this.diService.getDiForMagasin(paginationConfig);
+    try {
+      return await this.diService.getDiForMagasin(paginationConfig);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.getDiForMagasin');
+    }
   }
 
   @Query(() => DiTableData)
@@ -374,7 +487,11 @@ export class DiResolver {
     // encore un objet seul (liste d'un élément).
     @Args('search', { type: () => [SearchDiInput] }) search: SearchDiInput[],
   ) {
-    return this.diService.searchDiForMagasin(paginationConfig, search);
+    try {
+      return await this.diService.searchDiForMagasin(paginationConfig, search);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.searchDiForMagasin');
+    }
   }
 
   @Mutation(() => Di)
@@ -382,12 +499,20 @@ export class DiResolver {
     @Args('_id') _id: string,
     @Args('nameComposant') nameComposant: string,
   ) {
-    return await this.diService.setSelectedComponentAsDone(_id, nameComposant);
+    try {
+      return await this.diService.setSelectedComponentAsDone(_id, nameComposant);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.setSelectedComponentAsDone');
+    }
   }
 
   @Mutation(() => Di)
-  manager_Pending1(@Args('_id') _id: string) {
-    return this.diService.manager_Pending1(_id);
+  async manager_Pending1(@Args('_id') _id: string) {
+    try {
+      return await this.diService.manager_Pending1(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.manager_Pending1');
+    }
   }
 
   // `addPDFFile` SUPPRIME. C'etait la seule ecriture de documents SANS aucune
@@ -402,24 +527,36 @@ export class DiResolver {
     @Args('_id') _id: string,
     @Args('diag') diag: DiagUpdate,
   ) {
-    // Only the technician the DI is assigned to (diagnostic) may start it.
-    await this.statService.assertTechOwnsDi(_id, user, 'diag');
-    // `await` OBLIGATOIRE : sans lui la promesse FLOTTE. Une erreur métier
-    // (GraphQLError) devient alors un « unhandled rejection » et Node ABAT LE
-    // PROCESSUS — l'API entière tombe. Et `if (promesse)` est toujours vrai, donc
-    // la mutation répondait `true` même quand l'écriture avait échoué.
-    await this.diService.tech_startDiagnostic(_id, diag);
-    return true;
+    try {
+      // Only the technician the DI is assigned to (diagnostic) may start it.
+      await this.statService.assertTechOwnsDi(_id, user, 'diag');
+      // `await` OBLIGATOIRE : sans lui la promesse FLOTTE. Une erreur métier
+      // (GraphQLError) devient alors un « unhandled rejection » et Node ABAT LE
+      // PROCESSUS — l'API entière tombe. Et `if (promesse)` est toujours vrai, donc
+      // la mutation répondait `true` même quand l'écriture avait échoué.
+      await this.diService.tech_startDiagnostic(_id, diag);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.tech_startDiagnostic');
+    }
   }
 
   @Mutation(() => Di)
   async markAsSeen(@Args('_id') _id: string) {
-    return this.diService.markAsSeen(_id);
+    try {
+      return await this.diService.markAsSeen(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.markAsSeen');
+    }
   }
 
   @Query(() => [StatusCount])
   async getStatusCount() {
-    return await this.diService.getStatusCount();
+    try {
+      return await this.diService.getStatusCount();
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.getStatusCount');
+    }
   }
 
   @Mutation(() => Boolean)
@@ -428,14 +565,18 @@ export class DiResolver {
     @CurrentUser() user: Profile,
     @Args('_id') _id: string,
   ) {
-    // Only the technician the DI is assigned to (réparation) may start it.
-    await this.statService.assertTechOwnsDi(_id, user, 'rep');
-    // `await` OBLIGATOIRE : sans lui la promesse FLOTTE. Une erreur métier
-    // (GraphQLError) devient alors un « unhandled rejection » et Node ABAT LE
-    // PROCESSUS — l'API entière tombe. Et `if (promesse)` est toujours vrai, donc
-    // la mutation répondait `true` même quand l'écriture avait échoué.
-    await this.diService.tech_startReperation(_id);
-    return true;
+    try {
+      // Only the technician the DI is assigned to (réparation) may start it.
+      await this.statService.assertTechOwnsDi(_id, user, 'rep');
+      // `await` OBLIGATOIRE : sans lui la promesse FLOTTE. Une erreur métier
+      // (GraphQLError) devient alors un « unhandled rejection » et Node ABAT LE
+      // PROCESSUS — l'API entière tombe. Et `if (promesse)` est toujours vrai, donc
+      // la mutation répondait `true` même quand l'écriture avait échoué.
+      await this.diService.tech_startReperation(_id);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.tech_startReperation');
+    }
   }
 
   @Mutation(() => Di)
@@ -449,23 +590,35 @@ export class DiResolver {
     @Args('testsValidated', { type: () => Boolean, nullable: true })
     testsValidated?: boolean,
   ) {
-    await this.statService.assertTechOwnsDi(_id, user, 'rep');
-    return this.diService.tech_finishReperation(_id, remarque, {
-      repairSuccess,
-      testsValidated,
-    });
+    try {
+      await this.statService.assertTechOwnsDi(_id, user, 'rep');
+      return await this.diService.tech_finishReperation(_id, remarque, {
+        repairSuccess,
+        testsValidated,
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.tech_finishReperation');
+    }
   }
 
   @Mutation(() => Di)
-  changestatusToFinishReparation(@Args('_id') _id: string) {
-    return this.diService.changeStatusTofinsh(_id);
+  async changestatusToFinishReparation(@Args('_id') _id: string) {
+    try {
+      return await this.diService.changeStatusTofinsh(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changestatusToFinishReparation');
+    }
   }
 
   // « Renvoyer au diagnostic » — bounce a DI being priced back to the
   // coordinator (PRICING → PENDING1) so a technician is re-assigned.
   @Mutation(() => Di)
-  sendDiBackToDiagnostic(@Args('_id') _id: string) {
-    return this.diService.sendDiBackToDiagnostic(_id);
+  async sendDiBackToDiagnostic(@Args('_id') _id: string) {
+    try {
+      return await this.diService.sendDiBackToDiagnostic(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.sendDiBackToDiagnostic');
+    }
   }
 
   @Mutation(() => Boolean)
@@ -473,42 +626,62 @@ export class DiResolver {
     @Args('_id') _id: string,
     @Args('price') price: number,
   ) {
-    // `await` OBLIGATOIRE : sans lui la promesse FLOTTE. Une erreur métier
-    // (GraphQLError) devient alors un « unhandled rejection » et Node ABAT LE
-    // PROCESSUS — l'API entière tombe. Et `if (promesse)` est toujours vrai, donc
-    // la mutation répondait `true` même quand l'écriture avait échoué.
-    // Reproduction : saisir un prix de diagnostic nul/négatif faisait remonter
-    // « Prix du diagnostic invalide » hors du cycle de vie GraphQL → crash.
-    await this.diService.affectinitialPrice(_id, price);
-    return true;
+    try {
+      // `await` OBLIGATOIRE : sans lui la promesse FLOTTE. Une erreur métier
+      // (GraphQLError) devient alors un « unhandled rejection » et Node ABAT LE
+      // PROCESSUS — l'API entière tombe. Et `if (promesse)` est toujours vrai, donc
+      // la mutation répondait `true` même quand l'écriture avait échoué.
+      // Reproduction : saisir un prix de diagnostic nul/négatif faisait remonter
+      // « Prix du diagnostic invalide » hors du cycle de vie GraphQL → crash.
+      await this.diService.affectinitialPrice(_id, price);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.affectinitialPrice');
+    }
   }
   @Query(() => Number)
-  calculateTicketComposantPrice(
+  async calculateTicketComposantPrice(
     @Args('_id') _id: string,
     // Cycle demandé (modal « Dossier ») ; absent = cycle courant de la DI.
     @Args('idIgnore', { type: () => Int, nullable: true }) idIgnore?: number,
   ) {
-    return this.diService.calculateTicketComposantPrice(_id, idIgnore);
+    try {
+      return await this.diService.calculateTicketComposantPrice(_id, idIgnore);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.calculateTicketComposantPrice');
+    }
   }
 
   /** Composants du cycle valorisés par phase : prix figés au diagnostic et en
    *  fin de réparation, repli sur le prix catalogue actuel (DI antérieures). */
   @Query(() => ComposantPhaseCost)
-  calculateTicketComposantPriceByPhase(
+  async calculateTicketComposantPriceByPhase(
     @Args('_id') _id: string,
     @Args('idIgnore', { type: () => Int, nullable: true }) idIgnore?: number,
   ) {
-    return this.diService.calculateTicketComposantPriceByPhase(_id, idIgnore);
+    try {
+      return await this.diService.calculateTicketComposantPriceByPhase(_id, idIgnore);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.calculateTicketComposantPriceByPhase');
+    }
   }
 
   @Mutation(() => Di)
-  magasinTech_Pending2(@Args('_id') _id: string) {
-    return this.diService.magasinTech_Pending2(_id);
+  async magasinTech_Pending2(@Args('_id') _id: string) {
+    try {
+      return await this.diService.magasinTech_Pending2(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.magasinTech_Pending2');
+    }
   }
 
   @Mutation(() => Di)
-  managerAdminManager_Pending3(@Args('_id') _id: string) {
-    return this.diService.managerAdminManager_Pending3(_id);
+  async managerAdminManager_Pending3(@Args('_id') _id: string) {
+    try {
+      return await this.diService.managerAdminManager_Pending3(_id);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.managerAdminManager_Pending3');
+    }
   }
 
   //Nego1 and Nego2 sending to the Magasin
@@ -519,12 +692,16 @@ export class DiResolver {
     @Args('price') price: number,
     @Args('final_price') final_price: number,
   ) {
-    let mut = await this.diService.managerAdminManager_InMagasin(
-      _id,
-      price,
-      final_price,
-    );
-    return mut;
+    try {
+      let mut = await this.diService.managerAdminManager_InMagasin(
+        _id,
+        price,
+        final_price,
+      );
+      return mut;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.managerAdminManager_InMagasin');
+    }
   }
 
   /**
@@ -537,8 +714,12 @@ export class DiResolver {
   // Awaiting lets a guard refusal surface as a clean GraphQL BAD_REQUEST.
   @Mutation(() => Boolean)
   async changeStatusPending1(@Args('_id') _id: string) {
-    await this.diService.changeStatusPending1(_id);
-    return true;
+    try {
+      await this.diService.changeStatusPending1(_id);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusPending1');
+    }
   }
   @Mutation(() => Boolean)
   @UseGuards(JwtAuthGuard)
@@ -546,31 +727,51 @@ export class DiResolver {
     @CurrentUser() user: Profile,
     @Args('_id') _id: string,
   ) {
-    // Resume-into-diagnostic is a tech work-action → assignee only.
-    await this.statService.assertTechOwnsDi(_id, user, 'diag');
-    await this.diService.changeStatusInDiagnostic(_id);
-    return true;
+    try {
+      // Resume-into-diagnostic is a tech work-action → assignee only.
+      await this.statService.assertTechOwnsDi(_id, user, 'diag');
+      await this.diService.changeStatusInDiagnostic(_id);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusInDiagnostic');
+    }
   }
   @Mutation(() => Boolean)
   async changeStatusInMagasin(@Args('_id') _id: string) {
-    await this.diService.changeStatusInMagasin(_id);
-    return true;
+    try {
+      await this.diService.changeStatusInMagasin(_id);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusInMagasin');
+    }
   }
   @Mutation(() => Boolean)
   async changeStatusMagasinEstimation(@Args('_id') _id: string) {
-    await this.diService.changeStatusMagasinEstimation(_id);
-    return true;
+    try {
+      await this.diService.changeStatusMagasinEstimation(_id);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusMagasinEstimation');
+    }
   }
 
   @Mutation(() => Boolean)
   async changeStatusPending2(@Args('_id') _id: string) {
-    await this.diService.changeStatusPending2(_id);
-    return true;
+    try {
+      await this.diService.changeStatusPending2(_id);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusPending2');
+    }
   }
   @Mutation(() => Boolean)
   async changeStatusPricing(@Args('_id') _id: string) {
-    await this.diService.changeStatusPricing(_id);
-    return true;
+    try {
+      await this.diService.changeStatusPricing(_id);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusPricing');
+    }
   }
 
   /** Persist the « Estimation prix réparation » entered in the price-initial
@@ -580,8 +781,12 @@ export class DiResolver {
     @Args('_id') _id: string,
     @Args('estimate', { type: () => Float }) estimate: number,
   ) {
-    await this.diService.setRepairEstimate(_id, estimate);
-    return true;
+    try {
+      await this.diService.setRepairEstimate(_id, estimate);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.setRepairEstimate');
+    }
   }
 
   /** Cas diagnostic NON PAYANT : l'admin saisit UNIQUEMENT le prix de réparation ;
@@ -593,7 +798,11 @@ export class DiResolver {
     @Args('_id') _id: string,
     @Args('repairPrice', { type: () => Float }) repairPrice: number,
   ) {
-    return this.diService.setRepairFinalPrice(_id, repairPrice);
+    try {
+      return await this.diService.setRepairFinalPrice(_id, repairPrice);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.setRepairFinalPrice');
+    }
   }
 
   /** Gouvernance COORDINATRICE — bascule « Diagnostic payant » (verrouillé une
@@ -605,36 +814,60 @@ export class DiResolver {
     @Args('diId') diId: string,
     @Args('payant') payant: boolean,
   ) {
-    return this.diService.setDiagnosticPayant(diId, payant);
+    try {
+      return await this.diService.setDiagnosticPayant(diId, payant);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.setDiagnosticPayant');
+    }
   }
 
   @Mutation(() => Boolean)
   async changeStatusNegociate1(@Args('_id') _id: string) {
-    await this.diService.changeStatusNegociate1(_id);
-    return true;
+    try {
+      await this.diService.changeStatusNegociate1(_id);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusNegociate1');
+    }
   }
   // Cas PAYANT irréparable : « Valider le prix » clôture en IRREPARABLE au lieu
   // d'entrer dans l'Approval (voir DiService.changeStatusIrreparableFromPricing).
   @Mutation(() => Boolean)
   async changeStatusIrreparableFromPricing(@Args('_id') _id: string) {
-    await this.diService.changeStatusIrreparableFromPricing(_id);
-    return true;
+    try {
+      await this.diService.changeStatusIrreparableFromPricing(_id);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusIrreparableFromPricing');
+    }
   }
   @Mutation(() => Boolean)
   async changeStatusNegociate2(@Args('_id') _id: string) {
-    await this.diService.changeStatusNegociate2(_id);
-    return true;
+    try {
+      await this.diService.changeStatusNegociate2(_id);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusNegociate2');
+    }
   }
   @Mutation(() => Boolean)
   async changeStatusPending3(@Args('_id') _id: string) {
-    await this.diService.changeStatusPending3(_id);
-    return true;
+    try {
+      await this.diService.changeStatusPending3(_id);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusPending3');
+    }
   }
 
   @Mutation(() => Boolean)
   async changeStatusRepaire(@Args('_id') _id: string) {
-    await this.diService.changeStatusRepaire(_id);
-    return true;
+    try {
+      await this.diService.changeStatusRepaire(_id);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusRepaire');
+    }
   }
 
   /** Envoi en réparation par la COORDINATRICE avec devis OBLIGATOIRE — « un seul
@@ -649,8 +882,12 @@ export class DiResolver {
     @Args('repTechId') repTechId: string,
     @Args('pdf') pdf: string,
   ) {
-    await this.diService.coordinatorSendToRepairWithDevis(_id, repTechId, pdf);
-    return true;
+    try {
+      await this.diService.coordinatorSendToRepairWithDevis(_id, repTechId, pdf);
+      return true;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.coordinatorSendToRepairWithDevis');
+    }
   }
 
   @Mutation(() => Boolean)
@@ -659,17 +896,21 @@ export class DiResolver {
     @CurrentUser() user: Profile,
     @Args('_id') _id: string,
   ) {
-    // Resume-into-repair is a tech work-action → assignee only.
-    await this.statService.assertTechOwnsDi(_id, user, 'rep');
     try {
-      // Properly await the service so any error surfaces to the GraphQL
-      // response instead of being swallowed. The previous fire-and-forget
-      // shape returned `true` immediately even when the service threw.
-      const result = await this.diService.changeStatusInRepair(_id);
-      return !!result;
-    } catch (err) {
-      console.error('[changeStatusInRepair][resolver] error:', err);
-      throw err;
+      // Resume-into-repair is a tech work-action → assignee only.
+      await this.statService.assertTechOwnsDi(_id, user, 'rep');
+      try {
+        // Properly await the service so any error surfaces to the GraphQL
+        // response instead of being swallowed. The previous fire-and-forget
+        // shape returned `true` immediately even when the service threw.
+        const result = await this.diService.changeStatusInRepair(_id);
+        return !!result;
+      } catch (err) {
+        console.error('[changeStatusInRepair][resolver] error:', err);
+        throw err;
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusInRepair');
     }
   }
   /**
@@ -685,7 +926,11 @@ export class DiResolver {
     @Args('_id') _id: string,
     @Args('reason', { nullable: true }) reason?: string,
   ) {
-    return await this.diService.openRetourCycle(_id, reason);
+    try {
+      return await this.diService.openRetourCycle(_id, reason);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusRetour');
+    }
   }
 
   // Compatibilite : les trois mutations historiques delegent toutes a
@@ -697,8 +942,12 @@ export class DiResolver {
     @Args('_id') _id: string,
     @Args('reason', { nullable: true }) reason?: string,
   ) {
-    const updated = await this.diService.changeDiRetour1(_id, reason);
-    return !!updated;
+    try {
+      const updated = await this.diService.changeDiRetour1(_id, reason);
+      return !!updated;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusRetour1');
+    }
   }
   @Mutation(() => Boolean)
   @UseGuards(JwtAuthGuard)
@@ -706,8 +955,12 @@ export class DiResolver {
     @Args('_id') _id: string,
     @Args('reason', { nullable: true }) reason?: string,
   ) {
-    const updated = await this.diService.changeDiRetour2(_id, reason);
-    return !!updated;
+    try {
+      const updated = await this.diService.changeDiRetour2(_id, reason);
+      return !!updated;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusRetour2');
+    }
   }
   @Mutation(() => Boolean)
   @UseGuards(JwtAuthGuard)
@@ -715,23 +968,35 @@ export class DiResolver {
     @Args('_id') _id: string,
     @Args('reason', { nullable: true }) reason?: string,
   ) {
-    const updated = await this.diService.changeDiRetour3(_id, reason);
-    return !!updated;
+    try {
+      const updated = await this.diService.changeDiRetour3(_id, reason);
+      return !!updated;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeStatusRetour3');
+    }
   }
 
   @Mutation(() => Boolean)
   changeToPending1(@Args('_id') _id: string) {
-    const pending3 = this.diService.changeToPending1(_id);
-    if (pending3) {
-      return true;
-    } else {
-      return false;
+    try {
+      const pending3 = this.diService.changeToPending1(_id);
+      if (pending3) {
+        return true;
+      } else {
+        return false;
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeToPending1');
     }
   }
   //coordinator_ToDiag
   @Mutation(() => Di)
   async coordinatorSendingDiDiag(@Args('_idDI') _idDI: string) {
-    return await this.diService.coordinator_ToDiag(_idDI);
+    try {
+      return await this.diService.coordinator_ToDiag(_idDI);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.coordinatorSendingDiDiag');
+    }
   }
   //Diagnostique in Pause
   @Mutation(() => Di)
@@ -740,9 +1005,13 @@ export class DiResolver {
     @CurrentUser() user: Profile,
     @Args('_idDI') _idDI: string,
   ) {
-    // Pausing the diagnostic is a tech work-action → assignee only.
-    await this.statService.assertTechOwnsDi(_idDI, user, 'diag');
-    return this.diService.changeToDiagnosticInPause(_idDI);
+    try {
+      // Pausing the diagnostic is a tech work-action → assignee only.
+      await this.statService.assertTechOwnsDi(_idDI, user, 'diag');
+      return await this.diService.changeToDiagnosticInPause(_idDI);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeToDiagnosticInPause');
+    }
   }
 
   //Repair in Pause
@@ -752,16 +1021,20 @@ export class DiResolver {
     @CurrentUser() user: Profile,
     @Args('_idDI') _idDI: string,
   ) {
-    // Pausing the repair is a tech work-action → assignee only.
-    await this.statService.assertTechOwnsDi(_idDI, user, 'rep');
-    const diRepairPause = await this.diService.changeStateInReparationPause(
-      _idDI,
-    );
+    try {
+      // Pausing the repair is a tech work-action → assignee only.
+      await this.statService.assertTechOwnsDi(_idDI, user, 'rep');
+      const diRepairPause = await this.diService.changeStateInReparationPause(
+        _idDI,
+      );
 
-    if (diRepairPause) {
-      return diRepairPause;
-    } else {
-      return error;
+      if (diRepairPause) {
+        return diRepairPause;
+      } else {
+        return error;
+      }
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.changeToReparationInPause');
     }
   }
 
@@ -779,8 +1052,12 @@ export class DiResolver {
    */
   @Mutation(() => Di)
   @UseGuards(JwtAuthGuard)
-  countIgnore(@Args('_idDI') _idDI: string) {
-    return this.diService.countIgnore(_idDI);
+  async countIgnore(@Args('_idDI') _idDI: string) {
+    try {
+      return await this.diService.countIgnore(_idDI);
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.countIgnore');
+    }
   }
 
   //1.Duree Moyenne Reparation
@@ -789,83 +1066,99 @@ export class DiResolver {
   async getTechStatisticsMoyenneReperation(
     @Args('techRep_id') techRep_id: string,
   ) {
-    const data = await this.diService.getTechStatisticsMoyenneReperation(
-      techRep_id,
-    );
-    const countNumberReperation = data.filter(
-      (element) => element.rep_time,
-    ).length;
-    const totalRepTimeInSeconds = data
-      .map((element) => this.timeStringToSeconds(element.rep_time))
-      .reduce((acc, curr) => acc + curr, 0);
-    let moyRep = totalRepTimeInSeconds / countNumberReperation;
+    try {
+      const data = await this.diService.getTechStatisticsMoyenneReperation(
+        techRep_id,
+      );
+      const countNumberReperation = data.filter(
+        (element) => element.rep_time,
+      ).length;
+      const totalRepTimeInSeconds = data
+        .map((element) => this.timeStringToSeconds(element.rep_time))
+        .reduce((acc, curr) => acc + curr, 0);
+      let moyRep = totalRepTimeInSeconds / countNumberReperation;
 
-    const sumDureeMinusDureeMoyenne = data
-      .map((element) =>
-        Math.pow(this.timeStringToSeconds(element.rep_time) - moyRep, 2),
-      )
-      .reduce((acc, curr) => acc + curr, 0);
+      const sumDureeMinusDureeMoyenne = data
+        .map((element) =>
+          Math.pow(this.timeStringToSeconds(element.rep_time) - moyRep, 2),
+        )
+        .reduce((acc, curr) => acc + curr, 0);
 
-    const ecartType = Math.sqrt(
-      sumDureeMinusDureeMoyenne / countNumberReperation,
-    );
+      const ecartType = Math.sqrt(
+        sumDureeMinusDureeMoyenne / countNumberReperation,
+      );
 
-    return ecartType;
+      return ecartType;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.getTechStatisticsMoyenneReperation');
+    }
   }
   //EcartType Diagnostique
   @Query(() => Number)
   async getTechStatisticsMoyenneDiagnostique(
     @Args('techDiag_id') techDiag_id: string,
   ) {
-    const data = await this.diService.getTechStatisticsMoyenneDiagnostique(
-      techDiag_id,
-    );
-    const countNumberDiagnostique = data.filter(
-      (element) => element.diag_time,
-    ).length;
-    const totalDiagTimeInSeconds = data
-      .map((element) => this.timeStringToSeconds(element.diag_time))
-      .reduce((acc, curr) => acc + curr, 0);
-    let moyDiag = totalDiagTimeInSeconds / countNumberDiagnostique;
+    try {
+      const data = await this.diService.getTechStatisticsMoyenneDiagnostique(
+        techDiag_id,
+      );
+      const countNumberDiagnostique = data.filter(
+        (element) => element.diag_time,
+      ).length;
+      const totalDiagTimeInSeconds = data
+        .map((element) => this.timeStringToSeconds(element.diag_time))
+        .reduce((acc, curr) => acc + curr, 0);
+      let moyDiag = totalDiagTimeInSeconds / countNumberDiagnostique;
 
-    const sumDureeMinusDureeMoyenne = data
-      .map((element) =>
-        Math.pow(this.timeStringToSeconds(element.diag_time) - moyDiag, 2),
-      )
-      .reduce((acc, curr) => acc + curr, 0);
+      const sumDureeMinusDureeMoyenne = data
+        .map((element) =>
+          Math.pow(this.timeStringToSeconds(element.diag_time) - moyDiag, 2),
+        )
+        .reduce((acc, curr) => acc + curr, 0);
 
-    const ecartType = Math.sqrt(
-      sumDureeMinusDureeMoyenne / countNumberDiagnostique,
-    );
+      const ecartType = Math.sqrt(
+        sumDureeMinusDureeMoyenne / countNumberDiagnostique,
+      );
 
-    return ecartType;
+      return ecartType;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.getTechStatisticsMoyenneDiagnostique');
+    }
   }
   //2. Taux de reperation reussie for each tech
   // function that give % of success reperation and retour reperation
   @Query(() => Number)
   async getTauxRepReussiteByTech(@Args('techRep_id') techRep_id: string) {
-    const data = await this.diService.getTauxRepReussiteByTech(techRep_id);
-    let repSuccess = 0;
-    let allcounter = data.length;
-    data.map((el) =>
-      el.status === 'FINISHED' ? (repSuccess = repSuccess + 1) : repSuccess,
-    );
+    try {
+      const data = await this.diService.getTauxRepReussiteByTech(techRep_id);
+      let repSuccess = 0;
+      let allcounter = data.length;
+      data.map((el) =>
+        el.status === 'FINISHED' ? (repSuccess = repSuccess + 1) : repSuccess,
+      );
 
-    const percentageReussite = (repSuccess / allcounter) * 100;
-    return percentageReussite;
+      const percentageReussite = (repSuccess / allcounter) * 100;
+      return percentageReussite;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.getTauxRepReussiteByTech');
+    }
   }
   //2. Taux de reperation qui reflete le nombre de carte traite
   @Query(() => Number)
   async getTauxReperationByTech(@Args('techRep_id') techRep_id: string) {
-    const data = await this.diService.getTauxReperationByTech(techRep_id);
-    let repFinie = 0;
-    let allcounter = data.length;
-    data.map((el) =>
-      el.status === 'FINISHED' ? (repFinie = repFinie + 1) : repFinie,
-    );
+    try {
+      const data = await this.diService.getTauxReperationByTech(techRep_id);
+      let repFinie = 0;
+      let allcounter = data.length;
+      data.map((el) =>
+        el.status === 'FINISHED' ? (repFinie = repFinie + 1) : repFinie,
+      );
 
-    const percentageTraiter = (repFinie / allcounter) * 100;
-    return percentageTraiter;
+      const percentageTraiter = (repFinie / allcounter) * 100;
+      return percentageTraiter;
+    } catch (error) {
+      throw withErrorContext(error, 'DiResolver.getTauxReperationByTech');
+    }
   }
   z;
 }
