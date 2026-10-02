@@ -2441,8 +2441,15 @@ export class DiService {
   async magasinTech_Pending2(_idDI: string): Promise<Di> {
     try {
       // Seconde porte vers PENDING2 (exposée telle quelle par le resolver). Un
-      // retour Fixtronix AVEC pièces sort du magasin vers la tarification comme un
-      // retour client ; SANS pièces il n'y arrive jamais (PENDING3 direct).
+      // retour Fixtronix AVEC pièces sort du magasin vers la poignée de main
+      // composants (miroir de `changeStatusPending2`) ; SANS pièces il n'y arrive
+      // jamais (PENDING3 direct).
+      {
+        const guardDi: any = await this.diModel.findOne({ _id: _idDI }).lean();
+        if (await this.shouldDetourMagasinExitForFixtronix(guardDi, _idDI)) {
+          return (await this.changeStatusInMagasin(_idDI)) as any;
+        }
+      }
       await this.assertNotFixtronixBillable(_idDI, 'magasinTech_Pending2');
       await this.assertTransitionAllowed(_idDI, STATUS_DI.Pending2.status);
       // Sortie de diagnostic possible (fin sans pause préalable) : ferme le
@@ -5100,9 +5107,9 @@ export class DiService {
           }
           return await this.magasinTech_Pending2(_id);
         }
-        // Retour RÉPARABLE + AVEC PDR → magasin (MagasinEstimation → PENDING2 →
-        // tarification), erreur Fixtronix OU client : la bascule « Facturer le
-        // diagnostic ? » décide en Pricing si quelque chose est facturé.
+        // Retour RÉPARABLE + AVEC PDR → magasin (MagasinEstimation). À la sortie :
+        // erreur CLIENT → PENDING2 → tarification ; erreur FIXTRONIX → poignée de
+        // main composants, jamais facturée (`shouldDetourMagasinExitForFixtronix`).
       } else {
         const declaredPdr = di?.contain_pdr === true;
         const hasComposants =
@@ -5201,31 +5208,40 @@ export class DiService {
     }
   }
 
+
   /**
-   * Le cycle COURANT porte-t-il des pièces (PDR coché ET liste non vide) ?
-   * Miroir DI d'abord, snapshot du cycle en repli — même critère que le routage
-   * de sortie de diagnostic (`changeStatusMagasinEstimation`).
+   * SORTIE MAGASIN d'un RETOUR Fixtronix AVEC pièces : vers la poignée de main
+   * composants (CONFIRMATION), JAMAIS vers PENDING2/tarification.
+   *
+   * À la sortie de l'estimation (« Terminer l'estimation » → `changeStatusPending2`
+   * / `magasinTech_Pending2`), la source n'est plus un statut de diagnostic : sans
+   * ce détour la DI filait en PENDING2 → PRICING_DIAG, donc facturée pour NOTRE
+   * erreur, et l'étape magasin était sautée (T1364, 2026-10-02).
+   * Borné au flux RETOUR réparable.
    */
-  private async cycleHasComponents(di: any, _id: string): Promise<boolean> {
+  private async shouldDetourMagasinExitForFixtronix(
+    di: any,
+    _id: string,
+  ): Promise<boolean> {
     try {
-      if (this.diHasComponents(di)) return true;
-      if ((di?.ignoreCount ?? 0) > 0) {
-        const log: any = await this.logsDiService.getLogsById(di.ignoreCount, _id);
-        return this.diHasComponents(log);
-      }
-      return false;
+      if (di?.status !== STATUS_DI.MagasinEstimation.status) return false;
+      if ((di?.ignoreCount ?? 0) <= 0) return false;
+      if (di?.can_be_repaired === false) return false;
+      return await this.isFixtronixCycle(di, _id);
     } catch (error) {
-      throw withErrorContext(error, 'DiService.cycleHasComponents');
+      throw withErrorContext(error, 'DiService.shouldDetourMagasinExitForFixtronix');
     }
   }
 
   /**
-   * GARDE ARGENT — un retour « erreur Fixtronix » SANS pièces n'est jamais
-   * tarifé (il part en PENDING3 direct, non facturé).
+   * GARDE ARGENT — un retour « erreur Fixtronix » n'est JAMAIS tarifé.
+   *   - SANS pièces → PENDING3 direct (raccourci de sortie de diagnostic).
+   *   - AVEC pièces → magasin (estimation) puis poignée de main composants
+   *     (CONFIRMATION → ATTENTE_CONFIRMATION_COORDINATION → MAGASIN_FINALISATION
+   *     → PENDING3), tarification sautée — voir `shouldDetourMagasinExitForFixtronix`.
    *
-   * Depuis 2026-09-15, un retour Fixtronix AVEC pièces passe par le magasin puis
-   * la tarification, comme un retour client : c'est la bascule « Facturer le
-   * diagnostic ? » (payant / non payant) qui décide ce qui est facturé.
+   * Décision Skander 2026-10-02 (T1364) : annule la règle du 2026-09-15 qui
+   * envoyait le retour Fixtronix AVEC pièces en PENDING2 → tarification.
    *
    * Portes gardées : `magasinTech_Pending2` (mutation exposée) et
    * `changeStatusPricing` (point de passage unique de toute tarification).
@@ -5239,7 +5255,6 @@ export class DiService {
       const di: any = await this.diModel.findOne({ _id }).lean();
 
       if ((di?.ignoreCount ?? 0) <= 0) return;
-      if (await this.cycleHasComponents(di, _id)) return;
       if (!(await this.isFixtronixCycle(di, _id))) return;
 
       await this.operationalErrorService.capture({
@@ -5254,7 +5269,7 @@ export class DiService {
       });
 
       throw new GraphQLError(
-        "Cette DI est un retour pour erreur Fixtronix sans pièce : elle ne passe pas par la tarification.",
+        "Cette DI est un retour pour erreur Fixtronix : elle ne passe pas par la tarification.",
         { extensions: { code: 'BAD_REQUEST' } },
       );
     } catch (error) {
@@ -5298,9 +5313,12 @@ export class DiService {
         await this.statsService.closeDiagLeg(_id, closed.ignoreCount ?? 0);
         return await (closed as any);
       }
-      // SORTIE MAGASIN (« Terminer l'estimation ») : un retour AVEC pièces part en
-      // PENDING2 → tarification, erreur Fixtronix comprise (la bascule « Facturer
-      // le diagnostic ? » y décide payant / non payant).
+      // SORTIE MAGASIN (« Terminer l'estimation ») : un retour Fixtronix AVEC
+      // pièces part vers la poignée de main composants, tarification sautée. Un
+      // retour CLIENT part en PENDING2 → tarification.
+      if (await this.shouldDetourMagasinExitForFixtronix(guardDi, _id)) {
+        return await (this.changeStatusInMagasin(_id) as any);
+      }
       await this.assertTransitionAllowed(_id, STATUS_DI.Pending2.status);
       const result = await this.diModel.findOneAndUpdate(
         { _id },

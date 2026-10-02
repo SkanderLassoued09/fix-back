@@ -7,14 +7,11 @@ import { STATUS_DI } from './di.status';
 /**
  * SORTIE MAGASIN d'un RETOUR AVEC pièces (FT-04 / FT-07, 2e saut).
  *
- * Règle depuis 2026-09-15 : un retour qui contient des PDR passe par le magasin
- * PUIS la tarification, erreur Fixtronix OU client. En Pricing, la bascule
- * « Facturer le diagnostic ? » décide ce qui est facturé (non payant = rien).
- * L'ancien détour Fixtronix (magasin → CONFIRMATION, tarification sautée) est
- * retiré.
- *
- * Reste interdit : tarifer un retour Fixtronix SANS pièces (il part en PENDING3
- * direct, non facturé) — garde `assertNotFixtronixBillable`.
+ * Règle (Skander 2026-10-02, T1364 — annule celle du 2026-09-15) :
+ *   - retour erreur FIXTRONIX + pièces → magasin puis poignée de main composants
+ *     (CONFIRMATION → … → PENDING3), tarification SAUTÉE, jamais facturé ;
+ *   - retour erreur CLIENT + pièces → magasin puis PENDING2 → tarification.
+ * Un retour Fixtronix n'est JAMAIS tarifé — garde `assertNotFixtronixBillable`.
  */
 
 function makeSvc(di: any, cycleLog: any) {
@@ -121,27 +118,31 @@ const NO_PDR_LOG = {
   isErrorFromFixtronix: false,
 };
 
-describe('DiService — sortie magasin d’un RETOUR avec pièces → tarification', () => {
+describe('DiService — sortie magasin d’un RETOUR avec pièces', () => {
+  const toConfirmation = (svc: any) =>
+    expect(svc.diModel.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.anything(),
+      { $set: { status: STATUS_DI.InMagasin.status } },
+      expect.anything(),
+    );
+
   describe('changeStatusPending2 (bouton « Terminer l’estimation » du magasin)', () => {
-    it('RETOUR + Fixtronix (flag DI) + pièces → PENDING2, plus de détour CONFIRMATION', async () => {
-      const svc = makeSvc(atMagasin({ isErrorFromFixtronix: true }), FIXTRONIX_LOG);
+    it('RETOUR + Fixtronix (flag DI) + pièces → CONFIRMATION, JAMAIS PENDING2', async () => {
+      // Log du cycle CLOBBERÉ à false par le formulaire : le flag DI doit gagner.
+      const svc = makeSvc(atMagasin({ isErrorFromFixtronix: true }), CLIENT_LOG);
 
       const out = await svc.changeStatusPending2('DI1');
 
-      expect(out?.status).toBe(STATUS_DI.Pending2.status);
-      expect(svc.diModel.findOneAndUpdate).not.toHaveBeenCalledWith(
-        expect.anything(),
-        { $set: { status: STATUS_DI.InMagasin.status } },
-        expect.anything(),
-      );
-      // Plus de devis coordinatrice imposé : la DI suit l'Approval normale.
+      expect(out?.status).toBe(STATUS_DI.InMagasin.status);
+      toConfirmation(svc);
+      // Pas de devis exigé : erreur Fixtronix, rien à facturer.
       expect(svc.diModel.updateOne).not.toHaveBeenCalled();
     });
 
-    it('RETOUR + Fixtronix porté par le SNAPSHOT du cycle → PENDING2', async () => {
+    it('RETOUR + Fixtronix porté par le SNAPSHOT du cycle → CONFIRMATION', async () => {
       const svc = makeSvc(atMagasin(), FIXTRONIX_LOG);
       const out = await svc.changeStatusPending2('DI1');
-      expect(out?.status).toBe(STATUS_DI.Pending2.status);
+      expect(out?.status).toBe(STATUS_DI.InMagasin.status);
     });
 
     it('RETOUR + erreur CLIENT → PENDING2 (inchangé)', async () => {
@@ -159,15 +160,14 @@ describe('DiService — sortie magasin d’un RETOUR avec pièces → tarificati
   });
 
   describe('magasinTech_Pending2 (2e porte, mutation exposée)', () => {
-    it('RETOUR + Fixtronix + pièces depuis MagasinEstimation → transition MAGASIN_TECH_TO_PENDING2', async () => {
+    it('RETOUR + Fixtronix + pièces depuis MagasinEstimation → CONFIRMATION, aucune transition PENDING2', async () => {
       const svc = makeSvc(atMagasin({ isErrorFromFixtronix: true }), FIXTRONIX_LOG);
 
-      await svc.magasinTech_Pending2('DI1');
+      const out = await svc.magasinTech_Pending2('DI1');
 
-      expect(svc.diWorkflowService.transition).toHaveBeenCalledWith(
-        expect.objectContaining({ transitionKey: 'MAGASIN_TECH_TO_PENDING2' }),
-      );
-      expect(svc.diModel.updateOne).not.toHaveBeenCalled();
+      expect(out?.status).toBe(STATUS_DI.InMagasin.status);
+      toConfirmation(svc);
+      expect(svc.diWorkflowService.transition).not.toHaveBeenCalled();
     });
 
     it('RETOUR + erreur CLIENT → transition MAGASIN_TECH_TO_PENDING2 (inchangé)', async () => {
@@ -206,14 +206,18 @@ describe('DiService — sortie magasin d’un RETOUR avec pièces → tarificati
   });
 
   describe('assertNotFixtronixBillable (porte de tarification)', () => {
-    it('Fixtronix + pièces sur le miroir DI → autorisé', async () => {
+    it('Fixtronix + pièces sur le miroir DI → REFUS', async () => {
       const svc = makeSvc(atMagasin({ isErrorFromFixtronix: true }), null);
-      await expect(svc.assertNotFixtronixBillable('DI1', 'test')).resolves.toBeUndefined();
+      await expect(svc.assertNotFixtronixBillable('DI1', 'test')).rejects.toThrow(
+        /erreur Fixtronix/,
+      );
     });
 
-    it('Fixtronix + pièces seulement sur le snapshot du cycle → autorisé', async () => {
-      const svc = makeSvc(inDiagRetour({ isErrorFromFixtronix: true }), FIXTRONIX_LOG);
-      await expect(svc.assertNotFixtronixBillable('DI1', 'test')).resolves.toBeUndefined();
+    it('Fixtronix + pièces seulement sur le snapshot du cycle → REFUS', async () => {
+      const svc = makeSvc(inDiagRetour(), FIXTRONIX_LOG);
+      await expect(svc.assertNotFixtronixBillable('DI1', 'test')).rejects.toThrow(
+        /erreur Fixtronix/,
+      );
     });
 
     it('Fixtronix SANS pièce → REFUS', async () => {
@@ -223,8 +227,13 @@ describe('DiService — sortie magasin d’un RETOUR avec pièces → tarificati
       );
     });
 
-    it('erreur CLIENT sans pièce → autorisé (facturé normalement)', async () => {
+    it('erreur CLIENT → autorisé (facturé normalement)', async () => {
       const svc = makeSvc(inDiagRetour(), NO_PDR_LOG);
+      await expect(svc.assertNotFixtronixBillable('DI1', 'test')).resolves.toBeUndefined();
+    });
+
+    it('flux ORIGINAL → autorisé', async () => {
+      const svc = makeSvc(atMagasin({ ignoreCount: 0, isErrorFromFixtronix: true }), null);
       await expect(svc.assertNotFixtronixBillable('DI1', 'test')).resolves.toBeUndefined();
     });
   });
