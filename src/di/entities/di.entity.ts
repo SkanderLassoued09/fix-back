@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { ObjectType, Field, Float, Int } from '@nestjs/graphql';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
@@ -337,6 +338,76 @@ function stampStatusUpdatedAtOnQueryUpdate(this: any, next: () => void) {
 DiSchema.pre('findOneAndUpdate', stampStatusUpdatedAtOnQueryUpdate);
 DiSchema.pre('updateOne', stampStatusUpdatedAtOnQueryUpdate);
 DiSchema.pre('updateMany', stampStatusUpdatedAtOnQueryUpdate);
+// ------------------------------------------------------------------------
+
+// ---- Di.status → Stat.status mirror ---------------------------------------
+// Invariant : la Stat du cycle courant (ignoreCount === di.ignoreCount) porte
+// TOUJOURS le statut de la DI. La liste et les compteurs Tech lisent
+// `Stat.status` ; les chemins qui ne touchaient que la DI (annulation,
+// clôture, sync Excel…) laissaient des DI ANNULER affichées INDIAGNOSTIC chez
+// le tech (91 Stats désynchronisées en prod, 2026-10-06). Un seul point
+// central, comme statusUpdatedAt, pour qu'aucun appelant n'ait à y penser.
+export async function syncStatStatusFromDis(diModel: any, ids: string[]) {
+  const Stat = diModel.db.models.Stat;
+  if (!Stat || !ids?.length) return;
+  const dis = await diModel
+    .find({ _id: { $in: ids } })
+    .select('status ignoreCount')
+    .lean();
+  const ops = dis.map((di: any) => {
+    const ic = di.ignoreCount || 0;
+    return {
+      updateMany: {
+        // Stats héritées sans champ ignoreCount = cycle 0.
+        filter: { _idDi: di._id, ignoreCount: ic > 0 ? ic : { $in: [0, null] } },
+        update: { $set: { status: di.status } },
+      },
+    };
+  });
+  if (ops.length) await Stat.bulkWrite(ops, { ordered: false });
+}
+
+function updateTouchesStatus(update: any): boolean {
+  if (!update) return false;
+  if (Array.isArray(update)) return true; // pipeline : on ne peut pas savoir
+  const set = update.$set ?? update;
+  return !!set && Object.prototype.hasOwnProperty.call(set, 'status');
+}
+
+const statSyncLogger = new Logger('DiStatStatusSync');
+
+// Les ids sont capturés AVANT l'écriture : le filtre peut porter sur l'ancien
+// statut et ne plus rien matcher après.
+async function captureStatusWriteIds(this: any) {
+  if (!updateTouchesStatus(this.getUpdate?.())) return;
+  this._statSyncIds = await this.model.find(this.getFilter()).distinct('_id');
+}
+async function mirrorStatusToStat(this: any) {
+  const ids = this._statSyncIds;
+  if (!ids?.length) return;
+  try {
+    await syncStatStatusFromDis(this.model, ids);
+  } catch (error) {
+    // L'écriture DI a déjà réussi : on ne la fait pas échouer, on trace.
+    statSyncLogger.error(`Stat status sync failed for ${ids.length} DI(s)`, error);
+  }
+}
+for (const op of ['findOneAndUpdate', 'updateOne', 'updateMany'] as const) {
+  DiSchema.pre(op, captureStatusWriteIds);
+  DiSchema.post(op, mirrorStatusToStat);
+}
+DiSchema.pre('save', function (next) {
+  this.$locals.statusChanged = !this.isNew && this.isModified('status');
+  next();
+});
+DiSchema.post('save', async function (doc: any) {
+  if (!doc.$locals?.statusChanged) return;
+  try {
+    await syncStatStatusFromDis(doc.constructor, [doc._id]);
+  } catch (error) {
+    statSyncLogger.error(`Stat status sync failed for DI ${doc._id}`, error);
+  }
+});
 // ------------------------------------------------------------------------
 
 /**
