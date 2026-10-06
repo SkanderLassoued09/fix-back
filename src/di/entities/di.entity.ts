@@ -370,8 +370,10 @@ export async function syncStatStatusFromDis(diModel: any, ids: string[]) {
 function updateTouchesStatus(update: any): boolean {
   if (!update) return false;
   if (Array.isArray(update)) return true; // pipeline : on ne peut pas savoir
-  const set = update.$set ?? update;
-  return !!set && Object.prototype.hasOwnProperty.call(set, 'status');
+  // Forme directe `{ status }` ET `$set` : les timestamps injectent un `$set`
+  // même quand l'appelant écrit en forme directe.
+  const has = (o: any) => !!o && Object.prototype.hasOwnProperty.call(o, 'status');
+  return has(update) || has(update.$set);
 }
 
 const statSyncLogger = new Logger('DiStatStatusSync');
