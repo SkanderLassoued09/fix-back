@@ -1,8 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as fs from 'fs';
 import { join } from 'path';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
-import { withErrorContext } from '../common/error-context';
+import {
+  CatchReport,
+  setErrorReporter,
+  withErrorContext,
+} from '../common/error-context';
+import { isTestRequest } from '../common/request-context';
 
 /**
  * Severity ordering matches the captured-error spec:
@@ -44,7 +49,7 @@ export interface OperationalErrorInput {
  * Used by progressively-hardened call sites across modules. Today: DI.
  */
 @Injectable()
-export class OperationalErrorService {
+export class OperationalErrorService implements OnModuleInit {
   private readonly logger = new Logger(OperationalErrorService.name);
 
   /** Discord dedup window — identical (module/method/error) alerts are sent
@@ -54,6 +59,58 @@ export class OperationalErrorService {
   private readonly lastNotifiedAt = new Map<string, number>();
 
   constructor(private readonly discordHookService: DiscordHookService) {}
+
+  /** Every catch block (`withErrorContext`) reports through here — see FIX-232. */
+  onModuleInit(): void {
+    setErrorReporter((report) => void this.reportCatch(report));
+  }
+
+  /**
+   * Discord alert for one catch block, in the `{ title, key, error }` shape.
+   * NEVER throws and never delays the request (fire-and-forget). QA traffic
+   * (`x-test-run: 1`) is skipped; the same `key + message` is sent at most once
+   * per DEDUP_WINDOW_MS (shared `lastNotifiedAt` map).
+   */
+  async reportCatch(report: CatchReport): Promise<void> {
+    try {
+      // Re-entry guard: a failing Discord send / log write goes through
+      // `withErrorContext` too — never report the reporting path itself.
+      if (/_(DiscordHookService|OperationalErrorService)_error$/.test(report.key)) return;
+      if (isTestRequest()) return;
+      const dedupKey = `catch/${report.key}/${report.error.message}`;
+      const now = Date.now();
+      if (now - (this.lastNotifiedAt.get(dedupKey) ?? 0) < OperationalErrorService.DEDUP_WINDOW_MS) {
+        return;
+      }
+      this.lastNotifiedAt.set(dedupKey, now);
+      if (this.lastNotifiedAt.size > 500) this.lastNotifiedAt.clear();
+
+      this.appendToDailyLog({ timestamp: new Date().toISOString(), ...report });
+      await this.discordHookService.sendCatchAlert(report);
+    } catch (err) {
+      this.logger.error(
+        `Catch alert failed (${report.key}): ${(err as Error)?.message ?? err}`,
+      );
+    }
+  }
+
+  /** Appends one JSON line to logs/YYYY-MM/errors-YYYY-MM-DD.log. Never throws. */
+  private appendToDailyLog(entry: Record<string, any>): void {
+    try {
+      const now = new Date();
+      const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+      const ymd = `${ym}-${String(now.getUTCDate()).padStart(2, '0')}`;
+      const dir = join(process.cwd(), 'logs', ym);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.appendFileSync(join(dir, `errors-${ymd}.log`), JSON.stringify(entry) + '\n', {
+        encoding: 'utf8',
+      });
+    } catch (fsErr) {
+      this.logger.error(
+        `Filesystem persistence failed for operational error: ${(fsErr as Error).message ?? fsErr}`,
+      );
+    }
+  }
 
   async capture(input: OperationalErrorInput): Promise<void> {
     try {
@@ -71,22 +128,7 @@ export class OperationalErrorService {
       // 1. Append to /logs/YYYY-MM/errors-YYYY-MM-DD.log
       //    Both fs.mkdirSync and fs.appendFileSync are wrapped — any IO error
       //    is logged through Nest and never bubbles to the caller.
-      try {
-        const now = new Date();
-        const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
-        const ymd = `${ym}-${String(now.getUTCDate()).padStart(2, '0')}`;
-        const dir = join(process.cwd(), 'logs', ym);
-        fs.mkdirSync(dir, { recursive: true });
-        fs.appendFileSync(
-          join(dir, `errors-${ymd}.log`),
-          JSON.stringify(entry) + '\n',
-          { encoding: 'utf8' },
-        );
-      } catch (fsErr) {
-        this.logger.error(
-          `Filesystem persistence failed for operational error ${input.module}/${input.method}: ${(fsErr as Error).message ?? fsErr}`,
-        );
-      }
+      this.appendToDailyLog(entry);
 
       // 2. Discord notification — reuse existing webhook. Best-effort, and
       //    GUARDED: skipped for expected errors (notify === false) and

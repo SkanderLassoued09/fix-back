@@ -4,7 +4,7 @@ import { Model } from 'mongoose';
 import { Response } from 'express';
 import { Di, DiDocument } from './entities/di.entity';
 import { GoogleDriveService } from 'src/google-drive/google-drive.service';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /**
  * Read-only image proxy for a DI's creation photo.
@@ -73,6 +73,7 @@ export class DiImageController {
         });
         stream.pipe(res);
       } catch (err) {
+        reportCatchError(err, 'DiImageController.getImage');
         this.logger.warn(
           `DI image proxy failed (${id}): ${(err as Error)?.message ?? err}`,
         );

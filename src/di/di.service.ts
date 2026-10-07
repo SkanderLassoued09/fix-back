@@ -72,7 +72,7 @@ import {
   GoogleDriveService,
   DriveDocType,
 } from 'src/google-drive/google-drive.service';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 /**
  * Remise a zero du MIROIR de la DI a l'entree d'un cycle retour.
  *
@@ -398,6 +398,7 @@ export class DiService {
           mime,
         );
       } catch (err) {
+        reportCatchError(err, 'DiService.uploadDiDocToDrive');
         // AUTO-REPAIR: the stored driveFolderId is stale (created by the old
         // service account, or deleted) → Drive 404. Recreate the folder under the
         // OAuth account (overwriting the stale id) and retry the upload ONCE. Any
@@ -707,6 +708,7 @@ export class DiService {
           createDiInput.image = webViewLink;
           imageRef = { driveFileId, webViewLink, name: fileName };
         } catch (err) {
+          reportCatchError(err, 'DiService.createDi');
           createDiInput.image = null;
           // An invalid_grant is a SYSTEMIC outage — every upload is failing,
           // not just this DI — so escalate to HIGH + notify. A one-off image
@@ -746,6 +748,7 @@ export class DiService {
       try {
         await this.logsDiService.create(di._id as any, 0);
       } catch (err) {
+        reportCatchError(err, 'DiService.createDi');
         await this.operationalErrorService.capture({
           module: 'di',
           submodule: 'diService',
@@ -768,6 +771,7 @@ export class DiService {
         try {
           await this.discordHookService.sendDiPendingNotification(di);
         } catch (err) {
+          reportCatchError(err, 'DiService.createDi');
           await this.captureDiscordFailure('createDi', err, { diId: di._id });
         }
         // Notif ERP : une DI créée DIRECTEMENT en PENDING1 (case cochée à la
@@ -791,6 +795,7 @@ export class DiService {
 
       return di;
     } catch (error) {
+      reportCatchError(error, 'DiService.createDi');
       await this.operationalErrorService.capture({
         module: 'di',
         submodule: 'diService',
@@ -859,6 +864,7 @@ export class DiService {
       // Return the result
       return { logsDi, di };
     } catch (error) {
+      reportCatchError(error, 'DiService.getDiById');
       throw error;
     }
   }
@@ -934,6 +940,7 @@ export class DiService {
           fileName,
         });
       } catch (err) {
+        reportCatchError(err, 'DiService.addDevisPDF');
         await this.captureDiscordFailure('addDevisPDF', err, { diId: _id });
       }
 
@@ -955,6 +962,7 @@ export class DiService {
             },
           });
         } catch (err) {
+          reportCatchError(err, 'DiService.addDevisPDF');
           await this.captureDiscordFailure('erp-notification', err);
         }
       }
@@ -966,6 +974,7 @@ export class DiService {
       // Renvoie la DI fraiche (la mutation est typee `() => Di`).
       return await this.diModel.findOne({ _id });
     } catch (error) {
+      reportCatchError(error, 'DiService.addDevisPDF');
       await this.captureUploadFailure('ADD_DEVIS_PDF', error, _id);
       throw error;
     }
@@ -1024,6 +1033,7 @@ export class DiService {
           fileName,
         });
       } catch (err) {
+        reportCatchError(err, 'DiService.addBlPDF');
         await this.captureDiscordFailure('addBlPDF', err, { diId: _id });
       }
 
@@ -1036,6 +1046,7 @@ export class DiService {
       await this.maybeAdvanceDocGate(_id);
       return await this.diModel.findOne({ _id });
     } catch (error) {
+      reportCatchError(error, 'DiService.addBlPDF');
       await this.captureUploadFailure('ADD_BL_PDF', error, _id);
       throw error;
     }
@@ -1075,6 +1086,7 @@ export class DiService {
       // Return the fresh DI (mutation is typed `() => Di`).
       return await this.diModel.findOne({ _id });
     } catch (error) {
+      reportCatchError(error, 'DiService.addFacturePDF');
       await this.captureUploadFailure('ADD_FACTURE_PDF', error, _id);
       throw error;
     }
@@ -1134,6 +1146,7 @@ export class DiService {
           fileName,
         });
       } catch (err) {
+        reportCatchError(err, 'DiService.addBCPDF');
         await this.captureDiscordFailure('addBCPDF', err, { diId: _id });
       }
 
@@ -1164,6 +1177,7 @@ export class DiService {
             },
           });
         } catch (err) {
+          reportCatchError(err, 'DiService.addBCPDF');
           await this.captureDiscordFailure('erp-notification', err);
         }
       }
@@ -1176,6 +1190,7 @@ export class DiService {
       // Renvoie la DI fraiche (la mutation est typee `() => Di`).
       return await this.diModel.findOne({ _id });
     } catch (error) {
+      reportCatchError(error, 'DiService.addBCPDF');
       await this.captureUploadFailure('ADD_BC_PDF', error, _id);
       throw error;
     }
@@ -1325,6 +1340,7 @@ export class DiService {
             notify: { roles: rolesForStatus(updated?.status) },
           });
         } catch (err) {
+          reportCatchError(err, 'DiService.applyTracedDiEdit');
           // Le journal ne doit JAMAIS faire échouer l'édition elle-même.
           await this.captureDiscordFailure('erp-notification', err);
         }
@@ -1455,6 +1471,7 @@ export class DiService {
             set.driveDocs = { Image: ref };
           }
         } catch (err) {
+          reportCatchError(err, 'DiService.updateDiInfo');
           await this.captureUploadFailure('UPDATE_DI_IMAGE', err, _id);
           throw err;
         }
@@ -2213,6 +2230,7 @@ export class DiService {
         );
       }
     } catch (error) {
+      reportCatchError(error, 'DiService.snapshotPartPrices');
       try {
         await this.operationalErrorService.capture({
           module: 'di',
@@ -2223,7 +2241,8 @@ export class DiService {
           message: (error as Error)?.message ?? String(error),
           payload: { diId, key, names: opts.names ?? null },
         });
-      } catch {
+      } catch (caughtError) {
+        reportCatchError(caughtError, 'DiService.snapshotPartPrices');
         // Traçage indisponible : ne jamais bloquer l'action métier.
       }
     }
@@ -2481,6 +2500,7 @@ export class DiService {
           },
         });
       } catch (err) {
+        reportCatchError(err, 'DiService.magasinTech_Pending2');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -2555,6 +2575,7 @@ export class DiService {
           },
         });
       } catch (err) {
+        reportCatchError(err, 'DiService.magasinTech_Pending3');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -2682,13 +2703,15 @@ export class DiService {
           _idDI,
         );
         techId = stat?.id_tech_diag ?? null;
-      } catch {
+      } catch (caughtError) {
+        reportCatchError(caughtError, 'DiService.coordinator_ToDiag');
         /* tech is best-effort context — never block the notification */
       }
 
       try {
         await this.discordHookService.sendDiagnosticAssigned(diagnostic, techId);
       } catch (err) {
+        reportCatchError(err, 'DiService.coordinator_ToDiag');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -2714,6 +2737,7 @@ export class DiService {
           notify: techId ? { userIds: [techId] } : undefined,
         });
       } catch (err) {
+        reportCatchError(err, 'DiService.coordinator_ToDiag');
         await this.captureDiscordFailure('erp-notification', err);
       }
 
@@ -2777,6 +2801,7 @@ export class DiService {
           activeDiCount,
         });
       } catch (err) {
+        reportCatchError(err, 'DiService.coordinator_ToRep');
         await this.captureDiscordFailure('coordinator_ToRep', err, {
           diId: _idDI,
           techId: tech_id,
@@ -2797,6 +2822,7 @@ export class DiService {
             notify: { userIds: [tech_id] },
           });
         } catch (err) {
+          reportCatchError(err, 'DiService.coordinator_ToRep');
           await this.captureDiscordFailure('erp-notification', err);
         }
       }
@@ -3306,6 +3332,7 @@ export class DiService {
           try {
             await this.broadcastDiStatusChange(_id, moved);
           } catch (err) {
+            reportCatchError(err, 'DiService.maybeAdvanceDocGate');
             await this.captureDiscordFailure('erp-notification', err);
           }
           continue; // cascade : la facture est peut-être déjà présente
@@ -3345,6 +3372,7 @@ export class DiService {
           try {
             await this.broadcastDiStatusChange(_id, moved);
           } catch (err) {
+            reportCatchError(err, 'DiService.maybeAdvanceDocGate');
             await this.captureDiscordFailure('erp-notification', err);
           }
           continue; // cascade : le BC est peut-être déjà présent
@@ -3373,6 +3401,7 @@ export class DiService {
       try {
         await this.discordHookService.sendDiFinished(finished);
       } catch (err) {
+        reportCatchError(err, 'DiService.finalizeFinished');
         await this.captureDiscordFailure('discord-notification', err);
       }
       this.notificationGateway.updateTicket({
@@ -3417,6 +3446,7 @@ export class DiService {
       try {
         await this.discordHookService.sendDiIrreparable(di);
       } catch (err) {
+        reportCatchError(err, 'DiService.finalizeIrreparable');
         await this.captureDiscordFailure('discord-notification', err);
       }
       this.notificationGateway.updateTicket({
@@ -3506,6 +3536,7 @@ export class DiService {
           await this.discordHookService.sendDiStatusPending3(moved);
         }
       } catch (err) {
+        reportCatchError(err, 'DiService.exitWaitingBcOnBc');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -3874,6 +3905,7 @@ export class DiService {
       try {
         await this.discordHookService.sendDiCancelled(updated);
       } catch (err) {
+        reportCatchError(err, 'DiService.annulerDi');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -4027,6 +4059,7 @@ export class DiService {
         };
         await this.auditService.create(auditInput);
       } catch (err) {
+        reportCatchError(err, 'DiService.reactiverDi');
         // Audit best-effort : ne fait jamais échouer la réactivation.
         await this.operationalErrorService.capture({
           module: 'di',
@@ -4159,6 +4192,7 @@ export class DiService {
       try {
         await this.discordHookService.sendDiAbandoned(result.di, motifFinal);
       } catch (err) {
+        reportCatchError(err, 'DiService.abandonDi');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -4658,6 +4692,7 @@ export class DiService {
         isDeleted: { $ne: true },
       });
     } catch (err) {
+      reportCatchError(err, 'DiService.getAll_TechDI');
       await this.operationalErrorService.capture({
         module: 'di',
         submodule: 'diService',
@@ -4842,6 +4877,7 @@ export class DiService {
           price,
         });
       } catch (err) {
+        reportCatchError(err, 'DiService.affectinitialPrice');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -4928,6 +4964,7 @@ export class DiService {
       try {
         await this.discordHookService.sendDiStatusPending1(result);
       } catch (err) {
+        reportCatchError(err, 'DiService.changeStatusPending1');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -5024,6 +5061,7 @@ export class DiService {
       try {
         await this.discordHookService.sendDiInMagasin(result);
       } catch (err) {
+        reportCatchError(err, 'DiService.changeStatusInMagasin');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -5349,6 +5387,7 @@ export class DiService {
       try {
         await this.discordHookService.sendDiStatusPending2(result);
       } catch (err) {
+        reportCatchError(err, 'DiService.changeStatusPending2');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -5420,6 +5459,7 @@ export class DiService {
         try {
           await this.discordHookService.sendDiPricing(result);
         } catch (err) {
+          reportCatchError(err, 'DiService.changeStatusPricing');
           await this.captureDiscordFailure('discord-notification', err);
         }
 
@@ -5525,6 +5565,7 @@ export class DiService {
       try {
         await this.discordHookService.sendDiNegotiation1(result);
       } catch (err) {
+        reportCatchError(err, 'DiService.changeStatusNegociate1');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -5573,6 +5614,7 @@ export class DiService {
       try {
         await this.discordHookService.sendDiNegotiation2(result);
       } catch (err) {
+        reportCatchError(err, 'DiService.changeStatusNegociate2');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -5674,6 +5716,7 @@ export class DiService {
       try {
         await this.discordHookService.sendDiStatusPending3(result);
       } catch (err) {
+        reportCatchError(err, 'DiService.changeStatusPending3');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -5725,6 +5768,7 @@ export class DiService {
       try {
         await this.discordHookService.sendDiInReparation(result);
       } catch (err) {
+        reportCatchError(err, 'DiService.changeStatusRepaire');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -5738,7 +5782,8 @@ export class DiService {
       try {
         const stat: any = await this.statsService.findUserLinkedToConcernedDi(_id);
         repTechId = stat?.id_tech_rep ?? null;
-      } catch {
+      } catch (caughtError) {
+        reportCatchError(caughtError, 'DiService.changeStatusRepaire');
         /* tech = contexte best-effort — n'échoue jamais la transition */
       }
       // Événement écrit INCONDITIONNELLEMENT (cf. DI_ASSIGNED_DIAG) : si la
@@ -5756,6 +5801,7 @@ export class DiService {
           notify: repTechId ? { userIds: [repTechId] } : undefined,
         });
       } catch (err) {
+        reportCatchError(err, 'DiService.changeStatusRepaire');
         await this.captureDiscordFailure('erp-notification', err);
       }
 
@@ -5941,6 +5987,7 @@ export class DiService {
           status: STATUS_DI.Finished.status,
         });
       } catch (err) {
+        reportCatchError(err, 'DiService.changeStatusFinished');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -6049,6 +6096,7 @@ export class DiService {
       try {
         if (updated) await this.discordHookService.sendDiRetour(updated, level);
       } catch (err) {
+        reportCatchError(err, 'DiService.openRetourCycle');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -6169,6 +6217,7 @@ export class DiService {
         },
       });
     } catch (err) {
+      reportCatchError(err, 'DiService.emitBlUploadedNotification');
       await this.captureDiscordFailure('erp-notification', err);
     }
   }
@@ -6205,6 +6254,7 @@ export class DiService {
         },
       });
     } catch (err) {
+      reportCatchError(err, 'DiService.emitRetourNotification');
       await this.captureDiscordFailure('erp-notification', err);
     }
   }
@@ -6251,6 +6301,7 @@ export class DiService {
           notify: { roles: audience },
         });
       } catch (err) {
+        reportCatchError(err, 'DiService.emitDiHandoff');
         await this.captureDiscordFailure('erp-notification', err);
       }
     } catch (error) {
@@ -6296,6 +6347,7 @@ export class DiService {
       }
       return pending.length;
     } catch (err) {
+      reportCatchError(err, 'DiService.remindPendingBl');
       await this.captureDiscordFailure('remindPendingBl', err);
       return 0;
     }
@@ -6666,6 +6718,7 @@ export class DiService {
       try {
         await this.discordHookService.sendComponentsSentToCoordinator(updated);
       } catch (err) {
+        reportCatchError(err, 'DiService.sendComponentToConMagasinForConfirmation');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -6691,6 +6744,7 @@ export class DiService {
           },
         });
       } catch (err) {
+        reportCatchError(err, 'DiService.sendComponentToConMagasinForConfirmation');
         await this.captureDiscordFailure('erp-notification', err);
       }
 
@@ -6800,6 +6854,7 @@ export class DiService {
         });
       }
     } catch (err) {
+      reportCatchError(err, 'DiService.commitStockDecrementOnce');
       await this.captureDiscordFailure?.('commitStockDecrementOnce', err, {
         diId,
       });
@@ -6871,7 +6926,8 @@ export class DiService {
             STATUS_DI.MagasinFinalisation.status,
             cycle,
           );
-        } catch {
+        } catch (caughtError) {
+          reportCatchError(caughtError, 'DiService.componentConfirmedFromCoordinator');
           /* ligne Stat absente → ignore ; la transition Di a réussi */
         }
       } else {
@@ -6892,6 +6948,7 @@ export class DiService {
           updated,
         );
       } catch (err) {
+        reportCatchError(err, 'DiService.componentConfirmedFromCoordinator');
         await this.captureDiscordFailure('discord-notification', err);
       }
 
@@ -6912,6 +6969,7 @@ export class DiService {
           notify: { roles: ['Magasin'] },
         });
       } catch (err) {
+        reportCatchError(err, 'DiService.componentConfirmedFromCoordinator');
         await this.captureDiscordFailure('erp-notification', err);
       }
 

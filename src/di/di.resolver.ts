@@ -44,7 +44,7 @@ import { StatService } from 'src/stat/stat.service';
 import { PubSub } from 'graphql-subscriptions';
 import { Stat } from 'src/stat/entities/stat.entity';
 import { rootCertificates } from 'tls';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 @Resolver(() => Di)
 export class DiResolver {
@@ -256,6 +256,7 @@ export class DiResolver {
       const diData = await this.diService.getDiById(_id);
       return diData;
     } catch (error) {
+      reportCatchError(error, 'DiResolver.getDiById');
       throw new Error(error);
     }
   }
@@ -906,6 +907,7 @@ export class DiResolver {
         const result = await this.diService.changeStatusInRepair(_id);
         return !!result;
       } catch (err) {
+        reportCatchError(err, 'DiResolver.changeStatusInRepair');
         console.error('[changeStatusInRepair][resolver] error:', err);
         throw err;
       }

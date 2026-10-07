@@ -1,5 +1,5 @@
 import { describeEnv, envFileName, EnvColor } from './environments';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /** ANSI color per environment (zero-dependency; no chalk). */
 const ANSI: Record<EnvColor, string> = {
@@ -24,7 +24,8 @@ export function extractDbName(uri?: string): string {
       const pathPart = afterScheme.split('/').slice(1).join('/'); // drop host[:port]
       const db = (pathPart.split('?')[0] || '').trim();
       return db || '—';
-    } catch {
+    } catch (caughtError) {
+      reportCatchError(caughtError, 'extractDbName');
       return '—';
     }
   } catch (error) {

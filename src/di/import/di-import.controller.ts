@@ -16,7 +16,7 @@ import { Request, Response } from 'express';
 import { RestJwtAuthGuard } from 'src/auth/rest-jwt-auth-guard';
 import { DiImportService } from './di-import.service';
 import { DiImportJobService } from './di-import-job.service';
-import { withErrorContext } from '../../common/error-context';
+import { withErrorContext, reportCatchError } from '../../common/error-context';
 
 /**
  * REST surface for the bulk DI import (multipart — outside GraphQL).
@@ -98,7 +98,8 @@ export class DiImportController {
         try {
           const parsed = JSON.parse(rawDecisions);
           if (Array.isArray(parsed)) decisions = parsed;
-        } catch {
+        } catch (caughtError) {
+          reportCatchError(caughtError, 'DiImportController.execute');
           /* champ malformé → aucune décision appliquée */
         }
       }

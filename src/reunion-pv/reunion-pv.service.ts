@@ -17,7 +17,7 @@ import {
 } from './entities/reunion-pv.entity';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { JiraService } from 'src/jira/jira.service';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 // Dedicated error codes — surfaced to GraphQL as the message body so the
 // frontend can branch on the exact failure (invalid DI ref vs invalid
@@ -184,6 +184,7 @@ export class ReunionPVService {
         try {
           saved = (await this.reunionPVModel.create(doc)) as ReunionPVDocument;
         } catch (e: any) {
+          reportCatchError(e, 'ReunionPVService.create');
           lastErr = e;
           if (e?.code !== 11000) throw e; // not a dup-key → bubble
           // Else: ref collision, loop with a fresh `nextReference()`.
@@ -199,7 +200,8 @@ export class ReunionPVService {
             { _id: input.diId },
             { $push: { pvReunions: saved._id } },
           );
-        } catch {
+        } catch (caughtError) {
+          reportCatchError(caughtError, 'ReunionPVService.create');
           /* swallow — PV persisted, link can be reconciled later */
         }
       }
@@ -220,7 +222,8 @@ export class ReunionPVService {
             di,
             profile,
           });
-        } catch {
+        } catch (caughtError) {
+          reportCatchError(caughtError, 'ReunionPVService.create');
           /* swallow — Discord is non-critical */
         }
       }
@@ -233,7 +236,8 @@ export class ReunionPVService {
       if (!options?.skipJira) {
         try {
           await this.syncActionsToJira(saved);
-        } catch {
+        } catch (caughtError) {
+          reportCatchError(caughtError, 'ReunionPVService.create');
           /* swallow — Jira is non-critical; JiraService already logged */
         }
       }
@@ -439,7 +443,8 @@ export class ReunionPVService {
       if (!options?.skipJira) {
         try {
           await this.syncActionsToJira(saved);
-        } catch {
+        } catch (caughtError) {
+          reportCatchError(caughtError, 'ReunionPVService.updateReunionDetails');
           /* swallow — Jira is non-critical; JiraService already logged */
         }
       }
@@ -492,6 +497,7 @@ export class ReunionPVService {
           await this.discordHook.sendReunionReminder({ pv: claimed, url });
           sent++;
         } catch (e) {
+          reportCatchError(e, 'ReunionPVService.sendDueReminders');
           // Revert so the next run retries — never lose a reminder to a flaky hook.
           failed++;
           await this.reunionPVModel

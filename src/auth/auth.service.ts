@@ -11,7 +11,7 @@ import { ProfileService } from 'src/profile/profile.service';
 import { ProfileDocument } from 'src/profile/entities/profile.entity';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 // Dedicated error code surfaced to the frontend so it can render the
 // "déjà connecté sur un autre appareil" banner instead of a generic auth
@@ -132,7 +132,8 @@ export class AuthService {
       try {
         const decoded: any = this.jwtService.verify(payload.token);
         _id = decoded?._id;
-      } catch {
+      } catch (caughtError) {
+        reportCatchError(caughtError, 'AuthService.logout');
         return false;
       }
       if (!_id) {

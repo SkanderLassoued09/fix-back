@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as XLSX from 'xlsx';
 import { v4 as uuidv4 } from 'uuid';
 import { DiArchiveService } from '../di-archive.service';
-import { withErrorContext } from '../../common/error-context';
+import { withErrorContext, reportCatchError } from '../../common/error-context';
 
 /**
  * Bulk MIGRATION import of historical DIs into `DiArchive` — a SEPARATE clone of
@@ -193,7 +193,8 @@ export class DiArchiveImportService {
       let wb: XLSX.WorkBook;
       try {
         wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
-      } catch {
+      } catch (caughtError) {
+        reportCatchError(caughtError, 'DiArchiveImportService.parse');
         return empty('Fichier illisible : .xlsx valide attendu.');
       }
       const sheetName = wb.SheetNames[0];
@@ -412,6 +413,7 @@ export class DiArchiveImportService {
           );
           archives++;
         } catch (err) {
+          reportCatchError(err, 'DiArchiveImportService.persist');
           // Dup-key (idempotence race) or any failure → report, keep going.
           this.logger.error(
             `Archive migration row ${row.ligne} (${row.refOrigine || row.title}) failed: ${

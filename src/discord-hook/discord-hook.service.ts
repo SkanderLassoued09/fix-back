@@ -7,7 +7,7 @@ import { Company } from 'src/company/entities/company.entity';
 import { Profile } from 'src/profile/entities/profile.entity';
 import { Stat } from 'src/stat/entities/stat.entity';
 import { currentActor } from 'src/common/request-context';
-import { withErrorContext } from '../common/error-context';
+import { CatchReport, withErrorContext } from '../common/error-context';
 
 /**
  * Channels — each `sendXxx` posts through `postEmbed(channel, payload)`.
@@ -1346,6 +1346,32 @@ export class DiscordHookService {
       });
     } catch (error) {
       throw withErrorContext(error, 'DiscordHookService.sendOperationalError');
+    }
+  }
+
+  /**
+   * FIX-232 — alert from a backend catch block (`withErrorContext`). The embed
+   * shows the report EXACTLY in its `{ title, key, error }` shape so the alert
+   * alone tells which method failed and why. Discord caps a description at
+   * 4096 chars → the end of the stack is cut past ~3900.
+   */
+  async sendCatchAlert(report: CatchReport) {
+    try {
+      let json = JSON.stringify(report, null, 2);
+      if (json.length > 3900) json = json.slice(0, 3900) + '\n…';
+      await this.deliverEmbed('ERROR', {
+        embeds: [
+          {
+            title: `🚨 ${report.title}`.slice(0, 256),
+            description: '```json\n' + json + '\n```',
+            color: 15158332,
+            footer: { text: `Fixtronix · ${process.env.NODE_ENV ?? 'dev'} · ${report.key}`.slice(0, 2048) },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    } catch (error) {
+      throw withErrorContext(error, 'DiscordHookService.sendCatchAlert');
     }
   }
 

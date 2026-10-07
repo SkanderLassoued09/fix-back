@@ -28,7 +28,7 @@ import { Logger, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/auth/jwt-auth-guard';
 import { PubSub } from 'graphql-subscriptions';
 import { PaginationConfigDi } from 'src/di/dto/create-di.input';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 @Resolver(() => Stat)
 export class StatResolver {
@@ -91,6 +91,7 @@ export class StatResolver {
 
       return true;
     } catch (error) {
+      reportCatchError(error, 'StatResolver.affectForRep');
       this.logger.error(
         `affectForRep failed for _idDi=${_idDi} _idTech=${_idTech}: ${
           error instanceof Error ? error.message : String(error)

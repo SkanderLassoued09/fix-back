@@ -17,7 +17,7 @@ import { DbBackupService } from 'src/db-backup/db-backup.service';
 import { SessionCleanupService } from '../session-cleanup/session-cleanup.service';
 import { NotificationPurgeService } from '../notification-purge/notification-purge.service';
 import { ActionsEnCoursExportService } from 'src/actions-en-cours/actions-en-cours-export.service';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /**
  * The 5 Discord channels of an environment, mapped to the EXACT env vars read
@@ -227,6 +227,7 @@ export class AppCronService {
           ok++;
           this.logger.log(`✅ [${nodeEnv}] canal « ${ch.name} » : envoi OK`);
         } catch (err) {
+          reportCatchError(err, 'AppCronService.triggerTestDiscordChannels');
           failed++;
           this.logger.error(
             `❌ [${nodeEnv}] canal « ${ch.name} » : échec — ${(err as Error)?.message ?? err}`,
@@ -308,6 +309,7 @@ export class AppCronService {
     try {
       await this.sheetSyncService.syncAllEntities();
     } catch (err) {
+      reportCatchError(err, 'AppCronService.triggerGoogleSheetsSync');
       this.logger.error(
         `Google Sheets sync cron failed: ${(err as Error).stack ?? err}`,
       );
@@ -324,6 +326,7 @@ export class AppCronService {
     try {
       await this.sheetSyncService.syncSnapshotEntities();
     } catch (err) {
+      reportCatchError(err, 'AppCronService.triggerActionsEnCoursSync');
       this.logger.error(
         `Actions-en-cours snapshot sync failed: ${(err as Error).stack ?? err}`,
       );
@@ -340,6 +343,7 @@ export class AppCronService {
     try {
       await this.triggerActionsEnCoursExport();
     } catch (err) {
+      reportCatchError(err, 'AppCronService.scheduledActionsEnCoursExport');
       this.logger.error(
         `Export ACTIONS EN COURS échoué : ${(err as Error).stack ?? err}`,
       );
@@ -405,6 +409,7 @@ export class AppCronService {
       try {
         await this.stagnationService.detectStagnantDi();
       } catch (err) {
+        reportCatchError(err, 'AppCronService.triggerStagnationDetection');
         this.logger.error(
           `Stagnation cron failed: ${(err as Error).stack ?? err}`,
         );
@@ -419,6 +424,7 @@ export class AppCronService {
           `Daily stagnation report · date=${report.date} · detected=${report.detected} · dispatched=${report.dispatched} · skipped=${report.skipped}`,
         );
       } catch (err) {
+        reportCatchError(err, 'AppCronService.triggerStagnationDetection');
         this.logger.error(
           `Daily stagnation report failed: ${(err as Error).stack ?? err}`,
         );
@@ -459,6 +465,7 @@ export class AppCronService {
           `notifié=${r.incompleteNotified} · discord=${r.discordSent}`,
       );
     } catch (err) {
+      reportCatchError(err, 'AppCronService.triggerMagasinStockReminder');
       this.logger.error(
         `Magasin stock reminder failed: ${(err as Error).stack ?? err}`,
       );
@@ -477,6 +484,7 @@ export class AppCronService {
         this.logger.log(`Rappel BL en attente : ${count} DI(s) relancée(s).`);
       }
     } catch (err) {
+      reportCatchError(err, 'AppCronService.triggerPendingBlReminder');
       this.logger.error(
         `Pending-BL reminder failed: ${(err as Error).stack ?? err}`,
       );
@@ -514,6 +522,7 @@ export class AppCronService {
         `Purge notifications · supprimées=${deleted} · BL épargnées=${keptBlPending} · restantes=${recent + keptBlPending}`,
       );
     } catch (err) {
+      reportCatchError(err, 'AppCronService.triggerNotificationPurge');
       this.logger.error(
         `Notification purge failed: ${(err as Error).stack ?? err}`,
       );
@@ -526,6 +535,7 @@ export class AppCronService {
       const { released } = await this.sessionCleanupService.run();
       this.logger.log(`Libération des sessions · libérées=${released}`);
     } catch (err) {
+      reportCatchError(err, 'AppCronService.triggerSessionCleanup');
       this.logger.error(
         `Session cleanup failed: ${(err as Error).stack ?? err}`,
       );

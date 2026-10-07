@@ -12,7 +12,7 @@ import {
   normalizeTierName,
   isValidDecisionKind,
 } from './tier-name.util';
-import { withErrorContext } from '../../common/error-context';
+import { withErrorContext, reportCatchError } from '../../common/error-context';
 
 /**
  * Bulk DI import from an .xlsx file — two-phase (dry-run preview → real import).
@@ -402,6 +402,7 @@ export class DiImportService {
               dis++;
               if (revived) reactivees++;
             } catch (err) {
+              reportCatchError(err, 'DiImportService.processJob');
               if (this.isDuplicateKeyError(err)) {
                 // Idempotence : la référence existe déjà → IGNORÉE (ni recréation,
                 // ni erreur). Couvre le ré-lancement d'un lot / la reprise.
@@ -444,6 +445,7 @@ export class DiImportService {
         await this.jobService.complete(jobId, rep);
         this.emitProgress(jobId, total, total, null, 'COMPLETED');
       } catch (err) {
+        reportCatchError(err, 'DiImportService.processJob');
         // Erreur FATALE (infra) : job FAILED, erreur stockée, rapport PARTIEL
         // conservé — les DI déjà créées ne sont JAMAIS supprimées.
         rep.crees = {
@@ -485,6 +487,7 @@ export class DiImportService {
         detail,
       });
     } catch (err) {
+      reportCatchError(err, 'DiImportService.emitProgress');
       this.logger.warn(
         `WS di-import.progress échec (job ${jobId}): ${(err as Error)?.message ?? err}`,
       );
@@ -514,6 +517,7 @@ export class DiImportService {
       try {
         await this.aliasService.record({ importedName, tierId, type, decidedBy });
       } catch (err) {
+        reportCatchError(err, 'DiImportService.rememberDecision');
         this.logger.warn(
           `Alias non mémorisé (${importedName}): ${(err as Error)?.message ?? err}`,
         );
@@ -587,7 +591,8 @@ export class DiImportService {
       let wb: XLSX.WorkBook;
       try {
         wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
-      } catch {
+      } catch (caughtError) {
+        reportCatchError(caughtError, 'DiImportService.parse');
         return empty('Fichier illisible : .xlsx valide attendu.');
       }
       const sheetName = wb.SheetNames[0];
@@ -907,6 +912,7 @@ export class DiImportService {
           dis++;
           if (revived) reactivees++;
         } catch (err) {
+          reportCatchError(err, 'DiImportService.persist');
           // A runtime failure on an otherwise-valid row: report it, keep going.
           this.logger.error(
             `Import row ${row.ligne} (${row.nDi}) failed: ${(err as Error)?.message ?? err}`,

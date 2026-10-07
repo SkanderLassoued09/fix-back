@@ -4,7 +4,7 @@ import { Model } from 'mongoose';
 import { JiraSearchIssue, JiraService } from 'src/jira/jira.service';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { JiraCronNotificationDocument } from './entities/jira-cron-notification.entity';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 export interface SyncResult {
   /** Issues returned by Jira for the due-soon window. */
@@ -129,6 +129,7 @@ export class JiraCronNotificationService {
           );
           if ((res?.upsertedCount ?? 0) > 0 || res?.upsertedId) inserted++;
         } catch (e: any) {
+          reportCatchError(e, 'JiraCronNotificationService.upsertIssuesAsPending');
           // 11000 = unique-index race on a concurrent run → the row exists, fine.
           if (e?.code !== 11000) {
             this.logger.error(`Upsert ${dedupeKey} échoué: ${e?.message ?? e}`);
@@ -162,6 +163,7 @@ export class JiraCronNotificationService {
       try {
         issues = await this.jiraService.searchIssues(jql);
       } catch (err) {
+        reportCatchError(err, 'JiraCronNotificationService.run');
         const message = (err as Error)?.message ?? String(err);
         this.logger.error(`Recherche Jira échouée (${jql}): ${message}`);
         return { fetched: 0, inserted: 0, error: message };
@@ -261,6 +263,7 @@ export class JiraCronNotificationService {
           failed: 0,
         };
       } catch (err) {
+        reportCatchError(err, 'JiraCronNotificationService.envoyerNotifications');
         const message = (err as Error)?.message ?? String(err);
         const max = Number(process.env.JIRA_NOTIF_MAX_ATTEMPTS ?? 5) || 5;
         const toFail = claimed

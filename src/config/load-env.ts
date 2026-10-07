@@ -1,6 +1,6 @@
 import * as dotenv from 'dotenv';
 import { DEFAULT_NODE_ENV, resolveEnvFilePath } from './environments';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /**
  * Loads the SINGLE targeted env file `.env.${NODE_ENV}` BEFORE anything reads
@@ -25,6 +25,7 @@ function loadEnvironment(): { nodeEnv: string; envFilePath: string } {
       dotenv.config({ path: envFilePath });
       return { nodeEnv, envFilePath };
     } catch (err) {
+      reportCatchError(err, 'loadEnvironment');
       // Clean fatal error — the operator just needs the reason, not a stack.
       process.stderr.write(
         `\x1b[31m[FIXTRONIX] ${(err as Error).message}\x1b[0m\n`,

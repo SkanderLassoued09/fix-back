@@ -8,7 +8,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { DiCategory } from './entities/di_category.entity';
 import { Model } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 @Injectable()
 export class DiCategoryService {
   constructor(
@@ -102,6 +102,7 @@ export class DiCategoryService {
       }
       return categories;
     } catch (error) {
+      reportCatchError(error, 'DiCategoryService.findAllDiCategorys');
       if (error instanceof NotFoundException) {
         throw error;
       }
@@ -121,6 +122,7 @@ export class DiCategoryService {
       }
       return DiCategory;
     } catch (error) {
+      reportCatchError(error, 'DiCategoryService.findOneDiCategory');
       throw error;
     }
   }

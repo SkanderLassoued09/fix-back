@@ -8,7 +8,7 @@ import {
 import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import * as jwt from 'jsonwebtoken';
-import { withErrorContext } from './common/error-context';
+import { withErrorContext, reportCatchError } from './common/error-context';
 
 // Même secret que `auth.module`/`jwt.strategy` (JWT partagé). La vérification
 // est faite ici SANS injecter `JwtService` : la gateway est fournie par 3
@@ -53,7 +53,8 @@ export class NotificationsGateway
           client.join(`user:${userId}`);
           if (role) client.join(`role:${role}`);
         }
-      } catch {
+      } catch (caughtError) {
+        reportCatchError(caughtError, 'NotificationsGateway.handleConnection');
         // token invalide/expiré → on laisse le socket anonyme (pas de throw :
         // ne jamais casser la connexion temps réel existante).
       }

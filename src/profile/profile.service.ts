@@ -11,7 +11,7 @@ import { ROLE } from 'src/auth/roles';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
 import * as bcrypt from 'bcrypt';
 import { GraphQLError } from 'graphql';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 // import { STATUS_TICKET } from 'src/ticket/ticket';
 
 @Injectable()
@@ -28,6 +28,7 @@ export class ProfileService {
       const doc = await this.profileModel.create(createProfileInput);
       return await doc.save();
     } catch (error) {
+      reportCatchError(error, 'ProfileService.create');
       // Previously a silent `.catch((err) => return err)` — the resolver
       // returned an Error object as if it were a Profile. Now we capture
       // and rethrow the original error so the auth/admin flows see the
@@ -146,6 +147,7 @@ export class ProfileService {
     try {
       return await this.profileModel.findOne({ username });
     } catch (error) {
+      reportCatchError(error, 'ProfileService.findOneForAuth');
       // CRITICAL: previously a silent `.catch((err) => return err)` — login
       // received an Error object instead of a Profile, with unknown
       // downstream behavior. Now we capture and return null so the auth
@@ -262,6 +264,7 @@ export class ProfileService {
       }
       return `${tech.firstName} ${tech.lastName}`;
     } catch (error) {
+      reportCatchError(error, 'ProfileService.getTech');
       await this.operationalErrorService.capture({
         module: 'profile',
         submodule: 'profileService',
@@ -348,6 +351,7 @@ export class ProfileService {
         })
         .sort({ createdAt: -1 });
     } catch (error) {
+      reportCatchError(error, 'ProfileService.getAllAdmins');
       await this.captureSilentFailure('GET_ALL_ADMINS', error);
       return [];
     }
@@ -374,6 +378,7 @@ export class ProfileService {
         },
       ]);
     } catch (error) {
+      reportCatchError(error, 'ProfileService.getClientByRegion');
       await this.captureSilentFailure('GET_CLIENT_BY_REGION', error);
       return [];
     }
@@ -412,6 +417,7 @@ export class ProfileService {
         },
       ]);
     } catch (error) {
+      reportCatchError(error, 'ProfileService.getTicketByProfileDiag');
       await this.captureSilentFailure('GET_TICKET_BY_PROFILE_DIAG', error);
       return [];
     }
@@ -448,6 +454,7 @@ export class ProfileService {
         },
       ]);
     } catch (error) {
+      reportCatchError(error, 'ProfileService.getTicketByProfileRep');
       await this.captureSilentFailure('GET_TICKET_BY_PROFILE_REP', error);
       return [];
     }
@@ -489,6 +496,7 @@ export class ProfileService {
         { new: true }, // Return the updated document
       );
     } catch (error) {
+      reportCatchError(error, 'ProfileService.updateProfile');
       // Previously a silent `.catch((err) => return err)` — profile edit
       // returned an Error object as if the update succeeded. Now capture
       // and rethrow so the caller sees a real failure.

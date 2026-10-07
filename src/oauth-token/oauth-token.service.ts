@@ -3,7 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { maskSecret } from '../google-auth/google-oauth.errors';
 import { OAuthTokenDocument } from './entities/oauth-token.entity';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /** The single provider we authenticate today. Kept as a default so every method
  *  reads naturally while leaving room for a second provider later. */
@@ -124,6 +124,7 @@ export class OAuthTokenService {
         )
         .exec();
     } catch (err) {
+      reportCatchError(err, 'OAuthTokenService.touchRefreshed');
       this.logger.warn(
         `touchRefreshed(${provider}) non fatal: ${(err as Error).message}`,
       );

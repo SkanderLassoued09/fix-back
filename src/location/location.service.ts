@@ -5,7 +5,7 @@ import { Model } from 'mongoose';
 import { Location } from './entities/location.entity';
 import { Di } from 'src/di/entities/di.entity';
 import { v4 as uuidv4 } from 'uuid';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 @Injectable()
 export class LocationService {
   constructor(
@@ -134,6 +134,7 @@ export class LocationService {
       }
       return location;
     } catch (error) {
+      reportCatchError(error, 'LocationService.findOneLocation');
       throw error;
     }
   }

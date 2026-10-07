@@ -11,7 +11,7 @@ import {
   cleanCell,
   normHeader,
 } from './company-io';
-import { withErrorContext } from '../../common/error-context';
+import { withErrorContext, reportCatchError } from '../../common/error-context';
 
 /**
  * Export / import xlsx des sociétés — MÊME schéma canonique dans les deux sens
@@ -200,7 +200,8 @@ export class CompanyImportService {
       let wb: XLSX.WorkBook;
       try {
         wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
-      } catch {
+      } catch (caughtError) {
+        reportCatchError(caughtError, 'CompanyImportService.parse');
         return fail('Fichier illisible : .xlsx valide attendu.');
       }
       const sheet = wb.SheetNames[0] ? wb.Sheets[wb.SheetNames[0]] : undefined;
@@ -373,6 +374,7 @@ export class CompanyImportService {
             crees++;
           }
         } catch (err) {
+          reportCatchError(err, 'CompanyImportService.persist');
           echecs++;
           report.valides = Math.max(0, report.valides - 1);
           const motif = `Échec d'écriture : ${(err as Error)?.message ?? err}`;

@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /**
  * Jira Cloud integration (REST API v3).
@@ -210,7 +210,8 @@ export class JiraService {
             (u?.emailAddress ?? '').toLowerCase() === email.toLowerCase(),
         );
         return await ((exact ?? rows[0])?.accountId ?? null);
-      } catch {
+      } catch (caughtError) {
+        reportCatchError(caughtError, 'JiraService.resolveAccountId');
         return null;
       }
     } catch (error) {
@@ -258,6 +259,7 @@ export class JiraService {
         const res = await this.postIssue(fields, meeting, false);
         return { ...res, assigned };
       } catch (err: any) {
+        reportCatchError(err, 'JiraService.createIssueForAction');
         if (err?.response?.status === 400) {
           // Optional fields not configured on the project → retry minimal. The
           // assignee is dropped in the minimal payload → assigned=false.
@@ -274,6 +276,7 @@ export class JiraService {
             );
             return { ...res, assigned: false };
           } catch (retryErr) {
+            reportCatchError(retryErr, 'JiraService.createIssueForAction');
             await this.capture(action, meeting, retryErr);
             return null;
           }
@@ -331,6 +334,7 @@ export class JiraService {
         );
         return { issueKey: key, url, assigned };
       } catch (err: any) {
+        reportCatchError(err, 'JiraService.updateIssueForAction');
         if (err?.response?.status === 400) {
           try {
             await this.putIssue(key, {
@@ -340,6 +344,7 @@ export class JiraService {
             this.logger.log(`Updated Jira issue ${key} (minimal payload)`);
             return { issueKey: key, url, assigned: false };
           } catch (retryErr) {
+            reportCatchError(retryErr, 'JiraService.updateIssueForAction');
             await this.capture(action, meeting, retryErr);
             return null;
           }

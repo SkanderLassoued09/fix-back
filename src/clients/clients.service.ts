@@ -9,7 +9,7 @@ import { Client, ClientTableData } from './entities/client.entity';
 import { PaginationConfig } from 'src/company/dto/create-company.input';
 import { GoogleDriveService } from '../google-drive/google-drive.service';
 import { OperationalErrorService } from '../operational-error/operational-error.service';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 @Injectable()
 export class ClientsService {
@@ -53,6 +53,7 @@ export class ClientsService {
           `Linked Drive folder ${folder.id} to client ${client._id}`,
         );
       } catch (err) {
+        reportCatchError(err, 'ClientsService.attachDriveFolder');
         // Misconfiguration (Drive not set up) is EXPECTED → log only, no Discord.
         // A real API/Drive failure is OPERATIONAL → notify (deduped). ids only.
         const message = (err as Error)?.message ?? String(err);
@@ -233,6 +234,7 @@ export class ClientsService {
       }
       return Client;
     } catch (error) {
+      reportCatchError(error, 'ClientsService.findOneClient');
       throw error;
     }
   }

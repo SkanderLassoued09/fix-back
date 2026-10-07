@@ -8,7 +8,7 @@ import {
   safeCell,
 } from '../utils/format.util';
 import { IGoogleSheetMapper } from './google-sheet-mapper.interface';
-import { withErrorContext } from '../../common/error-context';
+import { withErrorContext, reportCatchError } from '../../common/error-context';
 
 /**
  * DI → 21-column sheet row.
@@ -134,6 +134,7 @@ export class DiSheetMapper implements IGoogleSheetMapper<DiDocument> {
         safeCell(di.status),                                  // 21 État
       ];
     } catch (err) {
+      reportCatchError(err, 'DiSheetMapper.mapToSheetRow');
       this.logger.warn(
         `mapToSheetRow failed for DI=${di?._id}: ${(err as Error).message}. ` +
           `Falling back to a row of "N/A" placeholders.`,

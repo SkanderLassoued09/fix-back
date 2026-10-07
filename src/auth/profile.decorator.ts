@@ -1,6 +1,7 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 import { GqlExecutionContext } from '@nestjs/graphql';
 
+import { reportCatchError } from '../common/error-context';
 /**
  * Injects the authenticated user (`req.user`, populated by JwtStrategy)
  * into a resolver / controller param.
@@ -20,13 +21,15 @@ export const CurrentUser = createParamDecorator(
       const fromCtx = gqlCtx?.user;
       if (fromReq) return fromReq;
       if (fromCtx) return fromCtx;
-    } catch {
+    } catch (caughtError) {
+      reportCatchError(caughtError, 'profile.decorator');
       // Pas un contexte GraphQL — on tente le repli REST ci-dessous.
     }
     // REST fallback (defensive — current app is GraphQL-only).
     try {
       return context.switchToHttp().getRequest()?.user;
-    } catch {
+    } catch (caughtError) {
+      reportCatchError(caughtError, 'profile.decorator');
       return undefined;
     }
   },

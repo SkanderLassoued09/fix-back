@@ -5,7 +5,7 @@ import { DiDocument } from 'src/di/entities/di.entity';
 import { StatDocument } from 'src/stat/entities/stat.entity';
 import { formatDateForSheet } from '../utils/format.util';
 import { IGoogleSheetMapper } from './google-sheet-mapper.interface';
-import { withErrorContext } from '../../common/error-context';
+import { withErrorContext, reportCatchError } from '../../common/error-context';
 
 /**
  * Daily aggregated KPI row written to a separate tab. Demonstrates the
@@ -102,6 +102,7 @@ export class StatsSheetMapper
         r.statsTotal,
       ];
     } catch (err) {
+      reportCatchError(err, 'StatsSheetMapper.mapToSheetRow');
       this.logger.warn(
         `mapToSheetRow failed for stats aggregate: ${(err as Error).message}`,
       );

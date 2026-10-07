@@ -1,4 +1,4 @@
-import { withErrorContext } from '../../common/error-context';
+import { withErrorContext, reportCatchError } from '../../common/error-context';
 /**
  * Format any Date-coercible value to "YYYY-MM-DD HH:mm" (the spec).
  * Returns the empty string if the input is null/undefined, returns 'N/A'
@@ -36,7 +36,8 @@ export function safeCell(value: any): string {
     try {
       const s = String(value);
       return s.startsWith('[object') ? 'N/A' : s;
-    } catch {
+    } catch (caughtError) {
+      reportCatchError(caughtError, 'safeCell');
       return 'N/A';
     }
   } catch (error) {

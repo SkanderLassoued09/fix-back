@@ -73,3 +73,13 @@ export function currentActor(): RequestActor | null | undefined {
     throw withErrorContext(error, 'currentActor');
   }
 }
+
+/** True when the current request carries the QA marker `x-test-run: 1` (same rule as the global filter). */
+export function isTestRequest(): boolean {
+  try {
+    const h = storage.getStore()?.req?.headers?.['x-test-run'];
+    return String(Array.isArray(h) ? h[0] : h ?? '') === '1';
+  } catch {
+    return false;
+  }
+}

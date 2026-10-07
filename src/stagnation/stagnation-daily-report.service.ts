@@ -9,7 +9,7 @@ import {
   StagnationDispatch,
   StagnationDispatchDocument,
 } from './entities/stagnation-dispatch.entity';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /**
  * RAPPORT QUOTIDIEN DE STAGNATION (24h) — orchestration pure, déclenchée par le
@@ -165,6 +165,7 @@ export class StagnationDailyReportService {
           });
           fresh.push(di);
         } catch (err: any) {
+          reportCatchError(err, 'StagnationDailyReportService.run');
           if (err?.code === 11000) continue; // déjà dispatché aujourd'hui
           throw err; // vraie erreur DB → remonte (le cron catch au-dessus)
         }
@@ -203,6 +204,7 @@ export class StagnationDailyReportService {
           spreadsheetId,
         );
       } catch (err) {
+        reportCatchError(err, 'StagnationDailyReportService.run');
         this.logger.error(
           `Feuille stagnation ${date} non écrite: ${(err as Error).message}`,
         );
@@ -217,6 +219,7 @@ export class StagnationDailyReportService {
           const gid = await this.sheets.getSheetGid(spreadsheetId, date);
           sheetUrl = this.buildSheetUrl(spreadsheetId, gid);
         } catch (err) {
+          reportCatchError(err, 'StagnationDailyReportService.run');
           sheetUrl = this.buildSheetUrl(spreadsheetId, null);
           this.logger.warn(
             `gid onglet ${date} non résolu: ${(err as Error).message}`,
@@ -252,6 +255,7 @@ export class StagnationDailyReportService {
           notify: { roles: StagnationDailyReportService.ROLES },
         });
       } catch (err) {
+        reportCatchError(err, 'StagnationDailyReportService.run');
         this.logger.warn(
           `DAILY_REMINDER emit échoué: ${(err as Error).message}`,
         );
@@ -270,6 +274,7 @@ export class StagnationDailyReportService {
           spreadsheetUrl: sheetUrl || undefined,
         });
       } catch (err) {
+        reportCatchError(err, 'StagnationDailyReportService.run');
         this.logger.error(
           `Discord rappel stagnation échoué: ${(err as Error).message}`,
         );

@@ -8,7 +8,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Composant_Category } from './entities/composant_category.entity';
 import { CreateComposant_CategoryInput } from './dto/create-composant_category.input';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 @Injectable()
 export class Composant_CategoryService implements OnModuleInit {
@@ -53,6 +53,7 @@ export class Composant_CategoryService implements OnModuleInit {
             category_composant: label,
           } as CreateComposant_CategoryInput);
         } catch (err) {
+          reportCatchError(err, 'Composant_CategoryService.onModuleInit');
           this.logger.warn(
             `Seed : catégorie « ${label} » ignorée (${
               (err as Error)?.message ?? err
@@ -64,6 +65,7 @@ export class Composant_CategoryService implements OnModuleInit {
         `Seed : ${Composant_CategoryService.BASE_CATEGORIES.length} catégories de composant de base traitées (base vide détectée).`,
       );
     } catch (err) {
+      reportCatchError(err, 'Composant_CategoryService.onModuleInit');
       this.logger.warn(
         `Seed catégories ignoré : ${(err as Error)?.message ?? err}.`,
       );
@@ -159,6 +161,7 @@ export class Composant_CategoryService implements OnModuleInit {
             createComposant_CategoryInput,
           ).save();
         } catch (err) {
+          reportCatchError(err, 'Composant_CategoryService.createComposant_Category');
           const isDuplicate = (err as { code?: number })?.code === 11000;
           if (!isDuplicate || attempt === MAX_ATTEMPTS) {
             throw err;
@@ -228,6 +231,7 @@ export class Composant_CategoryService implements OnModuleInit {
       }
       return Composant_Category;
     } catch (error) {
+      reportCatchError(error, 'Composant_CategoryService.findOneComposant_Category');
       throw error;
     }
   }

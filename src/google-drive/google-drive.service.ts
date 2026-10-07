@@ -9,7 +9,7 @@ import {
   isInvalidGrant,
   isTransientError,
 } from '../google-auth/google-oauth.errors';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 export interface DriveFolder {
   id: string;
@@ -94,6 +94,7 @@ export class GoogleDriveService {
         try {
           return await fn();
         } catch (err) {
+          reportCatchError(err, 'GoogleDriveService.callWithRetry');
           lastErr = err;
           if (isInvalidGrant(err)) {
             this.drive = null; // force rebuild after a token fix
@@ -624,6 +625,7 @@ export class GoogleDriveService {
           }),
         );
       } catch (err) {
+        reportCatchError(err, 'GoogleDriveService.uploadFile');
         // invalid_grant already mapped to its diagnostic by callWithRetry — let it
         // through unchanged so the operator sees the re-auth instructions.
         if (isInvalidGrant(err) || (err as any)?.name === 'GoogleOAuthGrantError') {

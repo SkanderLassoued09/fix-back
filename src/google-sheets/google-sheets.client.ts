@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { google, sheets_v4 } from 'googleapis';
 import { GoogleOAuthService } from '../google-auth/google-auth.service';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /** Une cellule mise en forme pour `writeFormattedTab`. */
 export interface SheetCell {
@@ -81,6 +81,7 @@ export class GoogleSheetsClient implements OnModuleInit {
     try {
       await this.ensureClient();
     } catch (err) {
+      reportCatchError(err, 'GoogleSheetsClient.onModuleInit');
       this.logger.warn(
         `Google Sheets auth not initialized at boot: ${(err as Error).message}. ` +
           `Run the OAuth consent flow (GET /auth/google) — the refresh token is stored in MongoDB (oauth_tokens) to enable sync.`,
@@ -144,6 +145,7 @@ export class GoogleSheetsClient implements OnModuleInit {
             }),
           );
         } catch (err) {
+          reportCatchError(err, 'GoogleSheetsClient.appendRows');
           // Self-healing: Sheets responds with 400 "Unable to parse range"
           // when the target tab doesn't exist yet. Auto-create + retry once.
           if (!tabHealed && this.isMissingTabError(err)) {
@@ -567,6 +569,7 @@ export class GoogleSheetsClient implements OnModuleInit {
               headerRow.length,
             );
           } catch (err) {
+            reportCatchError(err, 'GoogleSheetsClient.ensureTab');
             this.logger.warn(
               `Header styling skipped on "${tabName}": ${(err as Error).message}`,
             );
@@ -678,6 +681,7 @@ export class GoogleSheetsClient implements OnModuleInit {
         try {
           return await fn();
         } catch (err) {
+          reportCatchError(err, 'GoogleSheetsClient.callWithRetry');
           lastErr = err;
           const code = (err as any)?.code ?? (err as any)?.response?.status;
           const isTransient =

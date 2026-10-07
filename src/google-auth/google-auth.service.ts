@@ -10,7 +10,7 @@ import {
   isInvalidGrant,
   maskSecret,
 } from './google-oauth.errors';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /** Instance type of the googleapis OAuth2 client (no extra dependency import). */
 type OAuth2 = InstanceType<typeof google.auth.OAuth2>;
@@ -388,6 +388,7 @@ export class GoogleOAuthService implements OnModuleInit {
       try {
         client = await this.getAuthenticatedClient();
       } catch (err) {
+        reportCatchError(err, 'GoogleOAuthService.verifyConnectivity');
         this.logger.warn(
           `Impossible de construire le client OAuth : ${(err as Error).message}`,
         );
@@ -399,6 +400,7 @@ export class GoogleOAuthService implements OnModuleInit {
         this.logger.log('Google OAuth vérifié — refresh token valide.');
         return true;
       } catch (err) {
+        reportCatchError(err, 'GoogleOAuthService.verifyConnectivity');
         if (isInvalidGrant(err)) {
           const diag = buildInvalidGrantDiagnostic(err);
           // Persist the unhealthy state + reset the cache so a corrected token can

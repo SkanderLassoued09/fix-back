@@ -9,7 +9,7 @@ import { Location } from 'src/location/entities/location.entity';
 import { LogsDi } from 'src/logs-di/entities/logs-di.entity';
 import { DriveDoc } from 'src/common/graphql/drive-doc.type';
 import { Profile } from 'src/profile/entities/profile.entity';
-import { withErrorContext } from '../../common/error-context';
+import { withErrorContext, reportCatchError } from '../../common/error-context';
 
 @Schema({ timestamps: true })
 export class DiDocument extends Document {
@@ -390,6 +390,7 @@ async function mirrorStatusToStat(this: any) {
   try {
     await syncStatStatusFromDis(this.model, ids);
   } catch (error) {
+    reportCatchError(error, 'mirrorStatusToStat');
     // L'écriture DI a déjà réussi : on ne la fait pas échouer, on trace.
     statSyncLogger.error(`Stat status sync failed for ${ids.length} DI(s)`, error);
   }
@@ -407,6 +408,7 @@ DiSchema.post('save', async function (doc: any) {
   try {
     await syncStatStatusFromDis(doc.constructor, [doc._id]);
   } catch (error) {
+    reportCatchError(error, 'di.entity');
     statSyncLogger.error(`Stat status sync failed for DI ${doc._id}`, error);
   }
 });

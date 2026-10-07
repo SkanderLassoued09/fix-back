@@ -8,7 +8,7 @@ import { UpdateAuditInput } from './dto/update-audit.input';
 import { InjectModel } from '@nestjs/mongoose';
 import { Audit } from './entities/audit.entity';
 import { Model } from 'mongoose';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 @Injectable()
 export class AuditService {
@@ -25,6 +25,7 @@ export class AuditService {
       }
       return createNotification;
     } catch (error) {
+      reportCatchError(error, 'AuditService.create');
       throw error;
     }
   }
@@ -111,6 +112,7 @@ export class AuditService {
       }
       return result;
     } catch (error) {
+      reportCatchError(error, 'AuditService.getRemindernotOpenedTickets');
       if (error instanceof NotFoundException) {
         throw error;
       }
@@ -132,6 +134,7 @@ export class AuditService {
 
       return result;
     } catch (error) {
+      reportCatchError(error, 'AuditService.markReminderAsSeen');
       throw error;
     }
   }

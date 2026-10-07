@@ -6,7 +6,7 @@ import { Profile } from 'src/profile/entities/profile.entity';
 import { NotificationService } from 'src/notifications/notification.service';
 import { DiCategoryService } from './di_category.service';
 import { DiCategory } from './entities/di_category.entity';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /**
  * Destinataires de la cloche quand une catégorie apparaît dans le référentiel.
@@ -66,6 +66,7 @@ export class DiCategoryResolver {
             notify: { roles: CATEGORY_WATCHERS },
           });
         } catch (err) {
+          reportCatchError(err, 'DiCategoryResolver.createDiCategory');
           this.logger.warn(
             `emit DI_CATEGORY_CREATED a échoué (${doc._id}) : ${
               (err as Error)?.message ?? err
@@ -89,6 +90,7 @@ export class DiCategoryResolver {
     try {
       return this.diCategoryService.removeDiCategory(_id);
     } catch (error) {
+      reportCatchError(error, 'DiCategoryResolver.removeDiCategory');
       console.error(error);
       throw new Error('Failed to delete DiCategory');
     }
@@ -108,6 +110,7 @@ export class DiCategoryResolver {
     try {
       return await this.diCategoryService.findAllDiCategorys();
     } catch (error) {
+      reportCatchError(error, 'DiCategoryResolver.findAllDiCategory');
       throw error;
     }
   }

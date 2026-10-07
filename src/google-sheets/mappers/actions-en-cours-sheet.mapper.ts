@@ -4,7 +4,7 @@ import { Model } from 'mongoose';
 import { DiDocument } from 'src/di/entities/di.entity';
 import { firstNonEmpty, formatDateForSheet, safeCell } from '../utils/format.util';
 import { IGoogleSheetMapper } from './google-sheet-mapper.interface';
-import { withErrorContext } from '../../common/error-context';
+import { withErrorContext, reportCatchError } from '../../common/error-context';
 
 /**
  * "Actions en cours" → live snapshot of every DI currently in the workshop
@@ -78,6 +78,7 @@ export class ActionsEnCoursSheetMapper implements IGoogleSheetMapper<DiDocument>
         safeCell((di as any).devis), // Devis (doc link; no devis-number field yet)
       ];
     } catch (err) {
+      reportCatchError(err, 'ActionsEnCoursSheetMapper.mapToSheetRow');
       this.logger.warn(
         `mapToSheetRow failed for DI=${di?._id}: ${(err as Error).message}`,
       );

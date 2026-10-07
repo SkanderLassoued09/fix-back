@@ -34,7 +34,7 @@ import {
   TechIdentity,
   techIdentityMatches,
 } from 'src/auth/tech-ownership';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 @Injectable()
 export class StatService {
   private readonly logger = new Logger(StatService.name);
@@ -344,6 +344,7 @@ export class StatService {
 
         return statWithStatus;
       } catch (error) {
+        reportCatchError(error, 'StatService.createStat');
         // Rejets MÉTIER attendus (gate Retour, blocage même-tech post-abandon) :
         // on propage sans les journaliser comme erreur opérationnelle (HIGH).
         if (error instanceof ForbiddenException) {
@@ -545,6 +546,7 @@ export class StatService {
 
       return result;
     } catch (error) {
+      reportCatchError(error, 'StatService.affectForRep');
       await this.operationalErrorService.capture({
         module: 'stat',
         submodule: 'statService',
@@ -1389,6 +1391,7 @@ export class StatService {
 
       return di;
     } catch (error) {
+      reportCatchError(error, 'StatService.getDIByStat');
       throw error;
     }
   }
@@ -1501,6 +1504,7 @@ export class StatService {
 
       return result;
     } catch (error) {
+      reportCatchError(error, 'StatService.updateStatus');
       await this.operationalErrorService.capture({
         module: 'stat',
         submodule: 'statService',
@@ -1528,6 +1532,7 @@ export class StatService {
 
       return stat;
     } catch (error) {
+      reportCatchError(error, 'StatService.changeStatToDiagnosticInPause');
       await this.operationalErrorService.capture({
         module: 'stat',
         submodule: 'statService',
@@ -1574,6 +1579,7 @@ export class StatService {
 
       return stat;
     } catch (error) {
+      reportCatchError(error, 'StatService.getStatByIdlogs');
       await this.operationalErrorService.capture({
         module: 'stat',
         submodule: 'statService',
@@ -1601,6 +1607,7 @@ export class StatService {
       stat.pauseLogs.push(pauseLog);
       return stat.save();
     } catch (error) {
+      reportCatchError(error, 'StatService.addPauseLog');
       await this.operationalErrorService.capture({
         module: 'stat',
         submodule: 'statService',
@@ -1645,6 +1652,7 @@ export class StatService {
       // Save the updated Stat
       return stat.save();
     } catch (error) {
+      reportCatchError(error, 'StatService.updatePauseTime');
       await this.operationalErrorService.capture({
         module: 'stat',
         submodule: 'statService',

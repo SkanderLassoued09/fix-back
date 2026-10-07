@@ -4,7 +4,7 @@ import {
   IGoogleSheetMapper,
   SHEET_MAPPERS,
 } from './mappers/google-sheet-mapper.interface';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /**
  * Orchestrator. Walks the registered mappers, fetches + maps + appends
@@ -86,6 +86,7 @@ export class SheetSyncService {
           summary.successes.push({ entity: tag, rows: rows.length });
           summary.totalRows += rows.length;
         } catch (err) {
+          reportCatchError(err, 'SheetSyncService.runMappers');
           const message = (err as Error)?.message ?? String(err);
           summary.failures.push({ entity: tag, message });
           this.logger.error(`[${tag}] sync failed: ${message}`);

@@ -9,7 +9,7 @@ import { GqlArgumentsHost, GqlContextType } from '@nestjs/graphql';
 import { GraphQLError } from 'graphql';
 import { randomUUID } from 'crypto';
 import { OperationalErrorService } from '../operational-error/operational-error.service';
-import { errorOrigin } from './error-context';
+import { errorOrigin, wasReported } from './error-context';
 
 /**
  * Global safety net (Phase 3): every unhandled exception — GraphQL or HTTP —
@@ -64,7 +64,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
       severity: expected ? 'LOW' : 'HIGH',
       error: expected ? `Handled (${code})` : 'Unhandled exception',
       message,
-      notify: !expected, // expected → log only; operational → Discord (deduped)
+      // expected → log only; operational → Discord (deduped). Already sent by
+      // its catch block (FIX-232) → log only, no second alert.
+      notify: !expected && !wasReported(exception),
       payload: {
         code,
         correlationId,

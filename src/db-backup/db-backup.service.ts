@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { GoogleDriveService } from 'src/google-drive/google-drive.service';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /** Outcome of one `run()` — returned so the ACTION trigger can one-line-log it
  *  and tests can assert on numbers without inspecting the Discord payload. */
@@ -429,6 +429,7 @@ export class DbBackupService {
             env,
           });
         } catch (err) {
+          reportCatchError(err, 'DbBackupService.run');
           this.logger.warn(
             `Notification Discord de succès non envoyée : ${(err as Error).message}`,
           );
@@ -440,6 +441,7 @@ export class DbBackupService {
         );
         return result;
       } catch (err) {
+        reportCatchError(err, 'DbBackupService.run');
         const reason = this.redact((err as Error)?.message ?? String(err));
         const failedStep = err instanceof DbBackupError ? err.step : step;
         this.logger.error(
@@ -455,6 +457,7 @@ export class DbBackupService {
             env,
           });
         } catch (notifyErr) {
+          reportCatchError(notifyErr, 'DbBackupService.run');
           this.logger.error(
             `Alerte Discord d'échec NON envoyée : ${(notifyErr as Error).message}`,
           );
@@ -469,6 +472,7 @@ export class DbBackupService {
             this.logger.log(`Fichier temporaire supprimé : ${archivePath}`);
           }
         } catch (cleanupErr) {
+          reportCatchError(cleanupErr, 'DbBackupService.run');
           this.logger.error(
             `Fichier temporaire NON supprimé (${archivePath}) : ${(cleanupErr as Error).message}`,
           );
@@ -515,6 +519,7 @@ export class DbBackupService {
           deleted++;
           this.logger.log(`Rétention : ancienne sauvegarde supprimée ${f.name}`);
         } catch (err) {
+          reportCatchError(err, 'DbBackupService.purgeOldBackups');
           this.logger.warn(
             `Rétention : suppression de ${f.name} échouée — ${(err as Error).message}`,
           );
@@ -562,6 +567,7 @@ export class DbBackupService {
         );
       }
     } catch (err) {
+      reportCatchError(err, 'DbBackupService.assertFolderNotPublic');
       this.logger.warn(
         `Permissions du dossier de sauvegarde non vérifiables (${(err as Error).message}) — à contrôler manuellement dans Drive.`,
       );

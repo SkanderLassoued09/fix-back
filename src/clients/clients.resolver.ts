@@ -7,7 +7,7 @@ import {
 } from './dto/create-client.input';
 import { PaginationConfig } from 'src/company/dto/create-company.input';
 import { SearchInput } from 'src/stat/dto/create-stat.input';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 @Resolver(() => Client)
 export class ClientsResolver {
@@ -30,6 +30,7 @@ export class ClientsResolver {
     try {
       return this.clientsService.removeClient(_id);
     } catch (error) {
+      reportCatchError(error, 'ClientsResolver.removeClient');
       console.error(error);
       throw new Error('Failed to delete Client');
     }
@@ -42,6 +43,7 @@ export class ClientsResolver {
     try {
       return this.clientsService.updateClient(updateClientInput);
     } catch (error) {
+      reportCatchError(error, 'ClientsResolver.updateClient');
       console.error(error);
       throw new Error('Failed to delete Client');
     }

@@ -14,7 +14,7 @@ import { GraphQLError } from 'graphql';
 import { GoogleDriveService } from 'src/google-drive/google-drive.service';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { withComposantDefaults } from './composant-defaults';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 import { NotificationsGateway } from 'src/notification.gateway';
 @Injectable()
 export class ComposantService {
@@ -101,6 +101,7 @@ export class ComposantService {
       );
       return uploaded.webViewLink;
     } catch (err) {
+      reportCatchError(err, 'ComposantService.uploadDatasheet');
       await this.operationalErrorService.capture({
         module: 'composant',
         submodule: 'drive',
@@ -196,6 +197,7 @@ export class ComposantService {
           profile,
         });
       } catch (notifErr) {
+        reportCatchError(notifErr, 'ComposantService.createComposant');
         await this.operationalErrorService.capture({
           module: 'composant',
           submodule: 'discord',
@@ -209,6 +211,7 @@ export class ComposantService {
 
       return saved;
     } catch (error) {
+      reportCatchError(error, 'ComposantService.createComposant');
       // Expected errors (validation catégorie → BAD_USER_INPUT) ne sont pas
       // opérationnelles — même pattern que addComposantInfo.
       if (error instanceof GraphQLError) {
@@ -252,6 +255,7 @@ export class ComposantService {
       // historique de `Composant[]`) → cast via unknown, comme avant le tri.
       return composants as unknown as [Composant];
     } catch (err) {
+      reportCatchError(err, 'ComposantService.findAllComposants');
       // Previously a silent `.catch((err) => return err)` — the resolver
       // received an Error object that the FE rendered as a row. Now we
       // capture and return an empty list so the UI shows "no composants"
@@ -457,12 +461,14 @@ export class ComposantService {
           oldName: existing.name,
           name: update.name,
         });
-      } catch {
+      } catch (caughtError) {
+        reportCatchError(caughtError, 'ComposantService.addComposantInfo');
         /* déjà loggé par withErrorContext côté gateway */
       }
 
       return update;
     } catch (error) {
+      reportCatchError(error, 'ComposantService.addComposantInfo');
       // Expected errors (NOT_FOUND) are not operational — let them propagate
       // for the global filter to log (LOW, no Discord); only real failures
       // (Mongo/FS) are captured here.
@@ -626,6 +632,7 @@ export class ComposantService {
         totalComposantCount,
       };
     } catch (err) {
+      reportCatchError(err, 'ComposantService.browseComposants');
       await this.operationalErrorService.capture({
         module: 'composant',
         submodule: 'composantService',
@@ -728,6 +735,7 @@ export class ComposantService {
 
       return nodes;
     } catch (err) {
+      reportCatchError(err, 'ComposantService.composantCategoryTree');
       await this.operationalErrorService.capture({
         module: 'composant',
         submodule: 'composantService',

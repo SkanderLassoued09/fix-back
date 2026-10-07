@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { SheetSyncService } from './sheet-sync.service';
 
+import { reportCatchError } from '../common/error-context';
 /**
  * Cron-only file. Owns NOTHING besides delegating to SheetSyncService —
  * matches the architecture rule "don't mix cron, DB logic, and mapping".
@@ -21,6 +22,7 @@ export class SheetSyncScheduler {
     try {
       await this.syncService.syncAllEntities();
     } catch (err) {
+      reportCatchError(err, 'SheetSyncScheduler.runDailySync');
       this.logger.error(
         `Daily Google Sheets sync crashed: ${(err as Error).stack ?? err}`,
       );

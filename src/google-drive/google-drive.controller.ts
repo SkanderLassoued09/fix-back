@@ -12,7 +12,7 @@ import { RestJwtAuthGuard } from '../auth/rest-jwt-auth-guard';
 import { GoogleDriveService } from './google-drive.service';
 import { GoogleOAuthService } from '../google-auth/google-auth.service';
 import { maskSecret } from '../google-auth/google-oauth.errors';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /**
  * OAuth 2.0 consent flow for the shared Google (Drive + Sheets) integration.
@@ -87,6 +87,7 @@ export class GoogleDriveController {
       // generateAuthUrl() embeds a fresh CSRF `state` validated on callback.
       res.redirect(this.driveService.generateAuthUrl());
     } catch (err) {
+      reportCatchError(err, 'GoogleDriveController.authGoogle');
       res
         .status(500)
         .send(`OAuth not configured: ${(err as Error)?.message ?? err}`);
@@ -152,6 +153,7 @@ export class GoogleDriveController {
             );
         }
       } catch (err) {
+        reportCatchError(err, 'GoogleDriveController.oauthCallback');
         this.logger.error(
           `OAuth code exchange failed: ${(err as Error)?.message ?? err}`,
         );

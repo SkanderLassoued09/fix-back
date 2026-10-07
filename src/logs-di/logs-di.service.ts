@@ -11,7 +11,7 @@ import {
 } from 'src/composant/entities/composant.entity';
 import { v4 as uuidv4 } from 'uuid';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 @Injectable()
 export class LogsDiService {
   constructor(
@@ -93,6 +93,7 @@ export class LogsDiService {
           { upsert: true, new: true, setDefaultsOnInsert: true },
         );
       } catch (error) {
+        reportCatchError(error, 'LogsDiService.upsertCycle');
         await this.operationalErrorService.capture({
           module: 'logs-di',
           submodule: 'logsDiService',
@@ -167,6 +168,7 @@ export class LogsDiService {
       // }
       return logsDi;
     } catch (error) {
+      reportCatchError(error, 'LogsDiService.getLogsById');
       // Was a no-op try/catch — captured now so Mongo failures land in
       // the daily log file + Discord ops channel before rethrow.
       await this.operationalErrorService.capture({
@@ -214,6 +216,7 @@ export class LogsDiService {
 
       return result;
     } catch (error) {
+      reportCatchError(error, 'LogsDiService.tech_startDiagnostic');
       // No-op rethrow was here previously — wired through capture now so
       // operations can see when a tech's diagnostic save fails.
       await this.operationalErrorService.capture({
@@ -250,6 +253,7 @@ export class LogsDiService {
         );
       }
     } catch (error) {
+      reportCatchError(error, 'LogsDiService.savePricing');
       // Previously two silent `.catch((err) => return err)` — pricing
       // flows received an Error object as if pricing succeeded. Now we
       // capture (HIGH — financial fields) and rethrow the original so
@@ -424,6 +428,7 @@ export class LogsDiService {
 
       return updatedDocument;
     } catch (error) {
+      reportCatchError(error, 'LogsDiService.setSelectedComponentAsDoneLogs');
       // Previously wrapped in `throw new InternalServerErrorException(error)`
       // — lost the original Mongo / Nest exception class. Now we capture
       // and rethrow the ORIGINAL so the caller (and the GraphQL pipeline)
@@ -483,6 +488,7 @@ export class LogsDiService {
       }
       return logs;
     } catch (error) {
+      reportCatchError(error, 'LogsDiService.getAllLogsByDi');
       // ⚠️ The catch body was EMPTY — Mongo errors disappeared AND the
       // method returned `undefined` to callers expecting an array,
       // crashing downstream with "cannot read length of undefined".

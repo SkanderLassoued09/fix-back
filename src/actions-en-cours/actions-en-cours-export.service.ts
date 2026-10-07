@@ -16,7 +16,7 @@ import {
   buildActionsRow,
   compareIdnum,
 } from './actions-en-cours.rows';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 export interface ActionsEnCoursExportResult {
   tabName: string;
@@ -306,6 +306,7 @@ export class ActionsEnCoursExportService {
         );
         return result;
       } catch (err) {
+        reportCatchError(err, 'ActionsEnCoursExportService.publish');
         const reason = (err as Error)?.message ?? String(err);
         this.logger.error(`ÉCHEC export ACTIONS EN COURS [${env}] : ${reason}`);
         try {
@@ -315,6 +316,7 @@ export class ActionsEnCoursExportService {
             env,
           });
         } catch (alertErr) {
+          reportCatchError(alertErr, 'ActionsEnCoursExportService.publish');
           this.logger.warn(
             `Alerte Discord non envoyée : ${(alertErr as Error).message}`,
           );

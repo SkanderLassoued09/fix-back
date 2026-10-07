@@ -5,7 +5,7 @@ import { NotificationsGateway } from '../notification.gateway';
 import { NotificationDocument } from './entities/notification.entity';
 import { SystemEventDocument } from './entities/system-event.entity';
 import { toProfileRoles } from './role-mapping';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /** Cible d'une notification actionnable. Vide/absente ⇒ historique seul. */
 export interface EmitTarget {
@@ -170,6 +170,7 @@ export class NotificationService {
                 actionable: true,
               });
             } catch (err) {
+              reportCatchError(err, 'NotificationService.emit');
               this.logger.warn(
                 `emitToUser a échoué (userId=${doc.userId}): ${
                 (err as Error)?.message ?? err
@@ -263,7 +264,8 @@ export class NotificationService {
       for (const userId of userIds) {
         try {
           this.gateway.emitRemovedToUser(userId, { diId, type });
-        } catch {
+        } catch (caughtError) {
+          reportCatchError(caughtError, 'NotificationService.clearByDiAndType');
           /* best-effort */
         }
       }

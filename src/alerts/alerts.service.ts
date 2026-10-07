@@ -7,7 +7,7 @@ import { AlertSeverity, AlertType } from './alert.enums';
 import { CreateAlertInput, ListAlertsInput } from './dto/alert.input';
 import { DiAlertDocument } from './entities/di-alert.entity';
 import { NotificationService } from 'src/notifications/notification.service';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /**
  * Centralized alert service. The rest of the system creates alerts through
@@ -40,6 +40,7 @@ export class DiAlertService {
         try {
           metadata = JSON.parse(input.metadataJson);
         } catch (err) {
+          reportCatchError(err, 'DiAlertService.createAlert');
           this.logger.warn(
             `Ignoring invalid metadataJson for alert on di=${input.diId}: ${err}`,
           );
@@ -77,6 +78,7 @@ export class DiAlertService {
           notify: { roles: doc.assignedRoles ?? [] },
         });
       } catch (err) {
+        reportCatchError(err, 'DiAlertService.createAlert');
         this.logger.warn(
           `ERP notification (alert fusion) failed · _id=${doc._id}: ${
             (err as Error)?.message ?? err
@@ -102,6 +104,7 @@ export class DiAlertService {
           });
           this.logger.log(`Discord notification sent · _id=${doc._id}`);
         } catch (err) {
+          reportCatchError(err, 'DiAlertService.createAlert');
           this.logger.error(
             `Discord notification failed · _id=${doc._id}: ${
               (err as Error).message ?? err

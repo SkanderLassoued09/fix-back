@@ -2,7 +2,7 @@ import { Resolver, Query, Mutation, Args, Int } from '@nestjs/graphql';
 import { Location } from './entities/location.entity';
 import { CreateLocationInput } from './dto/create-location.input';
 import { LocationService } from './location.service';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 @Resolver(() => Location)
 export class LocationResolver {
@@ -25,6 +25,7 @@ export class LocationResolver {
     try {
       return this.locationService.removeLocation(_id);
     } catch (error) {
+      reportCatchError(error, 'LocationResolver.removeLocation');
       console.error(error);
       throw new Error('Failed to delete Location');
     }

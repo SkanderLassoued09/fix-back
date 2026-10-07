@@ -10,7 +10,7 @@ import {
   DiTransitionResult,
 } from './di-workflow.types';
 import { GraphQLError } from 'graphql';
-import { withErrorContext } from '../../common/error-context';
+import { withErrorContext, reportCatchError } from '../../common/error-context';
 
 type WorkflowLogPayload = {
   event: string;
@@ -69,6 +69,7 @@ export class DiWorkflowService {
         try {
           await this.updateStatStatus(updatedDi, config.to);
         } catch (error) {
+          reportCatchError(error, 'DiWorkflowService.transition');
           this.logStatSyncFailure(config, input, di.status, error);
           throw error;
         }

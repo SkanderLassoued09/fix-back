@@ -70,7 +70,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Company, CompanyTableData } from './entities/company.entity';
 import { v4 as uuidv4 } from 'uuid';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 @Injectable()
 export class CompanysService {
   private readonly logger = new Logger(CompanysService.name);
@@ -106,6 +106,7 @@ export class CompanysService {
           `Linked Drive folder ${folder.id} to company ${society._id}`,
         );
       } catch (err) {
+        reportCatchError(err, 'CompanysService.attachDriveFolder');
         // log + notify via the project's central helper. A *misconfiguration*
         // (Drive not set up) is EXPECTED → log only, no Discord. A real API/Drive
         // failure is OPERATIONAL → Discord (deduped). PII-free payload (ids only).
@@ -207,6 +208,7 @@ export class CompanysService {
       try {
         society = await new this.CompanyModel(createCompanyInput).save();
       } catch (err: any) {
+        reportCatchError(err, 'CompanysService.createcompany');
         throw this.asConflictIfDuplicateKey(err);
       }
       // After persistence: auto-create the client's Drive folder (best-effort —
@@ -424,6 +426,7 @@ it should be soft delete ya nezih change it
       }
       return Company;
     } catch (error) {
+      reportCatchError(error, 'CompanysService.findOneCompany');
       throw error;
     }
   }

@@ -4,7 +4,7 @@ import { Model } from 'mongoose';
 import { Composant, ComposantDocument } from '../composant/entities/composant.entity';
 import { NotificationService } from '../notifications/notification.service';
 import { DiscordHookService } from '../discord-hook/discord-hook.service';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 /**
  * RAPPEL MATINAL DU MAGASIN — 08:00 Africa/Tunis, du lundi au vendredi
@@ -271,6 +271,7 @@ export class MagasinStockReminderService {
           });
           notified = true;
         } catch (err) {
+          reportCatchError(err, 'MagasinStockReminderService.run');
           this.logger.warn(
             `MAGASIN_STOCK_LOW emit échoué: ${(err as Error).message}`,
           );
@@ -318,6 +319,7 @@ export class MagasinStockReminderService {
           });
           incompleteNotified = true;
         } catch (err) {
+          reportCatchError(err, 'MagasinStockReminderService.run');
           this.logger.warn(
             `MAGASIN_STOCK_INCOMPLETE emit échoué: ${(err as Error).message}`,
           );
@@ -343,6 +345,7 @@ export class MagasinStockReminderService {
           });
           discordSent = true;
         } catch (err) {
+          reportCatchError(err, 'MagasinStockReminderService.run');
           this.logger.warn(
             `Discord rappel stock magasin échoué: ${(err as Error).message}`,
           );

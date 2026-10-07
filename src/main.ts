@@ -11,7 +11,7 @@ import { AppModule } from './app.module';
 import { AppCronService } from './cron/cron.service';
 import { buildActionBanner, buildStartupBanner } from './config/env-banner';
 import { runWithRequest } from './common/request-context';
-import { withErrorContext } from './common/error-context';
+import { withErrorContext, reportCatchError } from './common/error-context';
 
 /**
  * Single bootstrap entrypoint, two modes:
@@ -49,6 +49,7 @@ async function bootstrap() {
         await app.get(AppCronService).runAction(action);
         logger.log(`ACTION completed: ${action}`);
       } catch (err) {
+        reportCatchError(err, 'bootstrap');
         logger.error(
           `ACTION failed: ${action} — ${(err as Error).stack ?? err}`,
         );

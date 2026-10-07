@@ -2,7 +2,7 @@ import { Resolver, Query, Mutation, Args } from '@nestjs/graphql';
 import { Composant_Category } from './entities/composant_category.entity';
 import { CreateComposant_CategoryInput } from './dto/create-composant_category.input';
 import { Composant_CategoryService } from './composant_category.service';
-import { withErrorContext } from '../common/error-context';
+import { withErrorContext, reportCatchError } from '../common/error-context';
 
 @Resolver(() => Composant_Category)
 export class Composant_CategoryResolver {
@@ -37,6 +37,7 @@ export class Composant_CategoryResolver {
     try {
       return await this.composant_CategoryService.removeComposant_Category(_id);
     } catch (error) {
+      reportCatchError(error, 'Composant_CategoryResolver.removeComposant_Category');
       console.error(error);
       throw new Error('Failed to delete Composant_Category');
     }
