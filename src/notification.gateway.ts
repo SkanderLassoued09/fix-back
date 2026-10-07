@@ -147,6 +147,14 @@ export class NotificationsGateway
     }
   }
 
+  composantUpdated(data: { _id: unknown; oldName: string; name: string }) {
+    try {
+      this.server.emit('composant:updated', data);
+    } catch (error) {
+      throw withErrorContext(error, 'NotificationsGateway.composantUpdated');
+    }
+  }
+
   sendComponentToCoordinatorFromMagasin(data) {
     try {
       this.server.emit('component:sent_to_coordinator', data);

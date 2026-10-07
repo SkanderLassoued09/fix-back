@@ -7,10 +7,12 @@ import { OperationalErrorModule } from 'src/operational-error/operational-error.
 import { DiSchema } from 'src/di/entities/di.entity';
 import { GoogleDriveModule } from 'src/google-drive/google-drive.module';
 import { DiscordHookModule } from 'src/discord-hook/discord-hook.module';
+import { DiLogsSchema } from 'src/logs-di/entities/logs-di.entity';
+import { NotificationsGateway } from 'src/notification.gateway';
 import { Composant_CategorySchema } from 'src/composant_category/entities/composant_category.entity';
 
 @Module({
-  providers: [ComposantResolver, ComposantService],
+  providers: [ComposantResolver, ComposantService, NotificationsGateway],
   imports: [
     OperationalErrorModule,
     GoogleDriveModule,
@@ -25,6 +27,11 @@ import { Composant_CategorySchema } from 'src/composant_category/entities/compos
       {
         name: 'Di',
         schema: DiSchema,
+      },
+      // Idem pour le dossier de cycle (`logsdis`).
+      {
+        name: 'LogsDi',
+        schema: DiLogsSchema,
       },
       // Needed to validate that `category_composant_id` references an
       // EXISTING category before writing (guards against label pollution

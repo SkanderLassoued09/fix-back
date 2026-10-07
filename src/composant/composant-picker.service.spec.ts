@@ -1,3 +1,4 @@
+import { NotificationsGateway } from 'src/notification.gateway';
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { OperationalErrorService } from 'src/operational-error/operational-error.service';
@@ -63,6 +64,8 @@ describe('ComposantService — picker (browse + category tree)', () => {
         ComposantService,
         { provide: getModelToken('Composant'), useValue: model },
         { provide: getModelToken('Di'), useValue: { updateMany: jest.fn() } },
+        { provide: getModelToken('LogsDi'), useValue: { updateMany: jest.fn() } },
+        { provide: NotificationsGateway, useValue: { composantUpdated: jest.fn() } },
         { provide: getModelToken('Composant_Category'), useValue: category },
         { provide: OperationalErrorService, useValue: { capture } },
         {

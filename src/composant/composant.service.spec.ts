@@ -1,3 +1,4 @@
+import { NotificationsGateway } from 'src/notification.gateway';
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { GraphQLError } from 'graphql';
@@ -54,11 +55,15 @@ describe('ComposantService.addComposantInfo', () => {
   let service: ComposantService;
   let model: ComposantModelMock;
   let di: DiModelMock;
+  let logsDi: DiModelMock;
+  let gateway: { composantUpdated: jest.Mock };
   let category: CategoryModelMock;
 
   beforeEach(async () => {
     model = makeModelMock();
     di = { updateMany: jest.fn() };
+    logsDi = { updateMany: jest.fn() };
+    gateway = { composantUpdated: jest.fn() };
     // Par défaut la catégorie référencée (CAT1 dans fullInput) EXISTE — les
     // tests de rejet la font disparaître explicitement.
     category = { exists: jest.fn().mockResolvedValue({ _id: 'CAT1' }) };
@@ -67,6 +72,8 @@ describe('ComposantService.addComposantInfo', () => {
         ComposantService,
         { provide: getModelToken('Composant'), useValue: model },
         { provide: getModelToken('Di'), useValue: di },
+        { provide: getModelToken('LogsDi'), useValue: logsDi },
+        { provide: NotificationsGateway, useValue: gateway },
         { provide: getModelToken('Composant_Category'), useValue: category },
         { provide: OperationalErrorService, useValue: { capture: jest.fn() } },
         {
@@ -146,6 +153,8 @@ describe('ComposantService.addComposantInfo', () => {
       $set: { 'array_composants.$[elem].nameComposant': 'condo-v2' },
     });
     expect(opts.arrayFilters).toEqual([{ 'elem.nameComposant': 'condo' }]);
+    // Même renommage sur le dossier de cycle (retour : le modal lit logsdis).
+    expect(logsDi.updateMany).toHaveBeenCalledWith(filter, update, opts);
   });
 
   it('does NOT cascade when the name is unchanged', async () => {
@@ -153,6 +162,32 @@ describe('ComposantService.addComposantInfo', () => {
     model.findOneAndUpdate.mockResolvedValue(fullInput() as any);
     await service.addComposantInfo(fullInput({ name: 'condo' }) as any);
     expect(di.updateMany).not.toHaveBeenCalled();
+    expect(logsDi.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('émet composant:updated (temps réel) avec ancien et nouveau nom', async () => {
+    model.findOne.mockReturnValue(leanOf(fullInput({ name: 'condo' })));
+    model.findOneAndUpdate.mockResolvedValue(
+      fullInput({ name: 'condo-v2' }) as any,
+    );
+    await service.addComposantInfo(fullInput({ name: 'condo-v2' }) as any);
+    expect(gateway.composantUpdated).toHaveBeenCalledWith({
+      _id: 'Cmp1',
+      oldName: 'condo',
+      name: 'condo-v2',
+    });
+  });
+
+  it("un échec d'émission ne fait pas échouer la sauvegarde", async () => {
+    model.findOne.mockReturnValue(leanOf(fullInput()));
+    const saved = fullInput({ package: 'P2' });
+    model.findOneAndUpdate.mockResolvedValue(saved as any);
+    gateway.composantUpdated.mockImplementation(() => {
+      throw new Error('socket down');
+    });
+    await expect(
+      service.addComposantInfo(fullInput({ package: 'P2' }) as any),
+    ).resolves.toBe(saved);
   });
 
   it('falls back to matching by name when no _id is supplied', async () => {

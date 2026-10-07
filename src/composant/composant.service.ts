@@ -15,6 +15,7 @@ import { GoogleDriveService } from 'src/google-drive/google-drive.service';
 import { DiscordHookService } from 'src/discord-hook/discord-hook.service';
 import { withComposantDefaults } from './composant-defaults';
 import { withErrorContext } from '../common/error-context';
+import { NotificationsGateway } from 'src/notification.gateway';
 @Injectable()
 export class ComposantService {
   constructor(
@@ -22,12 +23,16 @@ export class ComposantService {
     // Used only to cascade a composant rename onto the DI linkage
     // (`array_composants[].nameComposant`), which references parts by name.
     @InjectModel('Di') private diModel: Model<any>,
+    // Même cascade sur le dossier de cycle : en retour (cycle ≥ 1) le modal
+    // magasin lit `logsdis.array_composants`, pas la DI.
+    @InjectModel('LogsDi') private logsDiModel: Model<any>,
     // Used only to validate that a written `category_composant_id`
     // references an existing category (see assertCategoryExists).
     @InjectModel('Composant_Category') private categoryModel: Model<any>,
     private readonly operationalErrorService: OperationalErrorService,
     private readonly googleDriveService: GoogleDriveService,
     private readonly discordHookService: DiscordHookService,
+    private readonly notificationsGateway: NotificationsGateway,
   ) {}
 
   /**
@@ -434,11 +439,26 @@ export class ComposantService {
       // OLD name, found nothing, and showed every field empty / stock 0.
       const newName = set.name as string | undefined;
       if (newName && newName !== existing.name) {
-        await this.diModel.updateMany(
-          { 'array_composants.nameComposant': existing.name },
-          { $set: { 'array_composants.$[elem].nameComposant': newName } },
-          { arrayFilters: [{ 'elem.nameComposant': existing.name }] },
-        );
+        for (const model of [this.diModel, this.logsDiModel]) {
+          await model.updateMany(
+            { 'array_composants.nameComposant': existing.name },
+            { $set: { 'array_composants.$[elem].nameComposant': newName } },
+            { arrayFilters: [{ 'elem.nameComposant': existing.name }] },
+          );
+        }
+      }
+
+      // Temps réel : un modal d'estimation magasin ouvert ailleurs relit la
+      // fiche. Best-effort — un échec d'émission ne doit pas faire échouer
+      // une sauvegarde déjà écrite.
+      try {
+        this.notificationsGateway.composantUpdated({
+          _id: update._id,
+          oldName: existing.name,
+          name: update.name,
+        });
+      } catch {
+        /* déjà loggé par withErrorContext côté gateway */
       }
 
       return update;
